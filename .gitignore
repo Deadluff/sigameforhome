@@ -1,0 +1,8 @@
+node_modules/
+data/
+tools/
+packs/*.siq
+packs/*.part
+*.log
+steam_appid.txt
+

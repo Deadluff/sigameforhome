@@ -1,0 +1,30 @@
+{
+  "name": "sigame-local",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted LAN Jeopardy-style game inspired by SIGame. Supports original .siq packs and Steam Workshop downloads.",
+  "type": "module",
+  "main": "server/index.js",
+  "engines": {
+    "node": ">=18.17"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "inspect-pack": "node scripts/inspect-pack.js",
+    "make-sample": "node scripts/make-sample-pack.js",
+    "smoke": "node scripts/smoke-test.js"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.8.1"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.16",
+    "express": "^4.21.1",
+    "fast-xml-parser": "^4.5.0",
+    "ffmpeg-static": "^5.3.0",
+    "qrcode-terminal": "^0.12.0",
+    "socket.io": "^4.8.1",
+    "steamworks.js": "^0.4.0"
+  }
+}

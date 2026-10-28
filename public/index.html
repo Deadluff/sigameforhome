@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>SIGame Local</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main id="app">
+    <section id="screen-join" class="screen card">
+      <h1>SIGame Local</h1>
+      <form id="join-form">
+        <input id="nickname" maxlength="24" placeholder="Your nickname" autocomplete="off" required />
+        <button type="submit">Join</button>
+      </form>
+      <p class="error" id="join-error"></p>
+    </section>
+
+    <section id="screen-role" class="screen card hidden">
+      <h2>You are the first one here!</h2>
+      <p>How do you want to play?</p>
+      <div class="row">
+        <button data-role="host" class="big">🎙️ Host (Ведущий)</button>
+        <button data-role="player" class="big">🔔 Player (Игрок)</button>
+      </div>
+    </section>
+
+    <section id="screen-game" class="screen hidden">
+      <header class="topbar">
+        <span id="me"></span>
+        <span id="phase"></span>
+        <span id="timer"></span>
+      </header>
+
+      <div id="players" class="players"></div>
+
+      <!-- High-visibility stage & buzzer orientier banner (reading / buzz open / answering / reveal) -->
+      <div id="stage-banner" class="stage-banner hidden">
+        <div class="stage-banner-header">
+          <span id="stage-icon" class="stage-icon"></span>
+          <div class="stage-text">
+            <div id="stage-title" class="stage-title"></div>
+            <div id="stage-subtitle" class="stage-subtitle"></div>
+          </div>
+          <span id="stage-countdown" class="stage-countdown"></span>
+        </div>
+        <div class="stage-progress-track">
+          <div id="stage-progress-fill" class="stage-progress-fill"></div>
+        </div>
+      </div>
+
+      <!-- Pre-game Host Settings & Pack Manager -->
+      <div id="manage" class="card hidden">
+        <div class="manage-grid">
+          <div class="manage-col">
+            <h3>📦 Question Packs (.siq)</h3>
+            <div id="pack-current" class="pack-current"></div>
+            <ul id="pack-list"></ul>
+            <form id="steam-form" class="row">
+              <input id="steam-link" placeholder="Steam Workshop link or ID" />
+              <button type="submit">Download</button>
+            </form>
+            <pre id="steam-log"></pre>
+          </div>
+
+          <div class="manage-col">
+            <h3>⚙️ Game Settings (Before Start)</h3>
+            <div class="settings-box">
+              <label class="setting-toggle">
+                <input type="checkbox" id="set-falseStart" />
+                <div>
+                  <strong>Фальшстарт (False start / Block buzz during reading)</strong>
+                  <small id="set-falseStart-desc"></small>
+                </div>
+              </label>
+
+              <div class="settings-grid">
+                <label>
+                  <span>⏱️ Penalty block on false start (sec)</span>
+                  <input type="number" id="set-timeForBlockingButton" min="0" max="10" />
+                </label>
+                <label>
+                  <span>📖 Reading speed (chars / sec)</span>
+                  <input type="number" id="set-readingSpeed" min="1" max="100" />
+                </label>
+                <label>
+                  <span>🔔 Time to press button (sec)</span>
+                  <input type="number" id="set-timeForThinkingOnQuestion" min="1" max="120" />
+                </label>
+                <label>
+                  <span>🗣️ Time to answer (sec)</span>
+                  <input type="number" id="set-timeForPrintingAnswer" min="1" max="300" />
+                </label>
+                <label>
+                  <input type="checkbox" id="set-ignoreWrong" />
+                  <span>Do not subtract points for wrong answers</span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="row start-row">
+          <button id="btn-start" class="btn-start">▶ Start Game</button>
+        </div>
+      </div>
+
+      <div id="board" class="board"></div>
+      <div id="question" class="card question-card hidden"></div>
+
+      <div id="host-controls" class="row hidden">
+        <button data-act="game:openBuzzer" id="btn-open-buzzer">🔓 Open buttons now</button>
+        <button data-act="judge-ok" class="ok">✔ Correct</button>
+        <button data-act="judge-bad" class="bad">✘ Wrong</button>
+        <button data-act="game:reveal">👁️ Show answer</button>
+        <button data-act="game:next">Next ▶</button>
+        <button data-act="game:nextRound">⏭️ Next round</button>
+        <button data-act="game:stop" class="bad">⏹️ Stop game</button>
+      </div>
+
+      <button id="buzzer" class="buzzer hidden">
+        <span id="buzzer-main">BUZZ</span>
+        <small id="buzzer-sub"></small>
+      </button>
+    </section>
+  </main>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
