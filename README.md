@@ -16,6 +16,17 @@ One Windows PC runs the server. Everyone else opens the link in a browser.
 > Windows Firewall asks for permission the first time you run it. Allow **Private networks**,
 > otherwise phones can't connect. To use a different port: `set PORT=3001` then `start.bat`.
 
+## Quick start (macOS)
+
+1. Install **Node.js 18+ LTS** from https://nodejs.org (or via Homebrew: `brew install node`).
+2. Double-click **`start.command`** in Finder, or run **`./start.sh`** in Terminal:
+   ```bash
+   chmod +x start.sh start.command
+   ./start.sh
+   ```
+   *(If macOS Gatekeeper blocks double-clicking `start.command` after cloning/downloading, either Right-Click → **Open**, or run `xattr -d com.apple.quarantine start.command start.sh` once in Terminal).*
+3. On the first run it installs dependencies, creates demo packs if `packs/` is empty, and prints your Mac's LAN link (`http://192.168.x.x:3000`) + a QR code for phones. To use a different port: `PORT=3001 ./start.sh`.
+
 Want a pack to test with? Run `npm run make-sample` to create two demo packs (modern v5 format and legacy v4 format).
 
 ## Project structure
