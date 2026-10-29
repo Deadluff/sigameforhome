@@ -9,7 +9,8 @@ import { pipeline } from 'node:stream/promises';
 import { config } from '../config.ts';
 import type { Room } from '../game/Room.ts';
 import { ensureDir, sanitizeSegment } from '../utils/fsx.ts';
-import { parseSiq, type Package } from './siqParser.ts';
+import { parseSiqAsync } from './parseAsync.ts';
+import type { Package } from './siqParser.ts';
 
 export const MAX_UPLOAD_BYTES = 200 * 1024 * 1024;
 
@@ -50,6 +51,7 @@ export async function saveUploadedPack(
   encodedName: unknown,
   packsDir = config.packsDir,
   maxBytes = MAX_UPLOAD_BYTES,
+  mayPublish: () => boolean = () => true,
 ): Promise<{ file: string; name: string }> {
   const stem = uploadFileStem(encodedName);
   await ensureDir(packsDir);
@@ -66,7 +68,7 @@ export async function saveUploadedPack(
   try {
     await pipeline(source, limit, fs.createWriteStream(temp, { flags: 'wx', mode: 0o600 }));
     let pack: Package;
-    try { pack = await parseSiq(temp); }
+    try { pack = await parseSiqAsync(temp); }
     catch (err) { throw new UploadError(422, `Invalid .siq pack: ${(err as Error).message}`); }
     if (!pack.rounds.length || !pack.stats.questions) {
       throw new UploadError(422, 'Pack has no playable questions');
@@ -77,7 +79,9 @@ export async function saveUploadedPack(
     for (let attempt = 0; attempt < 3; attempt++) {
       const file = `${stem}-${crypto.randomUUID().slice(0, 8)}.siq`;
       try {
-        await fsp.link(temp, path.join(packsDir, file));
+        if (!mayPublish()) throw new UploadError(403, 'Upload permission was lost');
+        // Keep the final permission check and publication in one event-loop turn.
+        fs.linkSync(temp, path.join(packsDir, file));
         return { file, name: pack.name };
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;

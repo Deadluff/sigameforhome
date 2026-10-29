@@ -52,7 +52,10 @@ test('accepted rejection appeal reverses later attempts and returns chooser to a
   answer(engine, bob, true);
   assert.equal(room.snapshotFor(cara.id).game.appeals.judgments.length, 2);
   assert.throws(() => engine.requestAppeal(bob.id, 1), /Only the answerer/);
+  const presentationId = engine.current.presentationId;
   engine.requestAppeal(alice.id, 1);
+  assert.equal(engine.canUndoJudgment(), false);
+  assert.throws(() => engine.undoJudgment(presentationId, 2), /no verdict to undo/);
   assert.equal(engine.phase, 'appealVote');
   assert.equal(room.snapshotFor(cara.id).game.appeals.active.kind, 'for');
   engine.pause();
@@ -63,6 +66,7 @@ test('accepted rejection appeal reverses later attempts and returns chooser to a
   engine.voteAppeal(cara.id, true);
   engine.voteAppeal(dan.id, false);
   assert.equal(engine.phase, 'reveal');
+  assert.equal(engine.canUndoJudgment(), false, 'a resolved appeal still closes undo');
   assert.equal(alice.score, price);
   assert.equal(bob.score, 0);
   assert.equal(engine.chooserId, alice.id);

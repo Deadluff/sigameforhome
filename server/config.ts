@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /** Project root (one level above /server). */
-export const ROOT_DIR: string = path.resolve(__dirname, '..');
+export const ROOT_DIR: string = process.env.SIGAME_ROOT_DIR ?? path.resolve(__dirname, '..');
 
 const env = (name: string, fallback: string): string => process.env[name] ?? fallback;
 

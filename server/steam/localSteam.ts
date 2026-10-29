@@ -207,9 +207,14 @@ export async function downloadViaSteamClient(
   await ensureSteamClientReady(onProgress);
 
   return new Promise<string>((resolve, reject) => {
-    const child = spawn(process.execPath, ['--import', 'tsx', WORKER_PATH, String(appId), String(itemId)], {
+    const packaged = !!process.env.SIGAME_STEAM_WORKER_PATH;
+    const args = packaged
+      ? [String(appId), String(itemId)]
+      : ['--import', 'tsx', WORKER_PATH, String(appId), String(itemId)];
+    const child = spawn(process.execPath, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
+      env: packaged ? { ...process.env, SIGAME_STEAM_WORKER_MODE: '1' } : process.env,
     });
 
     let settled = false;

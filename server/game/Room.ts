@@ -5,12 +5,15 @@ import crypto from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { config } from '../config.ts';
 import type { LoadedPack } from '../packs/packManager.ts';
+import { canonicalMediaPath } from '../packs/htmlAssets.ts';
 import type { ContentItem, PackageStats, RoundType } from '../packs/siqParser.ts';
 import { PHASES, ROLES, type Role } from './constants.ts';
 import { GameEngine, type GameView } from './GameEngine.ts';
 import { applySettingsPatch, defaultSettings, type GameSettings } from './settings.ts';
 
 const NICK_MAX = 24;
+const MAX_MANUAL_SCORE = 1_000_000_000_000;
+export const MAX_ROOM_PARTICIPANTS = 64;
 
 export interface Participant {
   id: string;
@@ -110,6 +113,8 @@ export class Room extends EventEmitter {
    * @returns {{ participant: Participant, token: string }}
    */
   join(rawNickname: unknown, asSpectator = false): { participant: Participant; token: string } {
+    // Spectators also consume a session, snapshot fan-out, and persisted state.
+    if (this.participants.size >= MAX_ROOM_PARTICIPANTS) throw new Error('The room is full');
     const name = String(rawNickname ?? '')
       .replace(/[\u0000-\u001f\u007f]/g, '')
       .trim()
@@ -162,6 +167,7 @@ export class Room extends EventEmitter {
     const previous = p.socketId && p.socketId !== socketId ? p.socketId : null;
     p.socketId = socketId;
     p.connected = true;
+    this.promoteSpectators();
     if (this.ownerId && !this.participants.get(this.ownerId)?.connected &&
         !this.removalTimers.has(this.ownerId)) this.reassignOwner();
     clearTimeout(this.removalTimers.get(pid));
@@ -173,12 +179,17 @@ export class Room extends EventEmitter {
   detach(pid: string, socketId: string): void {
     const p = this.participants.get(pid);
     if (!p || p.socketId !== socketId) return;
+    const wasAuctionTurn = this.engine.phase === PHASES.STAKE_AUCTION &&
+      this.engine.auctionTurnId() === pid;
     p.connected = false;
     p.socketId = null;
     this.removalTimers.set(
       pid,
       setTimeout(() => this.expire(pid), config.reconnectGraceMs),
     );
+    // A disconnected bidder cannot act, so offer the turn to the next player now.
+    if (wasAuctionTurn) this.engine.advanceStakeAuction();
+    this.engine.advanceForAllAfterRosterChange();
     this.changed();
   }
 
@@ -198,6 +209,13 @@ export class Room extends EventEmitter {
     this.remove(pid);
   }
 
+  /** Once play ends, departed seats with no reconnect grace left should free lobby slots. */
+  releaseExpiredSeats(): void {
+    for (const p of [...this.participants.values()]) {
+      if (!p.connected && !this.removalTimers.has(p.id)) this.remove(p.id);
+    }
+  }
+
   remove(pid: string): void {
     const p = this.participants.get(pid);
     if (!p) return;
@@ -211,6 +229,7 @@ export class Room extends EventEmitter {
     if (this.ownerId === pid) this.reassignOwner();
     this.promoteSpectators();
     if (wasAuctionTurn) this.engine.advanceStakeAuction();
+    this.engine.advanceForAllAfterRosterChange();
     this.changed();
   }
 
@@ -226,9 +245,9 @@ export class Room extends EventEmitter {
   }
 
   promoteSpectators(): void {
-    if (this.engine.phase !== PHASES.LOBBY) return;
+    if (this.engine.phase !== PHASES.LOBBY && this.engine.phase !== PHASES.GAME_OVER) return;
     const waiting = [...this.participants.values()]
-      .filter((p) => p.role === ROLES.SPECTATOR && p.autoSpectator && !p.displayOnly)
+      .filter((p) => p.connected && p.role === ROLES.SPECTATOR && p.autoSpectator && !p.displayOnly)
       .sort((a, b) => a.joinedAt - b.joinedAt);
     for (const s of waiting) {
       if (!this.hasFreePlayerSlot()) break;
@@ -284,6 +303,7 @@ export class Room extends EventEmitter {
     this.promoteSpectators();
     // A reseated bidder cannot act, so let the next eligible player bid immediately.
     if (wasAuctionTurn && role !== ROLES.PLAYER) this.engine.advanceStakeAuction();
+    this.engine.advanceForAllAfterRosterChange();
     this.changed();
   }
 
@@ -301,6 +321,11 @@ export class Room extends EventEmitter {
   updateSettings(actorId: string, patch: Partial<Record<string, unknown>>): void {
     if (!this.canManage(actorId)) throw new Error('Only the host or owner can change settings');
     const next = applySettingsPatch(this.settings, patch);
+    // Switching answer input while a question is live would strand the current answerer.
+    if (next.oral !== this.settings.oral &&
+      this.engine.phase !== PHASES.LOBBY && this.engine.phase !== PHASES.GAME_OVER) {
+      throw new Error('Change oral answer mode before starting a game');
+    }
     if (next.maxPlayers < this.players().length) throw new Error('More players are seated than the new limit');
     this.settings = next;
     this.promoteSpectators();
@@ -317,8 +342,12 @@ export class Room extends EventEmitter {
     if (!this.canModerate(actorId)) throw new Error('Only the host can change scores');
     const p = this.participants.get(targetId);
     if (!p) throw new Error('Unknown participant');
-    if (!Number.isFinite(delta)) throw new Error('Invalid amount');
-    p.score += Math.trunc(delta);
+    // Leave room for the bounded pack's remaining question values to change the score.
+    if (!Number.isSafeInteger(delta) || !Number.isSafeInteger(p.score + delta) ||
+        Math.abs(p.score + delta) > MAX_MANUAL_SCORE) {
+      throw new Error('Score change must keep a safe whole-number score within ±1 trillion');
+    }
+    p.score += delta;
     this.changed();
   }
 
@@ -338,8 +367,11 @@ export class Room extends EventEmitter {
   }
 
   /** Media tickets identify a viewer without exposing their session token in URLs. */
-  mediaUrl(url: string | null | undefined, viewer: Participant | null): string | null {
-    return url?.startsWith('/media/') && viewer ? `${url}?ticket=${viewer.mediaTicket}` : url ?? null;
+  mediaUrl(url: string | null | undefined, viewer: Participant | null, type?: ContentItem['type']): string | null {
+    if (!url?.startsWith('/media/') || !viewer) return url ?? null;
+    // A path ticket also reaches relative resources loaded inside sandboxed HTML.
+    return type === 'html' ? url.replace('/media/', `/media-html/${viewer.mediaTicket}/`)
+      : `${url}?ticket=${viewer.mediaTicket}`;
   }
 
   canAccessMedia(ticket: unknown, requestPath: string): boolean {
@@ -347,10 +379,7 @@ export class Room extends EventEmitter {
     const viewer = [...this.participants.values()].find((p) => p.mediaTicket === ticket);
     const current = this.engine.current;
     if (!viewer?.connected || !this.loadedPack) return false;
-    const canonical = (url: string | null | undefined): string | null => {
-      if (!url?.startsWith('/media/')) return null;
-      return new URL(url, 'http://local').pathname.split('/').map(decodeURIComponent).join('/');
-    };
+    const canonical = canonicalMediaPath;
     let requested;
     try {
       requested = requestPath.split('/').map(decodeURIComponent).join('/');
@@ -359,6 +388,15 @@ export class Room extends EventEmitter {
       const source = canonical(item?.url);
       if (!source) return false;
       if (source === requested) return true;
+      if (item?.type === 'html') {
+        const assets = this.loadedPack?.htmlAssets?.get(source);
+        if (assets?.has(requested)) return true;
+        if (assets?.size) for (const asset of assets) {
+          const parts = asset.split('/');
+          const derived = `/media/${parts[2]}/_derived/${parts.slice(3).join('/')}.ios.`;
+          if (requested === `${derived}mp4` || requested === `${derived}mp3`) return true;
+        }
+      }
       // Derivatives live outside archive media folders, so a pack-authored file
       // with an .ios suffix cannot inherit access to a visible source clip.
       const parts = source.split('/');
@@ -384,10 +422,10 @@ export class Room extends EventEmitter {
     const pack = loadedPack?.pack;
     const game = this.engine.getView(viewer, canModerate);
     if (game.current) {
-      game.current.content = game.current.content.map((item) => ({ ...item, url: this.mediaUrl(item.url, viewer) }));
+      game.current.content = game.current.content.map((item) => ({ ...item, url: this.mediaUrl(item.url, viewer, item.type) }));
       if (game.current.answerContent) {
         game.current.answerContent = game.current.answerContent.map((item) =>
-          ({ ...item, url: this.mediaUrl(item.url, viewer) }));
+          ({ ...item, url: this.mediaUrl(item.url, viewer, item.type) }));
       }
     }
 

@@ -9,7 +9,7 @@ import AdmZip from 'adm-zip';
 const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'sigame-workshop-safety-'));
 process.env.PACKS_DIR = path.join(root, 'packs');
 process.env.CACHE_DIR = path.join(root, 'cache');
-const [{ storeWorkshopPack, locatePack }, { redactSteamLog, createSteamLogForwarder }] = await Promise.all([
+const [{ storeWorkshopPack, locatePack, downloadWorkshopPack }, { redactSteamLog, createSteamLogForwarder }] = await Promise.all([
   import('../server/steam/workshop.ts'), import('../server/steam/steamcmd.ts'),
 ]);
 after(async () => fsp.rm(root, { recursive: true, force: true }));
@@ -51,6 +51,61 @@ test('validated Workshop update keeps the prior version and reuses identical byt
   assert.equal(path.basename(fresh), 'Fresh_789.siq');
   assert.equal(await storeWorkshopPack(source, 'Fresh_789.siq'), fresh);
   await assert.rejects(storeWorkshopPack(source, '../escape.siq'), /Invalid pack file name/);
+});
+
+test('revoked Workshop publication leaves no new pack behind', async () => {
+  const source = path.join(root, 'revoked.siq');
+  const zip = new AdmZip();
+  zip.addFile('content.xml', Buffer.from(minimalXml));
+  zip.writeZip(source);
+  await assert.rejects(storeWorkshopPack(source, 'Revoked_123.siq', () => false), /permission was lost/);
+  assert.equal((await fsp.readdir(process.env.PACKS_DIR)).includes('Revoked_123.siq'), false);
+});
+
+test('Workshop jobs cap distinct IDs and keep each shared requester authorization', async () => {
+  const originalFetch = globalThis.fetch;
+  const zip = new AdmZip();
+  zip.addFile('content.xml', Buffer.from(minimalXml));
+  const bytes = zip.toBuffer();
+  let releaseDetails;
+  const detailGate = new Promise((resolve) => { releaseDetails = resolve; });
+  globalThis.fetch = async (url, options) => {
+    const address = String(url);
+    if (address.includes('GetPublishedFileDetails')) {
+      assert.equal(options.signal instanceof AbortSignal, true);
+      await detailGate;
+      const id = new URLSearchParams(options.body).get('publishedfileids[0]');
+      return new Response(JSON.stringify({ response: { publishedfiledetails: [{
+        result: 1, title: `Shared ${id}`, file_url: `https://steam.invalid/${id}.siq`,
+        filename: `${id}.siq`, file_size: bytes.length, consumer_app_id: 3553500,
+      }] } }), { headers: { 'content-type': 'application/json' } });
+    }
+    if (address.startsWith('https://steam.invalid/')) {
+      return new Response(bytes, { headers: { 'content-length': String(bytes.length) } });
+    }
+    throw new Error(`Unexpected fetch: ${address}`);
+  };
+  try {
+    const firstProgress = [];
+    const secondProgress = [];
+    const shared = downloadWorkshopPack('123456', (event) => firstProgress.push(event.stage), () => false);
+    const alsoShared = downloadWorkshopPack('123456', (event) => secondProgress.push(event.stage), () => true);
+    assert.strictEqual(alsoShared, shared);
+    const revoked = downloadWorkshopPack('234567', () => {}, () => false);
+    const revokedResult = assert.rejects(revoked, /permission was lost/);
+    await assert.rejects(downloadWorkshopPack('345678'), /Too many Workshop downloads/);
+    releaseDetails();
+    const result = await shared;
+    assert.equal(result.id, '123456');
+    assert.equal(firstProgress.includes('done'), true);
+    assert.equal(secondProgress.includes('done'), true);
+    await revokedResult;
+    assert.equal((await fsp.readdir(process.env.PACKS_DIR)).some((file) => file.endsWith('_234567.siq')), false);
+    await assert.rejects(downloadWorkshopPack('345678', () => {}, () => false), /permission was lost/);
+  } finally {
+    releaseDetails();
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('Workshop locator skips a larger broken .siq when a valid pack exists', async () => {

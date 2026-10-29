@@ -5,7 +5,6 @@
  * downloads always bind to the current `steam.exe` IPC pipe.
  */
 import fsp from 'node:fs/promises';
-import steamworks from 'steamworks.js';
 
 const ITEM_STATE = {
   NONE: 0,
@@ -44,8 +43,9 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  let client: ReturnType<typeof steamworks.init>;
+  let client: ReturnType<typeof import('steamworks.js').init>;
   try {
+    const steamworks = (await import(process.env.SIGAME_STEAMWORKS_PATH ?? 'steamworks.js')).default as typeof import('steamworks.js');
     client = steamworks.init(appId);
   } catch (err) {
     emit({

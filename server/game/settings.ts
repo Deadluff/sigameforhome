@@ -19,7 +19,6 @@ export interface GameSettings {
   buttonPressMode: ButtonPressMode;
   buttonPressIntervalMs: number;
   playAllQuestionsInFinalRound: boolean;
-  allowEveryoneToPlayHiddenStakes: boolean;
   displaySources: boolean;
   useApellations: boolean;
   gameMode: GameMode;
@@ -94,7 +93,6 @@ export const SETTINGS_SCHEMA: Record<keyof GameSettings, SettingSchemaEntry> = O
   buttonPressMode: oneOf<ButtonPressMode>('firstWins', ['firstWins', 'randomWithinInterval'], 'Button press resolution'),
   buttonPressIntervalMs: int(100, 0, 1000, 'Random window for simultaneous presses (ms)'),
   playAllQuestionsInFinalRound: bool(false, 'Play all questions in the final round'),
-  allowEveryoneToPlayHiddenStakes: bool(true, 'Everyone may play hidden stakes'),
   displaySources: bool(false, 'Show question sources'),
   useApellations: bool(true, 'Allow appeals'),
   gameMode: oneOf<GameMode>('classic', ['classic', 'simple'], 'Game mode'),

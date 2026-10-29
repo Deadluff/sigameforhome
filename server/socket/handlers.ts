@@ -9,11 +9,38 @@ import { listPacks, loadPack } from '../packs/packManager.ts';
 import { downloadWorkshopPack } from '../steam/workshop.ts';
 
 const JOINED_ROOM = 'joined';
+const JOIN_WINDOW_MS = 60_000;
+const JOIN_ATTEMPT_LIMIT = 20;
+const COMMAND_WINDOW_MS = 10_000;
+const COMMAND_ATTEMPT_LIMIT = 120;
+const CLOCK_PROBE_LIMIT = 50;
 
 type AccessLevel = 'none' | 'member' | 'moderator' | 'manager';
 type AckCallback = (res: Record<string, unknown>) => void;
 
+function requireBoolean(value: unknown): boolean {
+  if (typeof value !== 'boolean') throw new Error('Verdict must be true or false');
+  return value;
+}
+
 export function registerSocketHandlers(io: Server, room: Room): void {
+  const joinAttempts = new Map<string, { startedAt: number; count: number }>();
+  const checkJoinRate = (address: string): void => {
+    const now = Date.now();
+    const current = joinAttempts.get(address);
+    const attempts = !current || now - current.startedAt >= JOIN_WINDOW_MS
+      ? { startedAt: now, count: 0 } : current;
+    if (attempts.count >= JOIN_ATTEMPT_LIMIT) throw new Error('Too many join attempts; try again shortly');
+    attempts.count++;
+    joinAttempts.set(address, attempts);
+    // Keep old addresses from accumulating after many transient LAN connections.
+    if (joinAttempts.size > 256) {
+      for (const [key, value] of joinAttempts) {
+        if (now - value.startedAt >= JOIN_WINDOW_MS) joinAttempts.delete(key);
+      }
+    }
+  };
+
   /* ---------------------------------------------- room → clients fan-out */
 
   room.on('change', () => {
@@ -42,6 +69,10 @@ export function registerSocketHandlers(io: Server, room: Room): void {
 
   io.on('connection', (socket: Socket) => {
     socket.data.pid = null as string | null;
+    let commandWindowStartedAt = Date.now();
+    let commandAttempts = 0;
+    let clockWindowStartedAt = Date.now();
+    let clockProbes = 0;
 
     const on = <TPayload = Record<string, any>>(
       event: string,
@@ -55,6 +86,24 @@ export function registerSocketHandlers(io: Server, room: Room): void {
             : [rawPayload as TPayload, rawAck];
         const reply: AckCallback = typeof ack === 'function' ? ack : () => {};
         try {
+          // Keep a broken client from flooding validation and acknowledgments.
+          const now = Date.now();
+          if (event === 'clock:ping') {
+            // The client's four-probe reconnect burst must work after command throttling.
+            if (now - clockWindowStartedAt >= COMMAND_WINDOW_MS) {
+              clockWindowStartedAt = now;
+              clockProbes = 0;
+            }
+            if (++clockProbes > CLOCK_PROBE_LIMIT) throw new Error('Too many clock probes; try again shortly');
+          } else {
+            if (now - commandWindowStartedAt >= COMMAND_WINDOW_MS) {
+              commandWindowStartedAt = now;
+              commandAttempts = 0;
+            }
+            if (++commandAttempts > COMMAND_ATTEMPT_LIMIT) {
+              throw new Error('Too many commands; try again shortly');
+            }
+          }
           const pid = socket.data.pid as string | null;
           if (access !== 'none' && !pid) throw new Error('Join the game first');
           if (access !== 'none' && room.participants.get(pid!)?.socketId !== socket.id) {
@@ -63,7 +112,10 @@ export function registerSocketHandlers(io: Server, room: Room): void {
           if (access === 'moderator' && !room.canModerate(pid)) throw new Error('Only the host can do that');
           if (access === 'manager' && !room.canManage(pid)) throw new Error('Only the host or owner can do that');
           const result = await handler((payload ?? ({} as TPayload)), pid ?? '');
-          if (event.startsWith('game:')) room.changed();
+          // Ignored repeat buzzes do not alter state and should not trigger room-wide snapshots.
+          if (event.startsWith('game:') &&
+              !(event === 'game:buzz' && (result as { result?: string } | null)?.result === 'ignored') &&
+              !(event === 'game:contentFinished' && (result as { advanced?: boolean } | null)?.advanced === false)) room.changed();
           reply({ ok: true, ...(typeof result === 'object' && result !== null ? result : {}) });
         } catch (err) {
           reply({ ok: false, error: (err as Error).message });
@@ -94,6 +146,7 @@ export function registerSocketHandlers(io: Server, room: Room): void {
 
     on<{ nickname?: string; asSpectator?: boolean }>('session:join', 'none', ({ nickname, asSpectator }) => {
       if (socket.data.pid) throw new Error('Already joined');
+      checkJoinRate(socket.handshake?.address || socket.id);
       const { participant, token } = room.join(nickname, asSpectator === true);
       bind(participant);
       return { token, role: participant.role };
@@ -123,15 +176,20 @@ export function registerSocketHandlers(io: Server, room: Room): void {
 
     on('packs:list', 'manager', async () => ({ packs: await listPacks() }));
 
-    on<{ file: string }>('packs:load', 'manager', async ({ file }) => {
+    on<{ file: string }>('packs:load', 'manager', async ({ file }, pid) => {
       if (room.engine.phase !== PHASES.LOBBY) throw new Error('Stop the current game before changing the pack');
       const loaded = await loadPack(file);
+      // Loading can outlive the socket or its manager role; recheck before changing the room.
+      if (room.participants.get(pid)?.socketId !== socket.id || !room.canManage(pid)) {
+        throw new Error('Session is no longer active');
+      }
       room.setPack(loaded);
       return { stats: loaded.pack.stats };
     });
 
-    on<{ link: string }>('steam:download', 'manager', ({ link }) => {
-      downloadWorkshopPack(link, (progress) => emitToManagers('steam:progress', { link, ...progress }))
+    on<{ link: string }>('steam:download', 'manager', ({ link }, pid) => {
+      downloadWorkshopPack(link, (progress) => emitToManagers('steam:progress', { link, ...progress }),
+        () => room.participants.get(pid)?.socketId === socket.id && room.canManage(pid))
         .then(async (result) => {
           emitToManagers('steam:progress', {
             link,
@@ -164,22 +222,34 @@ export function registerSocketHandlers(io: Server, room: Room): void {
     on('game:stakePass', 'member', (_, pid) => room.engine.passStake(pid));
     on<{ answer: string }>('game:forAllAnswer', 'member', ({ answer }, pid) =>
       room.engine.submitForAllAnswer(pid, answer));
+    on<{ answer: string }>('game:answer', 'member', ({ answer }, pid) =>
+      room.engine.submitAnswer(pid, answer));
     on('game:closeForAll', 'moderator', () => room.engine.closeForAllAnswers());
     on<{ playerId: string; correct: boolean }>('game:judgeForAll', 'moderator', ({ playerId, correct }) =>
-      room.engine.judgeForAll(playerId, correct));
+      room.engine.judgeForAll(playerId, requireBoolean(correct)));
     on<{ amount: number }>('game:finalWager', 'member', ({ amount }, pid) =>
       room.engine.setFinalWager(pid, Number(amount)));
     on('game:openFinal', 'moderator', () => room.engine.openFinal());
     on('game:closeFinal', 'moderator', () => room.engine.closeFinal());
     on<{ playerId: string; correct: boolean }>('game:judgeFinal', 'moderator', ({ playerId, correct }) =>
-      room.engine.judgeFinal(playerId, correct === true));
+      room.engine.judgeFinal(playerId, requireBoolean(correct)));
     on('game:openBuzzer', 'moderator', () => room.engine.openBuzzer());
-    on<{ clientAt?: number }>('game:buzz', 'member', (payload, pid) => room.engine.buzz(pid, payload));
-    on<{ correct: boolean }>('game:judge', 'moderator', ({ correct }) => room.engine.judge(!!correct));
+    on<{ presentationId: string }>('game:contentFinished', 'moderator', ({ presentationId }) =>
+      room.engine.contentFinished(presentationId));
+    on<{ clientAt?: number }>('game:buzz', 'member', (payload, pid) => {
+      const buzzer = room.engine.buzzer;
+      // Once this player's press is pending, penalized, or spent, repeats cannot improve it.
+      if ((buzzer.blockedUntil.get(pid) ?? 0) > Date.now() || buzzer.attempted.has(pid) ||
+          buzzer.pending.some((press) => press.playerId === pid)) return { result: 'ignored' };
+      return room.engine.buzz(pid, payload);
+    });
+    on<{ correct: boolean }>('game:judge', 'moderator', ({ correct }) => room.engine.judge(requireBoolean(correct)));
+    on<{ presentationId: string; judgmentId: number }>('game:undoJudgment', 'moderator',
+      ({ presentationId, judgmentId }) => room.engine.undoJudgment(presentationId, judgmentId));
     on<{ judgmentId: number }>('game:appealRequest', 'member', ({ judgmentId }, pid) =>
       room.engine.requestAppeal(pid, judgmentId));
     on<{ support: boolean }>('game:appealVote', 'member', ({ support }, pid) =>
-      room.engine.voteAppeal(pid, support));
+      room.engine.voteAppeal(pid, requireBoolean(support)));
     on('game:appealClose', 'moderator', () => room.engine.resolveAppeal());
     on('game:reveal', 'moderator', () => room.engine.revealAnswer());
     on('game:next', 'moderator', () => room.engine.next());

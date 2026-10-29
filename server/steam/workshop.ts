@@ -6,9 +6,8 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import AdmZip from 'adm-zip';
 import { config } from '../config.ts';
-import { isSiqArchive, parseSiq } from '../packs/siqParser.ts';
+import { isSiqArchiveAsync, parseSiqAsync, repackWorkshopFolderAsync } from '../packs/parseAsync.ts';
 import { downloadToFile, ensureDir, sanitizeSegment, walkFiles } from '../utils/fsx.ts';
 import { downloadViaSteamClient, findInLocalSteamLibraries } from './localSteam.ts';
 import { steamcmdDownloadItem } from './steamcmd.ts';
@@ -49,7 +48,9 @@ export function parseWorkshopId(input: unknown): string | null {
 
 export async function getWorkshopDetails(id: string): Promise<WorkshopDetails> {
   const body = new URLSearchParams({ itemcount: '1', 'publishedfileids[0]': id });
-  const res = await fetch(config.steam.publishedFileDetailsUrl, { method: 'POST', body });
+  const res = await fetch(config.steam.publishedFileDetailsUrl, {
+    method: 'POST', body, signal: AbortSignal.timeout(30_000),
+  });
   if (!res.ok) throw new Error(`Steam API returned HTTP ${res.status}`);
 
   const json = (await res.json()) as {
@@ -86,24 +87,22 @@ export async function locatePack(folder: string, workDir: string): Promise<strin
     const sized = await Promise.all(siqs.map(async (f) => ({ f, size: (await fsp.stat(f)).size })));
     for (const { f, size } of sized.sort((a, b) => b.size - a.size)) {
       if (size > 200 * 1024 * 1024) continue;
-      try { await parseSiq(f); return f; }
+      try { await parseSiqAsync(f); return f; }
       catch { /* a different file in the item may be a valid pack */ }
     }
   }
 
   // Some items use a different extension for the archive.
   for (const f of files) {
-    if (f.toLowerCase().endsWith('.siq') || !isSiqArchive(f)) continue;
-    try { await parseSiq(f); return f; }
+    if (f.toLowerCase().endsWith('.siq') || !(await isSiqArchiveAsync(f))) continue;
+    try { await parseSiqAsync(f); return f; }
     catch { /* keep looking */ }
   }
 
   const contentXml = files.find((f) => path.basename(f).toLowerCase() === 'content.xml');
   if (contentXml) {
-    const zip = new AdmZip();
-    zip.addLocalFolder(path.dirname(contentXml));
     const out = path.join(workDir, 'repacked.siq');
-    zip.writeZip(out);
+    await repackWorkshopFolderAsync(path.dirname(contentXml), out);
     return out;
   }
   throw new Error('No SIGame pack (.siq / content.xml) found in the workshop item');
@@ -117,7 +116,9 @@ async function fileHash(filePath: string): Promise<string> {
 }
 
 /** Keep old pack bytes available so saved games never resume against a different board. */
-export async function storeWorkshopPack(source: string, fileName: string): Promise<string> {
+export async function storeWorkshopPack(
+  source: string, fileName: string, canPublish: () => boolean = () => true,
+): Promise<string> {
   if (typeof fileName !== 'string' || path.basename(fileName) !== fileName ||
       !fileName.toLowerCase().endsWith('.siq')) throw new Error('Invalid pack file name');
   await ensureDir(config.packsDir);
@@ -132,15 +133,21 @@ export async function storeWorkshopPack(source: string, fileName: string): Promi
       throw new Error('Pack exceeds the 200 MB limit');
     }
     // parseSiq bounds expanded size and XML before the previous pack is touched.
-    await parseSiq(temporary);
+    await parseSiqAsync(temporary);
     const digest = await fileHash(temporary);
     let installed = destination;
     try {
-      if (await fileHash(destination) === digest) return destination;
+      if (await fileHash(destination) === digest) {
+        if (!canPublish()) throw new Error('Workshop permission was lost');
+        return destination;
+      }
       const stem = fileName.slice(0, -4);
       installed = path.join(config.packsDir, `${stem}_${digest}.siq`);
       try {
-        if (await fileHash(installed) === digest) return installed;
+        if (await fileHash(installed) === digest) {
+          if (!canPublish()) throw new Error('Workshop permission was lost');
+          return installed;
+        }
         throw new Error('Versioned pack name is already in use');
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
@@ -149,9 +156,14 @@ export async function storeWorkshopPack(source: string, fileName: string): Promi
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
     }
     // Publish without replacing a file that appeared after the hash check.
-    try { await fsp.link(temporary, installed); }
+    // The final permission check and publication run in one event-loop turn.
+    if (!canPublish()) throw new Error('Workshop permission was lost');
+    try { fs.linkSync(temporary, installed); }
     catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'EEXIST' && await fileHash(installed) === digest) return installed;
+      if ((err as NodeJS.ErrnoException).code === 'EEXIST' && await fileHash(installed) === digest) {
+        if (!canPublish()) throw new Error('Workshop permission was lost');
+        return installed;
+      }
       throw err;
     }
     return installed;
@@ -160,24 +172,48 @@ export async function storeWorkshopPack(source: string, fileName: string): Promi
   }
 }
 
-/** Full pipeline. Only one job per workshop id runs at a time. */
-const activeJobs = new Map<string, Promise<WorkshopDownloadResult>>();
+interface WorkshopRequester {
+  onProgress: (progress: WorkshopProgress) => void;
+  canPublish: () => boolean;
+}
+
+/** Keep separate Workshop ids from starting unlimited downloads and Steam processes. */
+const MAX_ACTIVE_JOBS = 2;
+const activeJobs = new Map<string, { promise: Promise<WorkshopDownloadResult>; requesters: WorkshopRequester[] }>();
 
 export function downloadWorkshopPack(
   linkOrId: string,
   onProgress: (p: WorkshopProgress) => void = () => {},
+  canPublish: () => boolean = () => true,
 ): Promise<WorkshopDownloadResult> {
   const id = parseWorkshopId(linkOrId);
   if (!id) return Promise.reject(new Error('Could not find a Workshop item id in that link'));
+  const requester = { onProgress, canPublish };
   const existing = activeJobs.get(id);
-  if (existing) return existing;
+  if (existing) {
+    existing.requesters.push(requester);
+    return existing.promise;
+  }
+  if (activeJobs.size >= MAX_ACTIVE_JOBS) {
+    return Promise.reject(new Error('Too many Workshop downloads; try again shortly'));
+  }
 
-  const job = runJob(id, onProgress).finally(() => activeJobs.delete(id));
-  activeJobs.set(id, job);
+  const requesters = [requester];
+  const progress = (update: WorkshopProgress) => {
+    for (const item of requesters) item.onProgress(update);
+  };
+  const mayPublish = () => requesters.some((item) => {
+    try { return item.canPublish(); }
+    catch { return false; }
+  });
+  const job = runJob(id, progress, mayPublish).finally(() => activeJobs.delete(id));
+  activeJobs.set(id, { promise: job, requesters });
   return job;
 }
 
-async function runJob(id: string, onProgress: (p: WorkshopProgress) => void): Promise<WorkshopDownloadResult> {
+async function runJob(
+  id: string, onProgress: (p: WorkshopProgress) => void, canPublish: () => boolean,
+): Promise<WorkshopDownloadResult> {
   const appId = config.steam.sigameAppId;
   const workDir = await fsp.mkdtemp(path.join(os.tmpdir(), `sigame-ws-${id}-`));
 
@@ -261,7 +297,8 @@ async function runJob(id: string, onProgress: (p: WorkshopProgress) => void): Pr
     const packSource = await locatePack(sourceFolder, workDir);
 
     const requestedName = `${sanitizeSegment(details.title, 'workshop').slice(0, 100)}_${id}.siq`;
-    const fileName = path.basename(await storeWorkshopPack(packSource, requestedName));
+    if (!canPublish()) throw new Error('Workshop permission was lost');
+    const fileName = path.basename(await storeWorkshopPack(packSource, requestedName, canPublish));
 
     onProgress({ stage: 'done', message: `Saved as ${fileName}`, percent: 100 });
     return { id, title: details.title, file: fileName };

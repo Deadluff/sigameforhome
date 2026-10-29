@@ -1,20 +1,187 @@
 /** One socket must never receive another seat's private state or keep stale permissions. */
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { test } from 'node:test';
-import { Room } from '../server/game/Room.ts';
-import { registerSocketHandlers } from '../server/socket/handlers.ts';
+import { mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { after, test } from 'node:test';
+
+const root = await mkdtemp(path.join(os.tmpdir(), 'sigame-socket-binding-'));
+process.env.PACKS_DIR = path.join(root, 'packs');
+process.env.CACHE_DIR = path.join(root, 'cache');
+await import('./make-sample-pack.ts');
+const [{ Room, MAX_ROOM_PARTICIPANTS }, { registerSocketHandlers }, { listPacks, loadPack }] = await Promise.all([
+  import('../server/game/Room.ts'), import('../server/socket/handlers.ts'),
+  import('../server/packs/packManager.ts'),
+]);
+const packFile = (await listPacks()).find((pack) => pack.name.includes('v5')).file;
+after(() => rm(root, { recursive: true, force: true }));
 
 class FakeSocket extends EventEmitter {
-  constructor(id) {
+  constructor(id, address = '127.0.0.1') {
     super();
     this.id = id;
     this.data = {};
+    this.handshake = { address };
   }
   join() {}
   leave() {}
   disconnect() { this.emit('disconnect'); }
 }
+
+test('room size bounds spectators as well as player seats', () => {
+  const room = new Room();
+  for (let index = 0; index < MAX_ROOM_PARTICIPANTS; index++) room.join(`Guest ${index}`);
+  assert.throws(() => room.join('One too many'), /room is full/);
+  room.remove([...room.participants.keys()][0]);
+  assert.doesNotThrow(() => room.join('Replacement'));
+});
+
+test('manual score changes retain safe whole-number totals', () => {
+  const room = new Room();
+  const host = room.join('Host').participant;
+  room.attach(host.id, 'host-score');
+  room.chooseInitialRole(host.id, 'host');
+  const player = room.join('Player').participant;
+  room.adjustScore(host.id, player.id, 1_000_000_000_000);
+  assert.equal(player.score, 1_000_000_000_000);
+  assert.throws(() => room.adjustScore(host.id, player.id, 1), /safe whole-number/);
+  assert.throws(() => room.adjustScore(host.id, player.id, 0.5), /safe whole-number/);
+  assert.equal(player.score, 1_000_000_000_000);
+});
+
+test('new join attempts are throttled by source address while resume stays available', async () => {
+  const room = new Room();
+  let onConnection;
+  const io = {
+    sockets: { sockets: new Map() },
+    on(event, callback) { if (event === 'connection') onConnection = callback; },
+    to() { return { emit() {} }; },
+  };
+  registerSocketHandlers(io, room);
+  const connect = (id) => {
+    const socket = new FakeSocket(id, '192.0.2.10');
+    io.sockets.sockets.set(id, socket);
+    onConnection(socket);
+    return socket;
+  };
+  const send = (socket, event, payload) => new Promise((resolve) => socket.emit(event, payload, resolve));
+  let firstToken;
+  for (let index = 0; index < 20; index++) {
+    const joined = await send(connect(`join-${index}`), 'session:join', { nickname: `Guest ${index}` });
+    assert.equal(joined.ok, true);
+    firstToken ??= joined.token;
+  }
+  const denied = await send(connect('denied'), 'session:join', { nickname: 'Extra' });
+  assert.equal(denied.ok, false);
+  assert.match(denied.error, /Too many join attempts/);
+  assert.equal(room.participants.size, 20);
+
+  const resumed = await send(connect('resumed'), 'session:resume', { token: firstToken });
+  assert.equal(resumed.resumed, true);
+});
+
+test('typed answer socket event accepts only the winner and keeps text private', async (t) => {
+  const room = new Room();
+  let onConnection;
+  const io = {
+    sockets: { sockets: new Map() },
+    on(event, callback) { if (event === 'connection') onConnection = callback; },
+    to() { return { emit() {} }; },
+  };
+  registerSocketHandlers(io, room);
+  const connect = (id) => {
+    const socket = new FakeSocket(id);
+    io.sockets.sockets.set(id, socket);
+    onConnection(socket);
+    return socket;
+  };
+  const send = (socket, event, payload = {}) => new Promise((resolve) => socket.emit(event, payload, resolve));
+  const hostSocket = connect('oral-host');
+  const hostJoin = await send(hostSocket, 'session:join', { nickname: 'Host' });
+  await send(hostSocket, 'role:choose', { role: 'host' });
+  const winnerSocket = connect('oral-winner');
+  const winnerJoin = await send(winnerSocket, 'session:join', { nickname: 'Winner' });
+  const otherSocket = connect('oral-other');
+  const otherJoin = await send(otherSocket, 'session:join', { nickname: 'Other' });
+  const hostId = room.tokens.get(hostJoin.token);
+  const winnerId = room.tokens.get(winnerJoin.token);
+  const otherId = room.tokens.get(otherJoin.token);
+  room.setPack(await loadPack(packFile));
+  room.updateSettings(hostId, { oral: false });
+  room.engine.start();
+  room.engine.selectQuestion(hostId, true, 0, 0);
+  room.engine.openBuzzer();
+  room.engine.buzz(winnerId);
+  t.after(() => room.engine.reset());
+
+  assert.match((await send(otherSocket, 'game:answer', { answer: 'steal' })).error, /current answerer/);
+  assert.equal((await send(winnerSocket, 'game:answer', { answer: '  Paris  ' })).ok, true);
+  assert.equal(room.snapshotFor(hostId).game.buzzer.typedAnswer.text, 'Paris');
+  assert.equal(room.snapshotFor(winnerId).game.buzzer.typedAnswer.text, 'Paris');
+  assert.equal(room.snapshotFor(otherId).game.buzzer.typedAnswer.text, null);
+  assert.match((await send(winnerSocket, 'game:answer', { answer: 'second' })).error, /time has ended|already submitted/i);
+});
+
+test('one socket cannot flood commands while clock sync stays available', async () => {
+  const room = new Room();
+  let onConnection;
+  const io = {
+    sockets: { sockets: new Map() },
+    on(event, callback) { if (event === 'connection') onConnection = callback; },
+    to() { return { emit() {} }; },
+  };
+  registerSocketHandlers(io, room);
+  const socket = new FakeSocket('command-flood');
+  io.sockets.sockets.set(socket.id, socket);
+  onConnection(socket);
+  const send = (event, payload = {}) => new Promise((resolve) => socket.emit(event, payload, resolve));
+  assert.equal((await send('session:join', { nickname: 'Player' })).ok, true);
+  for (let index = 0; index < 119; index++) {
+    assert.equal((await send('game:buzz')).ok, true);
+  }
+  const denied = await send('game:buzz');
+  assert.equal(denied.ok, false);
+  assert.match(denied.error, /Too many commands/);
+  for (let index = 0; index < 50; index++) {
+    assert.equal((await send('clock:ping')).ok, true);
+  }
+  assert.match((await send('clock:ping')).error, /Too many clock probes/);
+});
+
+test('a repeated false start is ignored without extending its penalty', async () => {
+  const room = new Room();
+  let onConnection;
+  const io = {
+    sockets: { sockets: new Map() },
+    on(event, callback) { if (event === 'connection') onConnection = callback; },
+    to() { return { emit() {} }; },
+  };
+  registerSocketHandlers(io, room);
+  const connect = (id) => {
+    const socket = new FakeSocket(id);
+    io.sockets.sockets.set(id, socket);
+    onConnection(socket);
+    return socket;
+  };
+  const send = (socket, event, payload = {}) =>
+    new Promise((resolve) => socket.emit(event, payload, resolve));
+  const host = connect('host');
+  await send(host, 'session:join', { nickname: 'Host' });
+  await send(host, 'role:choose', { role: 'host' });
+  const player = connect('player');
+  const joined = await send(player, 'session:join', { nickname: 'Player' });
+  const pid = room.tokens.get(joined.token);
+  room.engine.phase = 'reading';
+  let falseStarts = 0;
+  room.on('event', (event) => { if (event.type === 'falseStart') falseStarts++; });
+
+  assert.equal((await send(player, 'game:buzz')).result, 'falseStart');
+  const penaltyEndsAt = room.engine.buzzer.blockedUntil.get(pid);
+  assert.equal((await send(player, 'game:buzz')).result, 'ignored');
+  assert.equal(room.engine.buzzer.blockedUntil.get(pid), penaltyEndsAt);
+  assert.equal(falseStarts, 1);
+});
 
 test('a joined socket cannot switch seats and a replaced socket loses access', async () => {
   const room = new Room();
@@ -56,4 +223,148 @@ test('a joined socket cannot switch seats and a replaced socket loses access', a
   assert.equal(room.settings.ignoreWrong, false);
   assert.equal((await send(replacement, 'settings:update', { ignoreWrong: true })).ok, true);
   assert.equal(room.settings.ignoreWrong, true);
+});
+
+test('only the current moderator can finish media after host recovery', async (t) => {
+  const room = new Room();
+  let onConnection;
+  const io = {
+    sockets: { sockets: new Map() },
+    on(event, callback) { if (event === 'connection') onConnection = callback; },
+    to() { return { emit() {} }; },
+  };
+  registerSocketHandlers(io, room);
+  const connect = (id) => {
+    const socket = new FakeSocket(id);
+    io.sockets.sockets.set(id, socket);
+    onConnection(socket);
+    return socket;
+  };
+  const send = (socket, event, payload = {}) =>
+    new Promise((resolve) => socket.emit(event, payload, resolve));
+  const hostSocket = connect('host');
+  const host = await send(hostSocket, 'session:join', { nickname: 'Host' });
+  await send(hostSocket, 'role:choose', { role: 'host' });
+  const playerSocket = connect('player');
+  await send(playerSocket, 'session:join', { nickname: 'Player' });
+  const loaded = await loadPack(packFile);
+  const pack = structuredClone(loaded.pack);
+  pack.rounds[0].themes[0].questions[0].content = [
+    { type: 'video', value: 'clip', waitForFinish: true },
+  ];
+  room.setPack({ ...loaded, pack });
+  room.engine.start();
+  room.engine.selectQuestion(room.ownerId, true, 0, 0);
+  t.after(() => {
+    room.engine.reset();
+    for (const timer of room.removalTimers.values()) clearTimeout(timer);
+  });
+  const presentationId = room.engine.current.presentationId;
+  assert.equal((await send(playerSocket, 'game:contentFinished', { presentationId })).ok, false);
+  assert.equal(room.engine.phase, 'reading');
+  room.detach(room.ownerId, hostSocket.id);
+  const oldHostId = room.tokens.get(host.token);
+  clearTimeout(room.removalTimers.get(oldHostId));
+  room.expire(oldHostId);
+  assert.equal((await send(hostSocket, 'game:contentFinished', { presentationId })).ok, false);
+  assert.deepEqual(await send(playerSocket, 'game:contentFinished', { presentationId }),
+    { ok: true, advanced: true });
+  assert.deepEqual(await send(playerSocket, 'game:contentFinished', { presentationId }),
+    { ok: true, advanced: false });
+  assert.equal(room.engine.phase, 'buzzerOpen');
+});
+
+test('revoked manager cannot finish a pending pack load', async () => {
+  const room = new Room();
+  let onConnection;
+  const io = {
+    sockets: { sockets: new Map() },
+    on(event, callback) { if (event === 'connection') onConnection = callback; },
+    to() { return { emit() {} }; },
+  };
+  registerSocketHandlers(io, room);
+  const socket = new FakeSocket('manager');
+  io.sockets.sockets.set(socket.id, socket);
+  onConnection(socket);
+  const send = (event, payload = {}) => new Promise((resolve) => socket.emit(event, payload, resolve));
+  const joined = await send('session:join', { nickname: 'Host' });
+  assert.equal(joined.ok, true);
+  assert.equal((await send('role:choose', { role: 'host' })).ok, true);
+
+  const pending = send('packs:load', { file: packFile });
+  room.remove(room.ownerId);
+  const result = await pending;
+  assert.equal(result.ok, false);
+  assert.equal(room.loadedPack, null);
+});
+
+test('only the moderator can undo the current exact judgment', async (t) => {
+  const room = new Room();
+  let onConnection;
+  const io = {
+    sockets: { sockets: new Map() },
+    on(event, callback) { if (event === 'connection') onConnection = callback; },
+    to() { return { emit() {} }; },
+  };
+  registerSocketHandlers(io, room);
+  const connect = (id) => {
+    const socket = new FakeSocket(id);
+    io.sockets.sockets.set(id, socket);
+    onConnection(socket);
+    return socket;
+  };
+  const send = (socket, event, payload = {}) => new Promise((resolve) => socket.emit(event, payload, resolve));
+  const hostSocket = connect('undo-host');
+  const hostJoin = await send(hostSocket, 'session:join', { nickname: 'Host' });
+  await send(hostSocket, 'role:choose', { role: 'host' });
+  const playerSocket = connect('undo-player');
+  const playerJoin = await send(playerSocket, 'session:join', { nickname: 'Player' });
+  const hostId = room.tokens.get(hostJoin.token);
+  const playerId = room.tokens.get(playerJoin.token);
+  room.setPack(await loadPack(packFile));
+  room.engine.start();
+  room.engine.selectQuestion(hostId, true, 0, 0);
+  room.engine.openBuzzer();
+  room.engine.buzz(playerId);
+  t.after(() => room.engine.reset());
+
+  assert.equal((await send(hostSocket, 'game:judge', { correct: false })).ok, true);
+  const target = room.snapshotFor(hostId).game.undoJudgment;
+  assert.ok(target);
+  assert.equal((await send(playerSocket, 'game:undoJudgment', target)).ok, false);
+  assert.equal((await send(hostSocket, 'game:undoJudgment', { ...target, judgmentId: 99 })).ok, false);
+  assert.equal(room.engine.current.judgments.length, 1);
+  assert.deepEqual(await send(hostSocket, 'game:undoJudgment', target),
+    { ok: true, playerId, delta: room.engine.current.price });
+  assert.equal(room.engine.phase, 'answering');
+  assert.equal(room.engine.current.judgments.length, 0);
+});
+
+test('verdict events reject non-boolean values', async () => {
+  const room = new Room();
+  let onConnection;
+  const io = {
+    sockets: { sockets: new Map() },
+    on(event, callback) { if (event === 'connection') onConnection = callback; },
+    to() { return { emit() {} }; },
+  };
+  registerSocketHandlers(io, room);
+  const socket = new FakeSocket('moderator');
+  io.sockets.sockets.set(socket.id, socket);
+  onConnection(socket);
+  const send = (event, payload = {}) => new Promise((resolve) => socket.emit(event, payload, resolve));
+  await send('session:join', { nickname: 'Host' });
+  await send('role:choose', { role: 'host' });
+
+  let verdicts = 0;
+  room.engine.judge = () => { verdicts++; };
+  room.engine.judgeForAll = () => { verdicts++; };
+  room.engine.judgeFinal = () => { verdicts++; };
+  for (const event of ['game:judge', 'game:judgeForAll', 'game:judgeFinal']) {
+    const response = await send(event, { playerId: 'someone', correct: 'false' });
+    assert.equal(response.ok, false, `${event} must reject a string verdict`);
+  }
+  assert.equal(verdicts, 0);
+  assert.equal((await send('game:judge', { correct: false })).ok, true);
+  assert.equal(verdicts, 1);
 });

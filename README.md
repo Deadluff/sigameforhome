@@ -9,6 +9,18 @@ The app uses TypeScript throughout. The browser client uses pinned Rolldown Vite
 
 1. Install **Node.js 20.19+ or 22.12+** from https://nodejs.org.
 2. On Windows, double-click **`start.bat`**. On macOS or Linux, run **`./start.sh`**. You can also run **`npm start`** on any platform. The launcher installs dependencies for the current OS and CPU when needed, builds the TypeScript/Vite client, then starts the server.
+
+### Standalone executable
+
+Run `npm run build:exe` with Node.js 22 or newer on the target OS. The output is
+`dist/sigame-local-<platform>-<architecture>` (`.exe` on Windows). Move that one
+file to a writable folder and run it; players then open the printed LAN URL.
+No Node.js or npm installation is needed on the host running the built executable.
+The executable includes the web client, demo packs, pack parser, FFmpeg, and the
+Steam desktop integration. On first run it extracts runtime assets and creates
+`packs/`, `data/`, and `tools/` beside itself. Keep those folders when replacing
+the executable to retain downloaded packs and room recovery. Build separately
+on each operating system and CPU architecture you distribute.
 3. The console shows `http://192.168.x.x:3000` plus a QR code. Share either one with your players.
 4. The **first person to join** chooses **Host** or **Player**. Everyone after that becomes a Player,
    or a Spectator once the player slots are full.
@@ -23,6 +35,7 @@ An interrupted question returns to the board for replay after restart.
 The host can pause and resume the current phase; question media and round countdowns pause with it.
 Pack media URLs carry a viewer ticket; the server only serves the current question and
 revealed answer media to players. Keep room links within the local network.
+Pack HTML displays in a sandbox with static relative images and styles; scripts are blocked.
 Pack uploads are limited to 200 MB, validated before they appear in the list, and require a connected host or room owner.
 Workshop updates keep prior pack versions so a saved game can resume with the same questions after a restart.
 
@@ -34,7 +47,7 @@ judges each answer. Final themes are removed one by one before the question is c
 “Play all final themes” setting repeats this flow for the first question of every final theme.
 After a revealed verdict, players can request an appeal. Eligible players vote privately; an accepted appeal
 corrects the score and, when needed, the next chooser.
-Pack files are limited to 200 MB compressed and 1 GB extracted.
+Pack files are limited to 200 MB compressed, 1 GB extracted, and 256 MB per media file.
 
 > Allow Node.js through your firewall so phones can connect. To use a different port,
 > set `PORT=3001` before starting (`set PORT=3001` on Windows, `PORT=3001 ./start.sh` on macOS/Linux).
@@ -112,18 +125,25 @@ Every client event is `(payload, ack)`. The ack returns `{ ok: true, ... }` or `
 
 | Event | Who | Payload |
 |---|---|---|
-| `session:join` / `session:resume` | anyone | `{ nickname }` / `{ token }` |
+| `session:join` / `session:resume` / `session:leave` | anyone / returning player / member | `{ nickname }` / `{ token }` / `{}` |
 | `role:choose` | first joiner | `{ role: 'host' \| 'player' }` |
 | `role:set` | self / host | `{ targetId, role }` |
+| `participant:kick`, `score:adjust` | host | `{ targetId }`, `{ targetId, delta }` |
 | `packs:list`, `packs:load`, `steam:download` | host/owner | `{ file }`, `{ link }` |
 | `settings:schema`, `settings:update` | anyone / host/owner | patch object |
-| `game:start`, `game:stop`, `game:select`, `game:openBuzzer`, `game:buzz`, `game:judge`, `game:reveal`, `game:next`, `game:nextRound` | as appropriate | |
+| `game:start`, `game:stop`, `game:pause`, `game:resume`, `game:select`, `game:openBuzzer`, `game:buzz`, `game:judge`, `game:reveal`, `game:next`, `game:nextRound` | as appropriate | |
+| `game:answer` | selected player in written-answer mode | `{ answer }` (1–350 characters before the answer deadline) |
+| `game:contentFinished` | current moderator | `{ presentationId }` for a finished wait-for-media question |
+| `game:undoJudgment` | current moderator | `{ presentationId, judgmentId }` from `game.undoJudgment` in the latest room view |
 | `game:stakeBid`, `game:stakePass` | current bidder | `{ amount, allIn }`, `{}` |
 | `game:forAllAnswer`, `game:closeForAll`, `game:judgeForAll` | player / host / host | `{ answer }`, `{}`, `{ playerId, correct }` |
 | `game:appealRequest`, `game:appealVote`, `game:appealClose` | player / eligible voter / host | `{ judgmentId }`, `{ support }`, `{}` |
 
 Server → client: `room:state` (a personalised snapshot; players never get answers early), `game:event`,
 `steam:progress`, `packs:changed`, `session:kicked`.
+
+Written answers are visible only to the current moderator and answerer until judged. Undo applies
+to the latest verdict in the current question; it cannot erase an answer already seen by viewers.
 
 The host panel uploads packs with `POST /api/packs/upload` using the room session token in an
 `Authorization: Bearer` header and a URI-encoded filename in `X-Pack-Name`.
@@ -138,4 +158,4 @@ The host panel uploads packs with `POST /api/packs/upload` using the room sessio
 - [x] Step 6: special questions (secret/"cat in a poke", stake/auction, no-risk, for-all), final round
 - [x] Step 7: pause/resume, browser pack upload, sound cues
 - [x] Step 7: appeals
-- [ ] Remaining: single-executable packaging
+- [x] Single-executable packaging

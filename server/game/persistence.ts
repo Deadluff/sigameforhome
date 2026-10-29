@@ -64,7 +64,7 @@ export async function restoreRoom(room: Room, stateFile = file): Promise<void> {
       room.engine.played = new Set(game.played);
       room.engine.removedFinalThemes = new Set(game.removedFinalThemes ?? []);
       room.engine.chooserId = game.chooserId;
-      room.engine.roundEndsAt = game.paused?.roundMs != null ? Date.now() + game.paused.roundMs
+      room.engine.roundEndsAt = game.phase === PHASES.PAUSED ? null
         : game.roundEndsAt && game.roundEndsAt > Date.now() ? game.roundEndsAt : null;
       const restoredPhase: Phase = game.phase === PHASES.PAUSED ? game.paused?.phase ?? PHASES.BOARD : game.phase;
       // Replay an interrupted question from the board; scores and prior questions remain.
@@ -96,7 +96,14 @@ export async function restoreRoom(room: Room, stateFile = file): Promise<void> {
         room.engine.phase = ([PHASES.GAME_OVER, PHASES.ROUND_END, PHASES.FINAL_THEMES] as Phase[]).includes(restoredPhase)
           ? restoredPhase : PHASES.BOARD;
       }
-      room.engine.scheduleRoundEnd();
+      if (game.phase === PHASES.PAUSED) {
+        // Replayed questions return to the board, but an explicit pause must keep its round clock stopped.
+        room.engine.paused = { phase: room.engine.phase, timerName: null, timerMs: null,
+          roundMs: game.paused?.roundMs ?? null };
+        room.engine.phase = PHASES.PAUSED;
+      } else {
+        room.engine.scheduleRoundEnd();
+      }
     }
   } catch (err) {
     console.warn(`[room] State not restored: ${(err as Error).message}`);

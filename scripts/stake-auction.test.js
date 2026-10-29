@@ -120,12 +120,51 @@ test('a disconnected high bidder cannot be assigned the answer', (t) => {
   assert.equal(a.score, 600);
 });
 
+test('a disconnected current bidder yields the stake turn immediately', (t) => {
+  const { room, host, players: [a, b, c] } = table(t, [600, 700, 800]);
+  room.engine.chooserId = a.id;
+  room.engine.selectQuestion(host.id, true, 0, 4);
+  assert.equal(room.engine.auctionTurnId(), a.id);
+  room.detach(a.id, 'player-0');
+  assert.equal(room.engine.auctionTurnId(), b.id);
+  room.engine.passStake(b.id);
+  room.engine.passStake(c.id);
+  assert.equal(room.engine.phase, 'reveal');
+  assert.equal(room.engine.current.assignedId, null);
+});
+
+test('resuming an auction skips a bidder who left during the pause', (t) => {
+  const { room, host, players: [a, b] } = table(t, [600, 700]);
+  room.engine.chooserId = a.id;
+  room.engine.selectQuestion(host.id, true, 0, 4);
+  room.engine.pause();
+  room.detach(a.id, 'player-0');
+  room.engine.resume();
+  assert.equal(room.engine.auctionTurnId(), b.id);
+  room.engine.passStake(b.id);
+  assert.equal(room.engine.phase, 'reveal');
+});
+
+test('an offline auction cannot consume a question before anyone can bid', (t) => {
+  const { room, host, players: [alice, bob] } = table(t, [600, 700]);
+  room.detach(alice.id, 'player-0');
+  room.detach(bob.id, 'player-1');
+  assert.throws(() => room.engine.selectQuestion(host.id, true, 0, 4), /No connected players can bid/);
+  assert.equal(room.engine.phase, 'board');
+  assert.equal(room.engine.current, null);
+  assert.equal(room.engine.isAvailable(0, 4), true);
+});
+
 test('stake timer automatically passes an idle bidder', async (t) => {
   const { room, host, players: [a, b] } = table(t, [600, 700]);
   room.settings.timeForMakingStake = 0.01;
   room.engine.chooserId = a.id;
   room.engine.selectQuestion(host.id, true, 0, 4);
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  // Chained auction timers can run late when other test files share the event loop.
+  const deadline = Date.now() + 1000;
+  while (room.engine.phase !== 'reveal' && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
   assert.equal(room.engine.phase, 'reveal');
   assert.equal(room.engine.auction, null);
   assert.equal(b.score, 700);
