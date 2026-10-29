@@ -262,15 +262,17 @@ async function runJob(
       }
     }
 
+    let steamClientError: string | null = null;
     if (!sourceFolder) {
       try {
         sourceFolder = await downloadViaSteamClient(appId, id, (p) =>
           onProgress({ stage: 'steam', message: p.message, percent: p.percent }),
         );
       } catch (steamErr) {
+        steamClientError = (steamErr as Error).message;
         onProgress({
           stage: 'steam',
-          message: `Steam client download unavailable (${(steamErr as Error).message}); falling back to steamcmd…`,
+          message: `Steam client download unavailable (${steamClientError}); falling back to steamcmd…`,
         });
       }
     }
@@ -280,7 +282,15 @@ async function runJob(
         stage: 'steamcmd',
         message: `Downloading via steamcmd (${config.steam.user ? `user ${config.steam.user}` : 'anonymous'})…`,
       });
-      sourceFolder = await steamcmdDownloadItem(appId, id, (line) => onProgress({ stage: 'steamcmd', message: line }));
+      try {
+        sourceFolder = await steamcmdDownloadItem(appId, id, (line) => onProgress({ stage: 'steamcmd', message: line }));
+      } catch (cmdErr) {
+        const msg = (cmdErr as Error).message;
+        if (steamClientError) {
+          throw new Error(`${msg} (Local Steam client reason: ${steamClientError})`);
+        }
+        throw cmdErr;
+      }
     }
 
     onProgress({ stage: 'extract', message: 'Locating pack file…' });

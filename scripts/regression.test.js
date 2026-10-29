@@ -419,3 +419,42 @@ test('restart replays an interrupted for-all answer session from the board', asy
   assert.equal(restored.engine.phase, 'board');
   assert.equal(restored.engine.isAvailable(0, 0), true);
 });
+
+test('wrong answers do not reveal the answer to players, while correct answers schedule auto-next', (t) => {
+  const { room, host, player, spectator } = createRoom(t);
+  room.engine.selectQuestion(host.id, true, 0, 0);
+  room.engine.openBuzzer();
+  room.engine.buzz(player.id);
+  room.engine.judge(false);
+
+  assert.equal(room.engine.phase, 'reveal');
+  assert.equal(room.engine.current.answerShown, false);
+  assert.equal(room.snapshotFor(player.id).game.current.right, null);
+  assert.equal(room.snapshotFor(spectator.id).game.current.right, null);
+  assert.ok(room.snapshotFor(host.id).game.current.right?.length);
+
+  room.engine.next();
+  room.engine.selectQuestion(host.id, true, 0, 1);
+  room.engine.openBuzzer();
+  room.engine.buzz(player.id);
+  room.engine.judge(true);
+
+  assert.equal(room.engine.phase, 'reveal');
+  assert.equal(room.engine.current.answerShown, true);
+  assert.ok(room.snapshotFor(player.id).game.current.right?.length);
+  assert.equal(room.engine.timer?.name, 'reveal');
+});
+
+test('host can navigate to nextRound and prevRound from any active game phase', (t) => {
+  const { room, host } = createRoom(t);
+  assert.equal(room.engine.roundIndex, 0);
+  assert.throws(() => room.engine.prevRound(), /first round/);
+
+  room.engine.nextRound();
+  assert.equal(room.engine.roundIndex, 1);
+  assert.equal(room.engine.phase, 'board');
+
+  room.engine.prevRound();
+  assert.equal(room.engine.roundIndex, 0);
+  assert.equal(room.engine.phase, 'board');
+});

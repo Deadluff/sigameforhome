@@ -13,9 +13,8 @@ const commandSuffix = process.platform === 'win32' ? '.cmd' : '';
 const buildTools = ['vite', 'tsc', 'tsx'].map((name) => path.join(modules, '.bin', `${name}${commandSuffix}`));
 
 const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number);
-if (!((nodeMajor === 20 && nodeMinor >= 19) ||
-      (nodeMajor === 22 && nodeMinor >= 12) || nodeMajor > 22)) {
-  console.error('Node.js 20.19 or 22.12+ is required by Vite 7. Install it from https://nodejs.org.');
+if (nodeMajor < 20 || (nodeMajor === 20 && nodeMinor < 19) || (nodeMajor === 21) || (nodeMajor === 22 && nodeMinor < 12)) {
+  console.error('Node.js 20.19+ or 22.12+ is required. Install it from https://nodejs.org.');
   process.exit(1);
 }
 
@@ -31,7 +30,7 @@ const fingerprint = [
 if (!fs.existsSync(modules) || !fs.existsSync(stamp) || fs.readFileSync(stamp, 'utf8') !== fingerprint ||
     buildTools.some((tool) => !fs.existsSync(tool))) {
   console.log('Installing dependencies for this platform...');
-  // npm selects the native binaries for the current OS and CPU from the lockfile.
+  // npm selects the native binaries for the current OS and CPU.
   const install = spawnSync('npm', ['ci', '--include=dev', '--no-audit', '--no-fund'], {
     cwd: root,
     stdio: 'inherit',

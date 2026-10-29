@@ -35,6 +35,11 @@ async function main() {
   process.env.FFMPEG_BIN = ffmpeg;
   process.env.SIGAME_PARSE_WORKER = path.join(runtime, 'parse-worker.mjs');
   process.env.SIGAME_STEAMWORKS_PATH = pathToFileURL(path.join(runtime, 'steamworks.js', 'index.js')).href;
+  process.env.SIGAME_STEAM_WORKER_PATH = path.join(runtime, 'steam-worker.mjs');
+  if (process.env.SIGAME_STEAM_WORKER_MODE === '1') {
+    await import(pathToFileURL(process.env.SIGAME_STEAM_WORKER_PATH).href);
+    return;
+  }
   await import(pathToFileURL(path.join(runtime, 'server.mjs')).href);
 }
 

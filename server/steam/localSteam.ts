@@ -3,25 +3,23 @@
  *   1. Local Steam Library scanner: reads `libraryfolders.vdf` across all drives
  *      and checks if `<library>/steamapps/workshop/content/3553500/<itemId>` is
  *      already downloaded on disk.
- *   2. Steamworks UGC API (`steamworks.js`): talks directly to the running Steam
- *      desktop client (`ISteamUGC::DownloadItem`), downloading any Workshop pack
- *      at full speed with live byte progress—no username/password required.
+ *   2. Automatic Steam client health check / wake-up on Windows: verifies that
+ *      the local Steam client has an active logged-in user (`ActiveUser != 0`),
+ *      automatically starting or recovering a stuck background `-silent` client
+ *      after Steam self-updates.
+ *   3. Isolated Steamworks UGC worker (`steamworksWorker.ts`): runs `steamworks.js`
+ *      in a short-lived child process so each download binds to the current
+ *      `steam.exe` IPC pipe and immediately releases `RunningAppID` when done.
  */
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { pathExists } from '../utils/fsx.ts';
+import type { WorkerEvent } from './steamworksWorker.ts';
 
-/* EItemState bitmask flags from Steamworks ISteamUGC */
-const ITEM_STATE = {
-  NONE: 0,
-  SUBSCRIBED: 1,
-  LEGACY_ITEM: 2,
-  INSTALLED: 4,
-  NEEDS_UPDATE: 8,
-  DOWNLOADING: 16,
-  DOWNLOAD_PENDING: 32,
-} as const;
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const WORKER_PATH = path.join(__dirname, 'steamworksWorker.ts');
 
 export interface SteamClientProgress {
   message: string;
@@ -91,99 +89,196 @@ export async function findInLocalSteamLibraries(appId: number, itemId: string): 
 }
 
 /* ------------------------------------------------------------------------- */
-/* Steamworks.js client singleton                                            */
+/* Windows Steam client status & auto-recovery                               */
 /* ------------------------------------------------------------------------- */
 
-type SteamworksClient = ReturnType<typeof import('steamworks.js').init>;
+interface ActiveProcessInfo {
+  pid: number;
+  activeUser: number;
+}
 
-let steamClient: SteamworksClient | null = null;
-let steamInitError: Error | null = null;
-
-async function getSteamworksClient(appId: number): Promise<SteamworksClient> {
-  if (steamClient) return steamClient;
-  if (steamInitError) throw steamInitError;
-
+function readWindowsSteamActiveProcess(): ActiveProcessInfo {
   try {
-    const steamworks = await import(process.env.SIGAME_STEAMWORKS_PATH ?? 'steamworks.js') as typeof import('steamworks.js');
-    steamClient = steamworks.init(appId);
-    return steamClient;
-  } catch (err) {
-    steamInitError = err as Error;
-    setTimeout(() => {
-      steamInitError = null;
-    }, 5_000).unref();
-    throw new Error(
-      `Could not connect to the local Steam client (${(err as Error).message}). Make sure the Steam desktop app is running and logged in.`,
-    );
+    const out = execFileSync('reg', ['query', 'HKCU\\Software\\Valve\\Steam\\ActiveProcess'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true,
+    });
+    const pidMatch = out.match(/\bpid\s+REG_DWORD\s+0x([0-9a-f]+)/i);
+    const userMatch = out.match(/\bActiveUser\s+REG_DWORD\s+0x([0-9a-f]+)/i);
+    return {
+      pid: pidMatch ? Number.parseInt(pidMatch[1], 16) : 0,
+      activeUser: userMatch ? Number.parseInt(userMatch[1], 16) : 0,
+    };
+  } catch {
+    return { pid: 0, activeUser: 0 };
   }
 }
+
+function isProcessAlive(pid: number): boolean {
+  if (pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isSteamRunningHeadlessOnWindows(pid: number): boolean {
+  try {
+    const out = execFileSync(
+      'powershell',
+      ['-NoProfile', '-Command', `(Get-Process -Id ${pid} -ErrorAction SilentlyContinue).MainWindowHandle`],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true },
+    ).trim();
+    return out === '0' || out === '';
+  } catch {
+    return false;
+  }
+}
+
+async function waitForSteamActiveUser(timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const { pid, activeUser } = readWindowsSteamActiveProcess();
+    if (activeUser > 0 && isProcessAlive(pid)) return true;
+    await new Promise((r) => setTimeout(r, 1_000));
+  }
+  return false;
+}
+
+async function ensureSteamClientReady(onProgress: (p: SteamClientProgress) => void): Promise<void> {
+  if (process.platform !== 'win32') return;
+
+  const initial = readWindowsSteamActiveProcess();
+  if (initial.activeUser > 0 && isProcessAlive(initial.pid)) return;
+
+  const steamRoot = await findSteamInstallPath();
+  const steamExe = steamRoot ? path.join(steamRoot, 'steam.exe') : null;
+  if (!steamExe || !(await pathExists(steamExe))) return;
+
+  const alive = isProcessAlive(initial.pid);
+
+  if (!alive) {
+    onProgress({ message: 'Starting local Steam client in background and waiting for auto-login…' });
+    spawn(steamExe, ['-silent'], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+    if (await waitForSteamActiveUser(25_000)) return;
+    throw new Error(
+      'Started the Steam desktop app, but no account logged in automatically. Open Steam, sign in, and try again.',
+    );
+  }
+
+  // Steam is running, but ActiveUser is 0 (either still logging in or stuck in -silent after a client update).
+  onProgress({ message: 'Waiting for local Steam client to finish logging in…' });
+  if (await waitForSteamActiveUser(5_000)) return;
+
+  if (isSteamRunningHeadlessOnWindows(initial.pid)) {
+    onProgress({
+      message: `Steam background process (PID ${initial.pid}) is stuck with no active user; restarting Steam silently…`,
+    });
+    try {
+      process.kill(initial.pid);
+    } catch {
+      /* ignore */
+    }
+    await new Promise((r) => setTimeout(r, 2_000));
+    spawn(steamExe, ['-silent'], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+    if (await waitForSteamActiveUser(25_000)) {
+      onProgress({ message: 'Steam client reconnected and logged in.' });
+      return;
+    }
+  }
+
+  throw new Error(
+    `Steam desktop app is running (PID ${initial.pid}) but no account is logged in (ActiveUser = 0). Open the Steam window, sign into your account, and try again.`,
+  );
+}
+
+/* ------------------------------------------------------------------------- */
+/* Child worker runner                                                       */
+/* ------------------------------------------------------------------------- */
 
 export async function downloadViaSteamClient(
   appId: number,
   itemId: string,
   onProgress: (p: SteamClientProgress) => void = () => {},
 ): Promise<string> {
-  const client = await getSteamworksClient(appId);
-  const idBig = BigInt(itemId);
+  await ensureSteamClientReady(onProgress);
 
-  const initialState = client.workshop.state(idBig);
-  if ((initialState & ITEM_STATE.INSTALLED) && !(initialState & ITEM_STATE.NEEDS_UPDATE)) {
-    const info = client.workshop.installInfo(idBig);
-    if (info?.folder && (await pathExists(info.folder))) {
-      onProgress({ message: `Found in local Steam Workshop cache (${info.folder})`, percent: 100 });
-      return info.folder;
-    }
-  }
+  return new Promise<string>((resolve, reject) => {
+    const packaged = !!process.env.SIGAME_STEAM_WORKER_PATH;
+    const args = packaged
+      ? [String(appId), String(itemId)]
+      : ['--import', 'tsx', WORKER_PATH, String(appId), String(itemId)];
+    const child = spawn(process.execPath, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+      env: packaged ? { ...process.env, SIGAME_STEAM_WORKER_MODE: '1' } : process.env,
+    });
 
-  onProgress({ message: 'Requesting download from the running Steam client…', percent: 0 });
-  const started = client.workshop.download(idBig, true);
-  if (!started) {
-    throw new Error(
-      'Steam client rejected the download request. Make sure SIGame (App ID 3553500) is added to your free Steam library.',
-    );
-  }
+    let settled = false;
+    let lastError = '';
+    let stdoutBuf = '';
 
-  const timeoutMs = 10 * 60_000;
-  const startTime = Date.now();
-  let sawDownloadFlag = false;
-  let lastPercent = -1;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        child.kill();
+        reject(new Error('Timed out waiting for Steam client Workshop download worker.'));
+      }
+    }, 11 * 60_000);
 
-  while (Date.now() - startTime < timeoutMs) {
-    await new Promise((r) => setTimeout(r, 400));
-    const state = client.workshop.state(idBig);
-
-    if (state & (ITEM_STATE.DOWNLOADING | ITEM_STATE.DOWNLOAD_PENDING)) {
-      sawDownloadFlag = true;
-      const dl = client.workshop.downloadInfo(idBig);
-      const current = Number(dl?.current ?? 0n);
-      const total = Number(dl?.total ?? 0n);
-      if (total > 0) {
-        const pct = Math.min(99, Math.round((current / total) * 100));
-        if (pct !== lastPercent) {
-          lastPercent = pct;
-          onProgress({
-            message: `Downloading via Steam client… ${(current / 1e6).toFixed(1)} / ${(total / 1e6).toFixed(1)} MB`,
-            percent: pct,
-          });
+    const handleLine = (line: string) => {
+      const idx = line.indexOf('__SW_EVENT__');
+      if (idx === -1) return;
+      try {
+        const event = JSON.parse(line.slice(idx + '__SW_EVENT__'.length)) as WorkerEvent;
+        if (event.type === 'progress') {
+          onProgress({ message: event.message, percent: event.percent });
+        } else if (event.type === 'done' && !settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(event.folder);
+        } else if (event.type === 'error') {
+          lastError = event.message;
         }
+      } catch {
+        /* ignore malformed JSON */
       }
-      continue;
-    }
+    };
 
-    if ((state & ITEM_STATE.INSTALLED) && !(state & ITEM_STATE.NEEDS_UPDATE)) {
-      const info = client.workshop.installInfo(idBig);
-      if (info?.folder && (await pathExists(info.folder))) {
-        onProgress({ message: 'Download finished via Steam client.', percent: 100 });
-        return info.folder;
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdoutBuf += chunk.toString('utf8');
+      const lines = stdoutBuf.split(/\r?\n/);
+      stdoutBuf = lines.pop() ?? '';
+      for (const line of lines) handleLine(line);
+    });
+
+    child.stderr.on('data', (chunk: Buffer) => {
+      const text = chunk.toString('utf8').trim();
+      if (text) lastError = text;
+    });
+
+    child.on('error', (err) => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        reject(err);
       }
-    }
+    });
 
-    if (sawDownloadFlag && !(state & ITEM_STATE.INSTALLED)) {
-      throw new Error(
-        'Steam stopped the download before completion. Ensure SIGame (free) is added to your Steam account library.',
-      );
-    }
-  }
-
-  throw new Error('Timed out waiting for Steam client to finish downloading the Workshop item.');
+    child.on('close', (code) => {
+      if (stdoutBuf) handleLine(stdoutBuf);
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        reject(
+          new Error(
+            lastError || `Steam client download worker exited unexpectedly (code ${code ?? 'unknown'}).`,
+          ),
+        );
+      }
+    });
+  });
 }

@@ -23,6 +23,9 @@ await build({ entryPoints: [path.join(root, 'server/packs/parseWorker.ts')], out
   bundle: true, platform: 'node', format: 'esm', target: 'node22',
   banner: { js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);" },
   logLevel: 'warning' });
+await build({ entryPoints: [path.join(root, 'server/steam/steamworksWorker.ts')], outfile: path.join(staging, 'steam-worker.mjs'),
+  bundle: true, platform: 'node', format: 'esm', target: 'node22', external: ['steamworks.js'],
+  logLevel: 'warning' });
 
 const files = new Map();
 function add(name, source) {
@@ -38,6 +41,7 @@ function addTree(directory, prefix) {
 }
 add('server.mjs', path.join(staging, 'server.mjs'));
 add('parse-worker.mjs', path.join(staging, 'parse-worker.mjs'));
+add('steam-worker.mjs', path.join(staging, 'steam-worker.mjs'));
 addTree(path.join(root, 'client/dist'), 'client');
 const demoDir = path.join(staging, 'demo');
 fs.mkdirSync(demoDir, { recursive: true });

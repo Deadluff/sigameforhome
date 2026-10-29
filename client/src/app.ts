@@ -44,7 +44,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
 
   const controlCommands = new Set<string>([
     'game:pause', 'game:resume', 'game:openBuzzer', 'game:reveal',
-    'game:next', 'game:nextRound', 'game:stop', 'game:closeForAll', 'game:appealClose',
+    'game:next', 'game:prevRound', 'game:nextRound', 'game:stop', 'game:closeForAll', 'game:appealClose',
   ] satisfies NoPayloadCommand[]);
   const isNoPayloadCommand = (value: string): value is NoPayloadCommand => controlCommands.has(value);
   const tvMode = new URLSearchParams(location.search).has('tv');
@@ -319,7 +319,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       if (action === 'judge-ok' || action === 'judge-bad') button.disabled = game.phase !== 'answering' ||
         (!state.settings.oral && !game.buzzer.typedAnswer?.submitted && !game.buzzer.typedAnswer?.closed);
       if (action === 'game:reveal') button.disabled = game.current?.type === 'forAll' ||
-        !['reading', 'buzzerOpen', 'answering'].includes(game.phase);
+        !(['reading', 'buzzerOpen', 'answering'].includes(game.phase) ||
+          (game.phase === 'reveal' && !game.current?.answerShown));
       if (action === 'game:next') button.disabled = !['reveal', 'roundEnd', 'specialSetup', 'stakeAuction'].includes(game.phase);
       if (action === 'game:next') {
         const finalReveal = game.phase === 'reveal' && game.round?.type === 'final';
@@ -327,7 +328,12 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
         button.textContent = finalReveal && state.settings.playAllQuestionsInFinalRound
           ? moreFinalThemes ? 'Next final theme ▶' : 'Finish game ▶' : 'Next ▶';
       }
-      if (action === 'game:nextRound') button.disabled = game.phase !== 'roundEnd';
+      if (action === 'game:prevRound') {
+        button.disabled = game.phase === 'lobby' || (game.roundIndex <= 0 && game.phase !== 'gameOver');
+      }
+      if (action === 'game:nextRound') {
+        button.disabled = game.phase === 'lobby' || game.phase === 'gameOver';
+      }
     }
 
     const openBtn = button('#btn-open-buzzer');
@@ -1445,12 +1451,25 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
         $('#stage-title').textContent = 'Final judging';
         $('#stage-subtitle').textContent = 'The host is checking every answer.';
       } else if (game.phase === 'reveal') {
-        banner.classList.add('state-reveal');
-        $('#stage-icon').textContent = '✅';
-        $('#stage-title').textContent = `CORRECT ANSWER: ${(game.current?.right ?? []).join(' / ')}`;
-        $('#stage-subtitle').textContent = 'Waiting for the next question.';
-        $('#stage-countdown').textContent = '';
-        $('#stage-progress-fill').style.width = '100%';
+        if (game.current?.answerShown) {
+          banner.classList.add('state-reveal');
+          $('#stage-icon').textContent = '✅';
+          $('#stage-title').textContent = `CORRECT ANSWER: ${(game.current?.right ?? []).join(' / ')}`;
+          $('#stage-subtitle').textContent = t ? 'Auto-advancing to board…' : 'Waiting for the next question.';
+          if (!t) {
+            $('#stage-countdown').textContent = '';
+            $('#stage-progress-fill').style.width = '100%';
+          }
+        } else {
+          banner.classList.add('state-reading');
+          $('#stage-icon').textContent = '❌';
+          $('#stage-title').textContent = 'Answer not revealed';
+          $('#stage-subtitle').textContent = you.canModerate
+            ? 'Choose Next to return to the board, or Show answer to reveal it.'
+            : 'Waiting for the host.';
+          $('#stage-countdown').textContent = '';
+          $('#stage-progress-fill').style.width = '0%';
+        }
       }
     }
 
