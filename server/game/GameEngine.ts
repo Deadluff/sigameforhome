@@ -1188,8 +1188,7 @@ export class GameEngine {
     this.current.answerShown = showAnswer;
     if (autoNext) {
       // Leave players time to challenge a verdict before the board advances.
-      const appealWindow = this.settings.useApellations ? 10 : 0;
-      this.startTimer('reveal', Math.max(appealWindow, this.estimateRevealSeconds(this.current.question)), () => this.next());
+      this.startTimer('reveal', this.estimateRevealSeconds(this.current.question), () => this.next());
     }
   }
 

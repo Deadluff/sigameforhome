@@ -6,7 +6,7 @@
   "type": "module",
   "main": "server/index.ts",
   "engines": {
-    "node": "^20.19.0 || >=22.12.0"
+    "node": ">=18.17.0"
   },
   "scripts": {
     "start": "node scripts/start.js",
@@ -39,6 +39,6 @@
     "postject": "^1.0.0-alpha.6",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
-    "vite": "npm:rolldown-vite@7.3.1"
+    "vite": "^6.2.0"
   }
 }

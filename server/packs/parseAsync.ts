@@ -20,9 +20,16 @@ function runNext(): void {
   let worker: Worker;
   try {
     // A packaged server extracts the compiled worker beside its other assets.
-    worker = new Worker(process.env.SIGAME_PARSE_WORKER ?? new URL('./parseWorker.ts', import.meta.url), {
+    // In source mode, bootstrap via a JS data URL so Node 20+ registers tsx's module hooks inside the worker.
+    const tsxEsmUrl = new URL('../../node_modules/tsx/dist/esm/index.mjs', import.meta.url).href;
+    const parseWorkerUrl = new URL('./parseWorker.ts', import.meta.url).href;
+    const bootstrapCode = `import { register } from 'node:module'; register(${JSON.stringify(tsxEsmUrl)}, { parentURL: ${JSON.stringify(tsxEsmUrl)}, data: {} }); await import(${JSON.stringify(parseWorkerUrl)});`;
+    const workerTarget = process.env.SIGAME_PARSE_WORKER
+      ? process.env.SIGAME_PARSE_WORKER
+      : new URL(`data:text/javascript,${encodeURIComponent(bootstrapCode)}`);
+    worker = new Worker(workerTarget, {
       workerData: pending.job,
-      execArgv: process.env.SIGAME_PARSE_WORKER ? [] : ['--import', 'tsx'],
+      execArgv: [],
     });
   } catch (error) {
     pending.reject(error as Error);
