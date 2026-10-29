@@ -52,6 +52,12 @@ export interface NumberSet {
   step: number;
 }
 
+export interface QuestionTypeParams {
+  [key: string]: unknown;
+  price?: NumberSet;
+  selectionMode?: string;
+}
+
 export interface Info {
   authors: string[];
   sources: string[];
@@ -62,7 +68,7 @@ export interface Question {
   /** -1 marks an empty / removed cell. */
   price: number;
   type: QuestionType;
-  typeParams: Record<string, unknown>;
+  typeParams: QuestionTypeParams;
   content: ContentItem[];
   answerContent: ContentItem[];
   right: string[];
@@ -295,7 +301,7 @@ function parseLegacyQuestion(q: XmlNode, resolver: MediaResolver) {
   const typeName = attr(q.type, 'name', 'simple').toLowerCase();
   const legacyParams = Object.fromEntries(asArray(q.type?.param).map((p) => [attr(p, 'name'), text(p)]));
   let type: QuestionType = 'simple';
-  let typeParams: Record<string, unknown> = {};
+  let typeParams: QuestionTypeParams = {};
 
   switch (typeName) {
     case 'cat':
@@ -353,6 +359,7 @@ function parseDuration(s: string): number | null {
   return parts.reduce((acc, n) => acc * 60 + n, 0);
 }
 
+const MAX_CONTENT_XML_BYTES = 10 * 1024 * 1024;
 const V5_TYPES = new Set<QuestionType>([
   'simple',
   'secret',
@@ -366,7 +373,7 @@ const V5_TYPES = new Set<QuestionType>([
 function parseModernQuestion(q: XmlNode, resolver: MediaResolver) {
   let content: ContentItem[] = [];
   let answerContent: ContentItem[] = [];
-  const typeParams: Record<string, unknown> = {};
+  const typeParams: QuestionTypeParams = {};
 
   for (const p of asArray(q.params?.param)) {
     const name = attr(p, 'name');
@@ -467,6 +474,8 @@ export function readPackHeader(filePath: string): PackHeader {
   const zip = new AdmZip(filePath);
   const entry = findContentEntry(zip);
   if (!entry) throw new Error('content.xml not found');
+  // Listing is allowed before loading, so it needs the same XML bound as parseSiq.
+  if (entry.header.size > MAX_CONTENT_XML_BYTES) throw new Error('Pack content.xml exceeds 10 MB');
   const root = xmlParser.parse(entry.getData().toString('utf8'));
   const pkg = root.package ?? {};
   return {
@@ -499,8 +508,15 @@ export async function parseSiq(
   { mediaBaseUrl = '', extractTo }: ParseSiqOptions = {},
 ): Promise<Package> {
   const zip = new AdmZip(filePath);
+  // Bound untrusted archive expansion before reading any entry into memory.
+  const entries = zip.getEntries();
+  const expanded = entries.reduce((sum, entry) => sum + (entry.header?.size ?? 0), 0);
+  if (entries.length > 5000 || expanded > 1024 * 1024 * 1024) {
+    throw new Error('Pack has too many files or exceeds 1 GB when extracted');
+  }
   const contentEntry = findContentEntry(zip);
   if (!contentEntry) throw new Error(`"${path.basename(filePath)}" is not a valid .siq (content.xml missing)`);
+  if (contentEntry.header.size > MAX_CONTENT_XML_BYTES) throw new Error('Pack content.xml exceeds 10 MB');
 
   const xml = contentEntry.getData().toString('utf8').replace(/^\uFEFF/, '');
   const resolver = createMediaResolver(zip.getEntries(), mediaBaseUrl);

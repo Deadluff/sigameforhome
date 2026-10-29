@@ -6,15 +6,18 @@
   "type": "module",
   "main": "server/index.ts",
   "engines": {
-    "node": ">=18.17"
+    "node": ">=18.17.0"
   },
   "scripts": {
-    "start": "tsx server/index.ts",
-    "dev": "tsx watch server/index.ts",
+    "start": "node scripts/start.js",
+    "dev": "npm run build && tsx watch server/index.ts",
+    "dev:client": "vite",
+    "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "inspect-pack": "tsx scripts/inspect-pack.ts",
-    "make-sample": "tsx scripts/make-sample-pack.ts",
-    "smoke": "tsx scripts/smoke-test.ts"
+    "test": "node --import tsx --test scripts/regression.test.js scripts/stake-auction.test.js scripts/media.test.js scripts/for-all.test.js scripts/pack-limits.test.js scripts/final-round.test.js scripts/final-persistence.test.js scripts/engine-recovery.test.js scripts/pack-upload.test.js scripts/workshop-safety.test.js scripts/appeals.test.js scripts/session-binding.test.js",
+    "inspect-pack": "node --import tsx scripts/inspect-pack.ts",
+    "make-sample": "node --import tsx scripts/make-sample-pack.ts",
+    "smoke": "node --import tsx scripts/smoke-test.ts"
   },
   "dependencies": {
     "@types/adm-zip": "^0.5.7",
@@ -28,8 +31,11 @@
     "qrcode-terminal": "^0.12.0",
     "socket.io": "^4.8.1",
     "socket.io-client": "^4.8.1",
-    "steamworks.js": "^0.4.0",
+    "steamworks.js": "^0.4.0"
+  },
+  "devDependencies": {
     "tsx": "^4.23.15",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vite": "^6.2.0"
   }
 }

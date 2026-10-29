@@ -23,7 +23,7 @@ const themeV5 = (name: string, n: number): string => `
           ${[1, 2, 3, 4, 5]
             .map(
               (i) => `
-          <question price="${i * 100 * n}"${i === 3 ? ' type="secret"' : i === 5 ? ' type="stake"' : ''}>
+          <question price="${i * 100 * n}"${i === 3 ? ' type="secret"' : i === 4 ? ' type="secretNoQuestion"' : i === 5 ? ' type="stake"' : ''}>
             <params>
               ${i === 3 ? '<param name="theme">Secret theme</param><param name="price" type="numberSet"><numberSet minimum="100" maximum="500" step="100" /></param>' : ''}
               <param name="question" type="content">

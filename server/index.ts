@@ -1,21 +1,21 @@
 /**
- * Entry point: Express (static client + on-the-fly TS transpilation + REST + pack media)
+ * Entry point: Express (built client + REST + pack media)
  * and Socket.io on one port.
  */
 import fs from 'node:fs';
-import fsp from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
-import { transform } from 'esbuild';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import qrcode from 'qrcode-terminal';
 import { Server } from 'socket.io';
 import { config } from './config.ts';
 import { Room } from './game/Room.ts';
+import { persistRoom, restoreRoom } from './game/persistence.ts';
 import { ensureIosCompatibleMedia } from './packs/mediaTranscoder.ts';
 import { listPacks } from './packs/packManager.ts';
+import { canUpload, MAX_UPLOAD_BYTES, saveUploadedPack, UploadError } from './packs/upload.ts';
 import { registerSocketHandlers } from './socket/handlers.ts';
-import { ensureDir, pathExists, safeJoin } from './utils/fsx.ts';
+import { ensureDir, safeJoin } from './utils/fsx.ts';
 import { getLanAddresses } from './utils/network.ts';
 
 await Promise.all([ensureDir(config.packsDir), ensureDir(config.cacheDir)]);
@@ -29,6 +29,8 @@ const io = new Server(server, {
 });
 
 const room = new Room();
+await restoreRoom(room);
+const flushRoomState = persistRoom(room);
 registerSocketHandlers(io, room);
 
 /* ------------------------------------------------------------------ HTTP */
@@ -50,19 +52,51 @@ app.get('/api/packs', async (_req: Request, res: Response, next: NextFunction) =
   }
 });
 
+/** Hosts and room owners may add a pack without exposing an unfinished archive to players. */
+app.post('/api/packs/upload', async (req, res) => {
+  if (!canUpload(room, req.headers.authorization)) return res.status(403).json({ error: 'Only a connected host or owner may upload packs' });
+  if (!req.is('application/octet-stream')) return res.status(415).json({ error: 'Upload a .siq file as application/octet-stream' });
+  if (Number(req.headers['content-length']) > MAX_UPLOAD_BYTES) return res.status(413).json({ error: 'Pack exceeds the 200 MB limit' });
+  try {
+    const result = await saveUploadedPack(req, req.headers['x-pack-name']);
+    res.status(201).json(result);
+    listPacks().then((packs) => {
+      for (const socket of io.sockets.sockets.values()) {
+        if (room.canManage(socket.data.pid)) socket.emit('packs:changed', { packs });
+      }
+    }).catch((err) => console.warn(`[packs] Refresh after upload failed: ${err.message}`));
+  } catch (err) {
+    if (err instanceof UploadError) return res.status(err.status).json({ error: err.message });
+    console.error('[packs] Upload failed:', err);
+    res.status(500).json({ error: 'Pack upload failed' });
+  }
+});
+
 /**
- *Extracted pack media: /media/<packId>/Images/foo.jpg (supports range requests for audio/video).
+ * Extracted pack media: /media/<packId>/Images/foo.jpg (supports range requests for audio/video).
  * Before serving video/audio, ensures the file is transcoded to H.264/AAC (MP4) or MP3
  * so iPhone & iPad Safari can play packs encoded with AV1/VP9/Opus.
  */
-app.use('/media', async (req: Request, _res: Response, next: NextFunction) => {
+app.use('/media', (req: Request, res: Response, next: NextFunction) => {
+  if (!room.canAccessMedia(req.query.ticket, `/media${req.path}`)) { res.status(403).end(); return; }
+  next();
+});
+
+app.use('/media', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const decoded = req.path.split('/').filter(Boolean).map(decodeURIComponent);
     if (decoded.length >= 2) {
       const folder = decoded[1].toLowerCase();
       if (folder === 'video' || folder === 'audio') {
         const filePath = safeJoin(config.cacheDir, ...decoded);
-        await ensureIosCompatibleMedia(filePath);
+        const packCacheDir = safeJoin(config.cacheDir, decoded[0]);
+        const playable = await ensureIosCompatibleMedia(filePath, packCacheDir);
+        if (playable !== filePath) {
+          // Redirect to the derivative so Express supplies the correct media MIME type.
+          const relative = path.relative(config.cacheDir, playable).split(path.sep).map(encodeURIComponent).join('/');
+          res.redirect(307, `/media/${relative}?ticket=${encodeURIComponent(String(req.query.ticket))}`);
+          return;
+        }
       }
     }
   } catch {
@@ -73,47 +107,17 @@ app.use('/media', async (req: Request, _res: Response, next: NextFunction) => {
 
 app.use(
   '/media',
-  express.static(config.cacheDir, { fallthrough: false, maxAge: '1h', dotfiles: 'deny', index: false }),
+  express.static(config.cacheDir, {
+    fallthrough: false, dotfiles: 'deny', index: false,
+    // Pack-authored HTML/SVG must not execute in the app's origin when opened directly.
+    setHeaders: (res) => {
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.setHeader('Content-Security-Policy', 'sandbox');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Referrer-Policy', 'no-referrer');
+    },
+  }),
 );
-
-/**
- * Zero-build Frontend TypeScript Middleware (Option B):
- * Compiles any requested `/*.ts` (or `/*.js` backed by a `.ts` file in `public/`) on the fly
- * in ~2ms using esbuild's in-memory transform, cached by file mtime.
- */
-const tsCompileCache = new Map<string, { mtimeMs: number; code: string }>();
-
-app.use(async (req: Request, res: Response, next: NextFunction) => {
-  if (req.method !== 'GET' && req.method !== 'HEAD') return next();
-  if (!req.path.endsWith('.ts') && !req.path.endsWith('.js')) return next();
-
-  try {
-    const relPath = req.path.replace(/^\/+/, '').replace(/\.js$/, '.ts');
-    const tsFilePath = safeJoin(config.publicDir, relPath);
-    if (!(await pathExists(tsFilePath))) return next();
-
-    const stat = await fsp.stat(tsFilePath);
-    let cached = tsCompileCache.get(tsFilePath);
-    if (!cached || cached.mtimeMs !== stat.mtimeMs) {
-      const source = await fsp.readFile(tsFilePath, 'utf8');
-      const result = await transform(source, {
-        loader: 'ts',
-        target: 'es2020',
-        format: 'esm',
-        sourcemap: 'inline',
-        sourcefile: path.basename(tsFilePath),
-      });
-      cached = { mtimeMs: stat.mtimeMs, code: result.code };
-      tsCompileCache.set(tsFilePath, cached);
-    }
-
-    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.send(cached.code);
-  } catch (err) {
-    next(err);
-  }
-});
 
 /** Static web client assets (index.html, style.css, etc.). */
 if (fs.existsSync(config.publicDir)) {
@@ -130,7 +134,7 @@ app.use((err: Error & { status?: number }, _req: Request, res: Response, _next: 
 
 server.on('error', (err: NodeJS.ErrnoException) => {
   if (err.code === 'EADDRINUSE') {
-    console.error(`\n  Port ${config.port} is already in use. Close the other app or run: set PORT=3001 && start.bat\n`);
+    console.error(`\n  Port ${config.port} is already in use. Close the other app or set PORT=3001 before starting again.\n`);
   } else {
     console.error(err);
   }
@@ -157,14 +161,22 @@ server.listen(config.port, config.host, () => {
     console.log('   Scan to join:');
     qrcode.generate(best, { small: true }, (qr: string) => console.log(qr.replace(/^/gm, '   ')));
   }
-  console.log('   If phones cannot connect, allow Node.js through Windows Firewall (Private networks).\n');
+  console.log('   If phones cannot connect, allow Node.js through your firewall.\n');
 });
 
+/* Graceful shutdown on Ctrl+C. */
+let shuttingDown = false;
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     console.log('\n  Shutting down...');
     io.close();
-    server.close(() => process.exit(0));
-    setTimeout(() => process.exit(0), 2000).unref();
+    const finish = async () => {
+      await flushRoomState();
+      process.exit(0);
+    };
+    server.close(finish);
+    setTimeout(finish, 2000).unref();
   });
 }

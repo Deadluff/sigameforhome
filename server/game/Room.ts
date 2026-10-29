@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { config } from '../config.ts';
 import type { LoadedPack } from '../packs/packManager.ts';
-import type { PackageStats, RoundType } from '../packs/siqParser.ts';
+import type { ContentItem, PackageStats, RoundType } from '../packs/siqParser.ts';
 import { PHASES, ROLES, type Role } from './constants.ts';
 import { GameEngine, type GameView } from './GameEngine.ts';
 import { applySettingsPatch, defaultSettings, type GameSettings } from './settings.ts';
@@ -15,6 +15,7 @@ const NICK_MAX = 24;
 export interface Participant {
   id: string;
   token: string;
+  mediaTicket: string;
   name: string;
   role: Role;
   score: number;
@@ -22,6 +23,7 @@ export interface Participant {
   socketId: string | null;
   joinedAt: number;
   autoSpectator?: boolean;
+  displayOnly?: boolean;
 }
 
 export interface RoomSnapshot {
@@ -41,6 +43,7 @@ export interface RoomSnapshot {
     score: number;
     connected: boolean;
     isOwner: boolean;
+    displayOnly: boolean;
   }>;
   settings: GameSettings;
   pack: {
@@ -88,20 +91,25 @@ export class Room extends EventEmitter {
   canModerate(pid: string | null | undefined): boolean {
     if (!pid) return false;
     const p = this.participants.get(pid);
-    if (!p) return false;
+    if (!p || p.displayOnly) return false;
     if (p.role === ROLES.HOST) return true;
     const host = this.host();
     return pid === this.ownerId && !(host && host.connected);
   }
 
+  /** Pack/settings management: moderators and the owner. */
   canManage(pid: string | null | undefined): boolean {
-    if (!pid) return false;
-    return pid === this.ownerId || this.canModerate(pid);
+    return !!pid && !this.participants.get(pid)?.displayOnly &&
+      (pid === this.ownerId || this.canModerate(pid));
   }
 
   /* ------------------------------------------------------------ sessions */
 
-  join(rawNickname: unknown): { participant: Participant; token: string } {
+  /**
+   * Creates a new participant and applies the role-assignment rules.
+   * @returns {{ participant: Participant, token: string }}
+   */
+  join(rawNickname: unknown, asSpectator = false): { participant: Participant; token: string } {
     const name = String(rawNickname ?? '')
       .replace(/[\u0000-\u001f\u007f]/g, '')
       .trim()
@@ -112,18 +120,26 @@ export class Room extends EventEmitter {
     if (taken) throw new Error('This nickname is already taken');
 
     const isFirst = this.ownerId === null;
-    const role: Role = isFirst ? ROLES.PENDING : this.hasFreePlayerSlot() ? ROLES.PLAYER : ROLES.SPECTATOR;
+    if (isFirst && asSpectator) throw new Error('A host or player must join before opening the TV view');
+    let role: Role;
+    if (isFirst) role = ROLES.PENDING;
+    else if (asSpectator) role = ROLES.SPECTATOR;
+    else role = this.hasFreePlayerSlot() ? ROLES.PLAYER : ROLES.SPECTATOR;
 
     const participant: Participant = {
       id: crypto.randomUUID(),
       token: crypto.randomBytes(24).toString('base64url'),
+      mediaTicket: crypto.randomBytes(24).toString('base64url'),
       name,
       role,
       score: 0,
       connected: false,
       socketId: null,
       joinedAt: Date.now(),
-      autoSpectator: role === ROLES.SPECTATOR,
+      // Auto-assigned spectators are promoted automatically when a player slot frees up.
+      // A display-only TV never inherits a player seat when one opens.
+      autoSpectator: role === ROLES.SPECTATOR && !asSpectator,
+      displayOnly: asSpectator,
     };
     this.participants.set(participant.id, participant);
     this.tokens.set(participant.token, participant.id);
@@ -141,9 +157,13 @@ export class Room extends EventEmitter {
   attach(pid: string, socketId: string): string | null {
     const p = this.participants.get(pid);
     if (!p) return null;
+    // A new socket must not revive media URLs captured from an earlier connection.
+    p.mediaTicket = crypto.randomBytes(24).toString('base64url');
     const previous = p.socketId && p.socketId !== socketId ? p.socketId : null;
     p.socketId = socketId;
     p.connected = true;
+    if (this.ownerId && !this.participants.get(this.ownerId)?.connected &&
+        !this.removalTimers.has(this.ownerId)) this.reassignOwner();
     clearTimeout(this.removalTimers.get(pid));
     this.removalTimers.delete(pid);
     this.changed();
@@ -167,13 +187,22 @@ export class Room extends EventEmitter {
     this.removalTimers.delete(pid);
     if (!p || p.connected) return;
     const inGame = this.engine.phase !== PHASES.LOBBY;
-    if (inGame && (p.role === ROLES.PLAYER || p.role === ROLES.HOST)) return;
+    if (inGame && (p.role === ROLES.PLAYER || p.role === ROLES.HOST)) {
+      // Keep scores/seats for reconnects, but let a connected participant recover moderation.
+      if (this.ownerId === pid) {
+        this.reassignOwner();
+        this.changed();
+      }
+      return;
+    }
     this.remove(pid);
   }
 
   remove(pid: string): void {
     const p = this.participants.get(pid);
     if (!p) return;
+    const wasAuctionTurn = this.engine.phase === PHASES.STAKE_AUCTION &&
+      this.engine.auctionTurnId() === pid;
     clearTimeout(this.removalTimers.get(pid));
     this.removalTimers.delete(pid);
     this.participants.delete(pid);
@@ -181,20 +210,25 @@ export class Room extends EventEmitter {
     if (this.engine.chooserId === pid) this.engine.chooserId = this.players()[0]?.id ?? null;
     if (this.ownerId === pid) this.reassignOwner();
     this.promoteSpectators();
+    if (wasAuctionTurn) this.engine.advanceStakeAuction();
     this.changed();
   }
 
   reassignOwner(): void {
-    const candidates = [...this.participants.values()].sort(
-      (a, b) => Number(b.connected) - Number(a.connected) || a.joinedAt - b.joinedAt,
+    const candidates = [...this.participants.values()].filter((p) => !p.displayOnly).sort(
+      (a, b) => Number(b.connected) - Number(a.connected) ||
+        Number(b.role === ROLES.PLAYER || b.role === ROLES.HOST) -
+        Number(a.role === ROLES.PLAYER || a.role === ROLES.HOST) || a.joinedAt - b.joinedAt,
     );
-    this.ownerId = candidates[0]?.id ?? null;
+    this.ownerId = candidates.find((p) => p.connected)?.id ?? candidates[0]?.id ?? null;
+    // If the new owner never chose a role (impossible today, but keep invariants) nothing else to do.
+    // If everyone left, the next joiner becomes the new "first" and gets the Host/Player choice.
   }
 
   promoteSpectators(): void {
     if (this.engine.phase !== PHASES.LOBBY) return;
     const waiting = [...this.participants.values()]
-      .filter((p) => p.role === ROLES.SPECTATOR && p.autoSpectator)
+      .filter((p) => p.role === ROLES.SPECTATOR && p.autoSpectator && !p.displayOnly)
       .sort((a, b) => a.joinedAt - b.joinedAt);
     for (const s of waiting) {
       if (!this.hasFreePlayerSlot()) break;
@@ -222,10 +256,14 @@ export class Room extends EventEmitter {
   setRole(actorId: string, targetId: string, role: Role): void {
     const target = this.participants.get(targetId);
     if (!target) throw new Error('Unknown participant');
-    if (!([ROLES.HOST, ROLES.PLAYER, ROLES.SPECTATOR] as readonly string[]).includes(role)) {
+    if (target.displayOnly && role !== ROLES.SPECTATOR) throw new Error('TV views remain spectators');
+    if (role !== ROLES.HOST && role !== ROLES.PLAYER && role !== ROLES.SPECTATOR) {
       throw new Error('Invalid role');
     }
     if (target.role === role) return;
+    if (this.engine.phase !== PHASES.LOBBY && role === ROLES.HOST && target.role === ROLES.PLAYER) {
+      throw new Error('A player cannot become host during a game');
+    }
 
     const self = actorId === targetId;
     const moderator = this.canModerate(actorId);
@@ -239,9 +277,13 @@ export class Room extends EventEmitter {
       if (role === ROLES.PLAYER && !this.hasFreePlayerSlot()) throw new Error('All player slots are taken');
     }
 
+    const wasAuctionTurn = this.engine.phase === PHASES.STAKE_AUCTION &&
+      this.engine.auctionTurnId() === targetId;
     target.role = role;
     delete target.autoSpectator;
     this.promoteSpectators();
+    // A reseated bidder cannot act, so let the next eligible player bid immediately.
+    if (wasAuctionTurn && role !== ROLES.PLAYER) this.engine.advanceStakeAuction();
     this.changed();
   }
 
@@ -295,10 +337,59 @@ export class Room extends EventEmitter {
     this.emit('event', { ...evt, at: Date.now() });
   }
 
+  /** Media tickets identify a viewer without exposing their session token in URLs. */
+  mediaUrl(url: string | null | undefined, viewer: Participant | null): string | null {
+    return url?.startsWith('/media/') && viewer ? `${url}?ticket=${viewer.mediaTicket}` : url ?? null;
+  }
+
+  canAccessMedia(ticket: unknown, requestPath: string): boolean {
+    if (typeof ticket !== 'string' || !ticket) return false;
+    const viewer = [...this.participants.values()].find((p) => p.mediaTicket === ticket);
+    const current = this.engine.current;
+    if (!viewer?.connected || !this.loadedPack) return false;
+    const canonical = (url: string | null | undefined): string | null => {
+      if (!url?.startsWith('/media/')) return null;
+      return new URL(url, 'http://local').pathname.split('/').map(decodeURIComponent).join('/');
+    };
+    let requested;
+    try {
+      requested = requestPath.split('/').map(decodeURIComponent).join('/');
+    } catch { return false; }
+    const allowed = (item: ContentItem | null | undefined): boolean => {
+      const source = canonical(item?.url);
+      if (!source) return false;
+      if (source === requested) return true;
+      // Derivatives live outside archive media folders, so a pack-authored file
+      // with an .ios suffix cannot inherit access to a visible source clip.
+      const parts = source.split('/');
+      const generated = (ext: string) => `/media/${parts[2]}/_derived/${parts.slice(3).join('/')}.ios.${ext}`;
+      return (item?.type === 'video' && requested === generated('mp4')) ||
+        (item?.type === 'audio' && requested === generated('mp3'));
+    };
+    if (allowed(this.loadedPack.pack.logo)) return true;
+    if (!current || current.type === 'secretNoQuestion') return false;
+    const hiddenPhases = ['specialSetup', 'finalWager', 'stakeAuction'];
+    const visible = !hiddenPhases.includes(this.engine.phase) &&
+      !(this.engine.phase === 'paused' && hiddenPhases.includes(this.engine.paused?.phase ?? ''));
+    if (visible && current.question.content.some(allowed)) return true;
+    const canSeeAnswer = viewer.role === ROLES.HOST || current.answerShown;
+    return canSeeAnswer && current.question.answerContent.some(allowed);
+  }
+
+  /** Personalised state for one participant. */
   snapshotFor(pid: string): RoomSnapshot {
     const viewer = this.participants.get(pid) ?? null;
     const canModerate = this.canModerate(pid);
-    const pack = this.loadedPack?.pack ?? null;
+    const loadedPack = this.loadedPack;
+    const pack = loadedPack?.pack;
+    const game = this.engine.getView(viewer, canModerate);
+    if (game.current) {
+      game.current.content = game.current.content.map((item) => ({ ...item, url: this.mediaUrl(item.url, viewer) }));
+      if (game.current.answerContent) {
+        game.current.answerContent = game.current.answerContent.map((item) =>
+          ({ ...item, url: this.mediaUrl(item.url, viewer) }));
+      }
+    }
 
     return {
       serverTime: Date.now(),
@@ -321,22 +412,20 @@ export class Room extends EventEmitter {
           score: p.score,
           connected: p.connected,
           isOwner: p.id === this.ownerId,
+          displayOnly: !!p.displayOnly,
         })),
       settings: this.settings,
-      pack:
-        pack && this.loadedPack
-          ? {
-              file: this.loadedPack.file,
-              packId: this.loadedPack.packId,
-              name: pack.name,
-              logo: pack.logo?.url ?? null,
-              difficulty: pack.difficulty,
-              authors: pack.info.authors,
-              stats: pack.stats,
-              rounds: pack.rounds.map((r) => ({ name: r.name, type: r.type, themes: r.themes.length })),
-            }
-          : null,
-      game: this.engine.getView(viewer, canModerate),
+      pack: pack && loadedPack ? {
+        file: loadedPack.file,
+        packId: loadedPack.packId,
+        name: pack.name,
+        logo: this.mediaUrl(pack.logo?.url ?? null, viewer),
+        difficulty: pack.difficulty,
+        authors: pack.info.authors,
+        stats: pack.stats,
+        rounds: pack.rounds.map((r) => ({ name: r.name, type: r.type, themes: r.themes.length })),
+      } : null,
+      game,
     };
   }
 }

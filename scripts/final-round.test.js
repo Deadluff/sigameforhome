@@ -1,0 +1,125 @@
+/** Final themes are replayed one by one when the all-final setting is enabled. */
+import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { after, test } from 'node:test';
+
+const root = await mkdtemp(path.join(os.tmpdir(), 'sigame-final-'));
+process.env.PACKS_DIR = path.join(root, 'packs');
+process.env.CACHE_DIR = path.join(root, 'cache');
+await import('./make-sample-pack.ts');
+const [{ Room }, { loadPack }] = await Promise.all([
+  import('../server/game/Room.ts'), import('../server/packs/packManager.ts'),
+]);
+const loaded = await loadPack('Demo pack (v5 format).siq');
+after(async () => rm(root, { recursive: true, force: true }));
+
+function finalGame(t, playAll = true) {
+  const room = new Room();
+  const host = room.join('Host').participant;
+  room.attach(host.id, 'host');
+  room.chooseInitialRole(host.id, 'host');
+  const player = room.join('Player').participant;
+  room.attach(player.id, 'player');
+  const pack = structuredClone(loaded.pack);
+  const original = pack.rounds[2].themes[0];
+  pack.rounds[2].themes = ['A', 'B', 'C'].map((name) => ({
+    ...structuredClone(original), name,
+    questions: [structuredClone(original.questions[0]), structuredClone(original.questions[0])],
+  }));
+  room.setPack({ ...loaded, pack });
+  room.updateSettings(host.id, { gameMode: 'classic', playAllQuestionsInFinalRound: playAll });
+  room.engine.start();
+  player.score = 500;
+  room.engine.enterRound(2);
+  t.after(() => {
+    room.engine.reset();
+    for (const timer of room.removalTimers.values()) clearTimeout(timer);
+  });
+  return { room, host, player };
+}
+
+function finishQuestion(room, host, player) {
+  const engine = room.engine;
+  engine.setFinalWager(player.id, 100);
+  engine.openFinal();
+  engine.closeFinal();
+  engine.judgeFinal(player.id, true);
+  assert.equal(engine.phase, 'reveal');
+  engine.next();
+}
+
+test('all-final setting plays the first question of each theme after repeated eliminations', (t) => {
+  const { room, host, player } = finalGame(t);
+  const engine = room.engine;
+  assert.equal(engine.phase, 'finalThemes');
+  assert.equal(engine.isAvailable(0, 1), false, 'later questions in a final theme are never played');
+  engine.removeFinalTheme(host.id, true, 0);
+  engine.removeFinalTheme(host.id, true, 1);
+  assert.equal(engine.phase, 'board');
+  engine.selectQuestion(host.id, true, 2, 0);
+  finishQuestion(room, host, player);
+  assert.equal(engine.phase, 'finalThemes');
+  assert.deepEqual([...engine.removedFinalThemes], []);
+  assert.equal(engine.isAvailable(2, 0), false);
+  assert.equal(engine.isAvailable(2, 1), false);
+
+  engine.removeFinalTheme(host.id, true, 0);
+  assert.equal(engine.phase, 'board');
+  engine.selectQuestion(host.id, true, 1, 0);
+  finishQuestion(room, host, player);
+  assert.equal(engine.phase, 'finalWager', 'last remaining theme starts automatically');
+  assert.equal(engine.current.themeIndex, 0);
+  finishQuestion(room, host, player);
+  assert.equal(engine.phase, 'gameOver');
+  assert.equal(player.score, 800);
+});
+
+test('default final setting ends after one chosen theme', (t) => {
+  const { room, host, player } = finalGame(t, false);
+  const engine = room.engine;
+  engine.removeFinalTheme(host.id, true, 0);
+  engine.removeFinalTheme(host.id, true, 1);
+  engine.selectQuestion(host.id, true, 2, 0);
+  finishQuestion(room, host, player);
+  assert.equal(engine.phase, 'gameOver');
+});
+
+test('unavailable final themes are excluded from elimination and repeat play', (t) => {
+  const { room } = finalGame(t);
+  room.loadedPack.pack.rounds[2].themes[1].questions[0].price = -1;
+  room.engine.enterRound(2);
+  assert.deepEqual(room.engine.finalThemeIndices(), [0, 2]);
+  assert.equal(room.engine.isAvailable(1, 0), false);
+});
+
+test('a removed finalist cannot block the reveal', (t) => {
+  const { room, host, player } = finalGame(t, false);
+  const engine = room.engine;
+  engine.removeFinalTheme(host.id, true, 0);
+  engine.removeFinalTheme(host.id, true, 1);
+  engine.selectQuestion(host.id, true, 2, 0);
+  engine.setFinalWager(player.id, 200);
+  engine.openFinal();
+  room.remove(player.id);
+  engine.closeFinal();
+  assert.equal(engine.phase, 'reveal');
+});
+
+test('a recovered moderator can see wagers for judging without seeing the answer key', (t) => {
+  const { room, host, player } = finalGame(t, false);
+  const engine = room.engine;
+  engine.removeFinalTheme(host.id, true, 0);
+  engine.removeFinalTheme(host.id, true, 1);
+  engine.selectQuestion(host.id, true, 2, 0);
+  engine.setFinalWager(player.id, 200);
+  engine.openFinal();
+  engine.closeFinal();
+  room.detach(host.id, 'host');
+  clearTimeout(room.removalTimers.get(host.id));
+  room.expire(host.id);
+  assert.equal(room.canModerate(player.id), true);
+  assert.deepEqual(room.snapshotFor(player.id).game.final.wagers, { [player.id]: 200 });
+  assert.equal(room.snapshotFor(player.id).game.current.right, null);
+});

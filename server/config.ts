@@ -28,6 +28,7 @@ export interface AppConfig {
   readonly cacheDir: string;
   readonly toolsDir: string;
   readonly publicDir: string;
+  readonly roomStateFile: string;
   readonly reconnectGraceMs: number;
   readonly steam: SteamConfig;
 }
@@ -45,11 +46,14 @@ export const config: AppConfig = Object.freeze({
   /** Extracted pack media is cached here, one sub-folder per pack hash. */
   cacheDir: path.resolve(env('CACHE_DIR', path.join(ROOT_DIR, 'data', 'cache'))),
 
+  /** Optional isolated state file for testing or multiple local instances. */
+  roomStateFile: path.resolve(env('ROOM_STATE_FILE', path.join(ROOT_DIR, 'data', 'room-state.json'))),
+
   /** Third-party tools (steamcmd) are bootstrapped here on demand. */
   toolsDir: path.resolve(env('TOOLS_DIR', path.join(ROOT_DIR, 'tools'))),
 
-  /** Static web client. */
-  publicDir: path.resolve(env('PUBLIC_DIR', path.join(ROOT_DIR, 'public'))),
+  /** Serve the built Vite client. PUBLIC_DIR remains available for custom deployments. */
+  publicDir: path.resolve(env('PUBLIC_DIR', path.join(ROOT_DIR, 'client', 'dist'))),
 
   /** How long a disconnected participant keeps their seat (ms). Phones drop sockets a lot. */
   reconnectGraceMs: Number(env('RECONNECT_GRACE_MS', '90000')),

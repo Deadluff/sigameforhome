@@ -50,6 +50,11 @@ export async function listPacks(): Promise<PackListItem[]> {
     files.map(async (file): Promise<PackListItem> => {
       const full = path.join(config.packsDir, file);
       const stat = await fsp.stat(full);
+      // The listing endpoint must not parse a pack that loadPack would reject.
+      if (stat.size > 200 * 1024 * 1024) {
+        return { file, size: stat.size, modified: stat.mtime.toISOString(),
+          name: file, rounds: null, error: 'Pack exceeds the 200 MB limit' };
+      }
       const key = `${file}|${stat.mtimeMs}|${stat.size}`;
       let header = headerCache.get(key);
       if (!header) {
@@ -71,6 +76,7 @@ export async function loadPack(fileName: string): Promise<LoadedPack> {
   const stat = await fsp.stat(full).catch(() => {
     throw new Error(`Pack not found: ${fileName}`);
   });
+  if (stat.size > 200 * 1024 * 1024) throw new Error('Pack exceeds the 200 MB limit');
 
   const packId = computePackId(fileName, stat);
   const cacheDir = path.join(config.cacheDir, packId);

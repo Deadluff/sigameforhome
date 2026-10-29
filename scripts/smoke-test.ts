@@ -2,7 +2,7 @@
  * End-to-end smoke test against a running server:
  *   npm run smoke
  * Simulates a host and two players: role assignment, pack load, false start, buzz, judging,
- * media serving, and on-the-fly TypeScript transpilation of /app.ts.
+ * media serving, buzzer synchronization, and stake auction.
  */
 import { io, type Socket } from 'socket.io-client';
 import type { RoomSnapshot } from '../server/game/Room.ts';
@@ -40,15 +40,8 @@ function check(cond: unknown, msg: string): void {
   console.log(`✔ ${msg}`);
 }
 
-// Verify that the server transpiles /app.ts on the fly to JavaScript
-const appTsRes = await fetch(`${URL}/app.ts`);
-const appTsCode = await appTsRes.text();
-check(
-  appTsRes.ok &&
-    (appTsRes.headers.get('content-type') ?? '').includes('javascript') &&
-    !appTsCode.includes('interface SocketAckResponse'),
-  'on-the-fly /app.ts transpilation serves clean JS to browser',
-);
+const indexRes = await fetch(URL);
+check(indexRes.ok && (await indexRes.text()).includes('/assets/'), 'built Vite client is served');
 
 const host = client('Alice');
 const p1 = client('Bob');
@@ -82,6 +75,10 @@ const demo = r.packs.find((p: { name: string }) => p.name.includes('v5')) ?? r.p
 r = await host.emit('packs:load', { file: demo.file });
 check(r.ok, `pack loaded: ${demo.name}`);
 
+// The demo pack contains special and final questions, so use Simple mode for the opening checks.
+r = await host.emit('settings:update', { gameMode: 'simple' });
+check(r.ok, 'host selected Simple mode for the demo pack');
+
 r = await host.emit('game:start');
 await sleep(50);
 check(r.ok && host.state.game.phase === 'board', 'game started, board shown');
@@ -96,6 +93,10 @@ const img = p1.state.game.current?.content.find((i) => i.type === 'image');
 if (img?.url) {
   const res = await fetch(URL + img.url);
   check(res.ok && (res.headers.get('content-type') ?? '').includes('image'), `media served: ${img.url}`);
+  const bareUrl = img.url.split('?')[0];
+  check((await fetch(URL + bareUrl)).status === 403, 'media without a ticket is denied');
+  check((await fetch(`${URL}${bareUrl}?ticket=invalid`)).status === 403,
+    'media with an invalid ticket is denied');
 }
 
 r = await p1.emit('game:buzz');
@@ -178,6 +179,40 @@ check(
     host.state.game.buzzer.winnerInfo?.mode === 'clientTimestamp',
   'clientTimestamp mode picks player who clicked earlier despite packet arriving later',
 );
+
+// The classic stake question keeps its content private until the auction awards it.
+r = await host.emit('game:stop');
+check(r.ok, 'host reset the game for a classic-mode auction');
+r = await host.emit('settings:update', { gameMode: 'classic', falseStart: true });
+check(r.ok, 'host selected Classic mode');
+r = await host.emit('game:start');
+check(r.ok, 'Classic game started');
+r = await host.emit('game:select', { themeIndex: 0, questionIndex: 4 });
+await sleep(50);
+check(r.ok && host.state.game.phase === 'stakeAuction', 'stake question opens an auction');
+check(p2.state.game.current?.content.length === 0, 'question content stays hidden during bidding');
+const bidders = new Map([p2, bob2].map((c) => [c.state.you!.id, c]));
+const firstBidder = bidders.get(host.state.game.auction?.turnId ?? '');
+check(firstBidder, 'a connected player is selected to bid');
+r = await firstBidder!.emit('game:stakeBid', { amount: 500, allIn: false });
+await sleep(30);
+check(r.ok && host.state.game.auction?.leaderId === firstBidder!.state.you?.id,
+  'first player placed the minimum bid');
+const nextBidder = bidders.get(host.state.game.auction?.turnId ?? '');
+check(nextBidder && nextBidder !== firstBidder, 'auction passes to another player');
+r = await nextBidder!.emit('game:stakePass');
+await sleep(40);
+check(r.ok && host.state.game.phase === 'reading' &&
+  host.state.game.current?.assignedId === firstBidder!.state.you?.id,
+  'passing awards the question to the highest bidder');
+r = await host.emit('game:openBuzzer');
+await sleep(30);
+check(r.ok && host.state.game.buzzer.winnerId === firstBidder!.state.you?.id,
+  'auction winner answers alone');
+r = await host.emit('game:judge', { correct: true });
+await sleep(30);
+check(r.ok && host.state.participants.find((p) => p.id === firstBidder!.state.you?.id)?.score === 500,
+  'auction winner receives the bid value');
 
 for (const c of [host, p2, bob2]) c.socket.close();
 console.log('\nAll checks passed.');

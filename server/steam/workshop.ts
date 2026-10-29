@@ -1,12 +1,14 @@
 /**
  * Steam Workshop → local .siq pack.
  */
+import crypto from 'node:crypto';
+import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import AdmZip from 'adm-zip';
 import { config } from '../config.ts';
-import { isSiqArchive } from '../packs/siqParser.ts';
+import { isSiqArchive, parseSiq } from '../packs/siqParser.ts';
 import { downloadToFile, ensureDir, sanitizeSegment, walkFiles } from '../utils/fsx.ts';
 import { downloadViaSteamClient, findInLocalSteamLibraries } from './localSteam.ts';
 import { steamcmdDownloadItem } from './steamcmd.ts';
@@ -75,16 +77,26 @@ export async function getWorkshopDetails(id: string): Promise<WorkshopDetails> {
   };
 }
 
-async function locatePack(folder: string, workDir: string): Promise<string> {
+/** Finds (or builds) a .siq inside a downloaded workshop folder. Returns the source path. */
+export async function locatePack(folder: string, workDir: string): Promise<string> {
   const files = await walkFiles(folder);
-
+  // A valid smaller archive is preferable to a larger broken download.
   const siqs = files.filter((f) => f.toLowerCase().endsWith('.siq'));
   if (siqs.length) {
     const sized = await Promise.all(siqs.map(async (f) => ({ f, size: (await fsp.stat(f)).size })));
-    return sized.sort((a, b) => b.size - a.size)[0].f;
+    for (const { f, size } of sized.sort((a, b) => b.size - a.size)) {
+      if (size > 200 * 1024 * 1024) continue;
+      try { await parseSiq(f); return f; }
+      catch { /* a different file in the item may be a valid pack */ }
+    }
   }
 
-  for (const f of files) if (isSiqArchive(f)) return f;
+  // Some items use a different extension for the archive.
+  for (const f of files) {
+    if (f.toLowerCase().endsWith('.siq') || !isSiqArchive(f)) continue;
+    try { await parseSiq(f); return f; }
+    catch { /* keep looking */ }
+  }
 
   const contentXml = files.find((f) => path.basename(f).toLowerCase() === 'content.xml');
   if (contentXml) {
@@ -97,6 +109,58 @@ async function locatePack(folder: string, workDir: string): Promise<string> {
   throw new Error('No SIGame pack (.siq / content.xml) found in the workshop item');
 }
 
+/** Streaming hash lets updates reuse identical files without loading a large pack into memory. */
+async function fileHash(filePath: string): Promise<string> {
+  const hash = crypto.createHash('sha256');
+  for await (const chunk of fs.createReadStream(filePath)) hash.update(chunk);
+  return hash.digest('hex');
+}
+
+/** Keep old pack bytes available so saved games never resume against a different board. */
+export async function storeWorkshopPack(source: string, fileName: string): Promise<string> {
+  if (typeof fileName !== 'string' || path.basename(fileName) !== fileName ||
+      !fileName.toLowerCase().endsWith('.siq')) throw new Error('Invalid pack file name');
+  await ensureDir(config.packsDir);
+  const destination = path.join(config.packsDir, fileName);
+  const temporary = path.join(config.packsDir, `.workshop-${crypto.randomUUID()}.tmp`);
+  try {
+    if ((await fsp.stat(source)).size > 200 * 1024 * 1024) {
+      throw new Error('Pack exceeds the 200 MB limit');
+    }
+    await fsp.copyFile(source, temporary);
+    if ((await fsp.stat(temporary)).size > 200 * 1024 * 1024) {
+      throw new Error('Pack exceeds the 200 MB limit');
+    }
+    // parseSiq bounds expanded size and XML before the previous pack is touched.
+    await parseSiq(temporary);
+    const digest = await fileHash(temporary);
+    let installed = destination;
+    try {
+      if (await fileHash(destination) === digest) return destination;
+      const stem = fileName.slice(0, -4);
+      installed = path.join(config.packsDir, `${stem}_${digest}.siq`);
+      try {
+        if (await fileHash(installed) === digest) return installed;
+        throw new Error('Versioned pack name is already in use');
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    }
+    // Publish without replacing a file that appeared after the hash check.
+    try { await fsp.link(temporary, installed); }
+    catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'EEXIST' && await fileHash(installed) === digest) return installed;
+      throw err;
+    }
+    return installed;
+  } finally {
+    await fsp.rm(temporary, { force: true }).catch(() => {});
+  }
+}
+
+/** Full pipeline. Only one job per workshop id runs at a time. */
 const activeJobs = new Map<string, Promise<WorkshopDownloadResult>>();
 
 export function downloadWorkshopPack(
@@ -138,15 +202,20 @@ async function runJob(id: string, onProgress: (p: WorkshopProgress) => void): Pr
       const name = sanitizeSegment(path.basename(details.fileName) || `${id}.siq`);
       const target = path.join(workDir, 'direct', name);
       onProgress({ stage: 'download', message: 'Downloading directly from Steam CDN…', percent: 0 });
-      await downloadToFile(details.fileUrl, target, ({ received, total }) => {
-        const t = total || details.fileSize;
-        onProgress({
-          stage: 'download',
-          message: `Downloading… ${(received / 1e6).toFixed(1)} MB`,
-          percent: t ? Math.round((received / t) * 100) : undefined,
+      try {
+        await downloadToFile(details.fileUrl, target, ({ received, total }) => {
+          const t = total || details.fileSize;
+          onProgress({
+            stage: 'download',
+            message: `Downloading… ${(received / 1e6).toFixed(1)} MB`,
+            percent: t ? Math.round((received / t) * 100) : undefined,
+          });
         });
-      });
-      sourceFolder = path.dirname(target);
+        sourceFolder = path.dirname(target);
+      } catch (err) {
+        // Some Workshop entries advertise stale URLs; local Steam can still have the pack.
+        onProgress({ stage: 'download', message: `Direct download failed (${(err as Error).message}); checking Steam…` });
+      }
     }
 
     if (!sourceFolder) {
@@ -191,9 +260,8 @@ async function runJob(id: string, onProgress: (p: WorkshopProgress) => void): Pr
     onProgress({ stage: 'extract', message: 'Locating pack file…' });
     const packSource = await locatePack(sourceFolder, workDir);
 
-    await ensureDir(config.packsDir);
-    const fileName = `${sanitizeSegment(details.title, 'workshop').slice(0, 100)}_${id}.siq`;
-    await fsp.copyFile(packSource, path.join(config.packsDir, fileName));
+    const requestedName = `${sanitizeSegment(details.title, 'workshop').slice(0, 100)}_${id}.siq`;
+    const fileName = path.basename(await storeWorkshopPack(packSource, requestedName));
 
     onProgress({ stage: 'done', message: `Saved as ${fileName}`, percent: 100 });
     return { id, title: details.title, file: fileName };
