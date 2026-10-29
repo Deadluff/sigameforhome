@@ -25,6 +25,15 @@ export const SETTINGS_SCHEMA = Object.freeze({
   readingSpeed: int(20, 1, 100, 'Reading speed (characters/second)'),
   /** SIGame PartialText: question text appears gradually. */
   partialText: bool(false, 'Show question text gradually'),
+  /**
+   * Who-clicked-first sync mode:
+   *  - 'server': first packet to reach the server wins immediately (or random within interval)
+   *  - 'clientTimestamp': uses NTP-calibrated client press timestamp within a short collection window
+   *    so players on slower mobile Wi-Fi aren't penalized by network latency.
+   */
+  buzzSyncMode: oneOf('server', ['server', 'clientTimestamp'], 'Who-clicked-first sync mode (server vs client request time)'),
+  /** Collection window (ms) when buzzSyncMode === 'clientTimestamp' to gather in-flight packets. */
+  buzzSyncWindowMs: int(120, 20, 500, 'Client timestamp sync collection window (ms)'),
   /** SIGame ButtonPressMode. */
   buttonPressMode: oneOf('firstWins', ['firstWins', 'randomWithinInterval'], 'Button press resolution'),
   buttonPressIntervalMs: int(100, 0, 1000, 'Random window for simultaneous presses (ms)'),

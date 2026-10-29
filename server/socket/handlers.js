@@ -84,6 +84,10 @@ export function registerSocketHandlers(io, room) {
       socket.join(JOINED_ROOM);
     };
 
+    /* ---- clock sync (NTP-style RTT measurement for clientTimestamp buzz mode) ---- */
+
+    on('clock:ping', 'none', () => ({ serverTime: Date.now() }));
+
     /* ---- session ---- */
 
     on('session:resume', 'none', ({ token }) => {
@@ -146,7 +150,7 @@ export function registerSocketHandlers(io, room) {
       room.engine.selectQuestion(pid, room.canModerate(pid), Number(themeIndex), Number(questionIndex)),
     );
     on('game:openBuzzer', 'moderator', () => room.engine.openBuzzer());
-    on('game:buzz', 'member', (_, pid) => room.engine.buzz(pid));
+    on('game:buzz', 'member', (payload, pid) => room.engine.buzz(pid, payload));
     on('game:judge', 'moderator', ({ correct }) => room.engine.judge(!!correct));
     on('game:reveal', 'moderator', () => room.engine.revealAnswer());
     on('game:next', 'moderator', () => room.engine.next());

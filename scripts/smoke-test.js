@@ -123,6 +123,35 @@ r = await bob2.emit('game:buzz');
 await sleep(50);
 check(r.result === 'accepted' && host.state.game.phase === 'answering', 'player can buzz immediately during reading when falseStart is OFF');
 
+// Return to board and test buzzSyncMode === 'clientTimestamp' (user request time wins over server arrival time)
+await host.emit('game:reveal');
+await host.emit('game:next');
+await sleep(30);
+
+const pingRes = await bob2.emit('clock:ping');
+check(pingRes.ok && typeof pingRes.serverTime === 'number', 'clock:ping returns serverTime for NTP calibration');
+
+r = await host.emit('settings:update', { buzzSyncMode: 'clientTimestamp', buzzSyncWindowMs: 120 });
+await sleep(30);
+check(r.ok && host.state.settings.buzzSyncMode === 'clientTimestamp', 'host switched buzzSyncMode to clientTimestamp');
+
+await host.emit('game:select', { themeIndex: 0, questionIndex: 2 });
+await sleep(30);
+const tOpen = Date.now();
+// Carol's packet arrives at the server FIRST, with clientAt = tOpen + 60ms.
+// Bob's packet arrives 30ms LATER (simulating Wi-Fi lag), but Bob actually clicked earlier at clientAt = tOpen + 15ms.
+const pCarolBuzz = p2.emit('game:buzz', { clientAt: tOpen + 60 });
+await sleep(30);
+const pBobBuzz = bob2.emit('game:buzz', { clientAt: tOpen + 15 });
+await Promise.all([pCarolBuzz, pBobBuzz]);
+await sleep(160);
+check(
+  host.state.game.phase === 'answering' &&
+    host.state.game.buzzer.winnerId === bobId &&
+    host.state.game.buzzer.winnerInfo?.mode === 'clientTimestamp',
+  'clientTimestamp mode picks player who clicked earlier despite packet arriving later',
+);
+
 for (const c of [host, p2, bob2]) c.socket.close();
 console.log('\nAll checks passed.');
 process.exit(0);

@@ -75,10 +75,25 @@
                 </div>
               </label>
 
+              <div class="setting-toggle setting-sync-box">
+                <div style="width:100%">
+                  <strong>⚡ Синхронизация кнопки (Who-Clicked-First Sync Mode)</strong>
+                  <select id="set-buzzSyncMode" class="setting-select">
+                    <option value="server">🖥️ Server Arrival Time (По времени прихода на сервер)</option>
+                    <option value="clientTimestamp">📱 User Request Time / Ping-Compensated (По времени нажатия у игрока)</option>
+                  </select>
+                  <small id="set-buzzSyncMode-desc"></small>
+                </div>
+              </div>
+
               <div class="settings-grid">
                 <label>
                   <span>⏱️ Penalty block on false start (sec)</span>
                   <input type="number" id="set-timeForBlockingButton" min="0" max="10" />
+                </label>
+                <label>
+                  <span>📡 Sync window for user press (ms)</span>
+                  <input type="number" id="set-buzzSyncWindowMs" min="20" max="500" step="10" />
                 </label>
                 <label>
                   <span>📖 Reading speed (chars / sec)</span>

@@ -160,6 +160,11 @@ button.bad { background: var(--bad); }
 }
 .setting-toggle strong { display: block; font-size: 15px; }
 .setting-toggle small { display: block; opacity: 0.85; margin-top: 4px; line-height: 1.35; }
+.setting-sync-box { cursor: default; }
+.setting-select {
+  width: 100%; margin-top: 8px; padding: 10px 12px; border-radius: 8px;
+  border: 1px solid #5c6bc0; background: #10173a; color: #fff; font-size: 14px; font-weight: 600;
+}
 .settings-grid {
   display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
 }

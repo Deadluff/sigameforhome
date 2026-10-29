@@ -5,7 +5,41 @@
   const socket = io({ transports: ['websocket', 'polling'] });
 
   let state = null;
-  let clockOffset = 0; // serverTime - Date.now()
+  let clockOffset = 0; // calibrated serverTime - Date.now()
+  let bestRtt = Infinity;
+
+  /**
+   * NTP-style clock calibration over WebSocket (`clock:ping`).
+   * Keeps the offset from the lowest-RTT sample so `nowServer()` is accurate
+   * to within a few milliseconds when sending `clientAt` on buzzer presses.
+   */
+  function syncClockSample() {
+    if (!socket.connected) return;
+    const t0 = Date.now();
+    socket.emit('clock:ping', {}, (res) => {
+      if (!res?.ok || typeof res.serverTime !== 'number') return;
+      const t1 = Date.now();
+      const rtt = t1 - t0;
+      const estimatedServerNow = res.serverTime + rtt / 2;
+      const sampleOffset = estimatedServerNow - t1;
+      if (rtt <= bestRtt) {
+        bestRtt = rtt;
+        clockOffset = sampleOffset;
+      } else {
+        // Gentle drift correction weighted toward low-RTT samples
+        clockOffset = clockOffset * 0.8 + sampleOffset * 0.2;
+      }
+    });
+  }
+
+  async function calibrateClockBurst() {
+    bestRtt = Infinity;
+    for (let i = 0; i < 4; i++) {
+      syncClockSample();
+      await new Promise((r) => setTimeout(r, 120));
+    }
+  }
+  setInterval(syncClockSample, 8000);
 
   /* ---------------- Web Audio cues ---------------- */
   let audioCtx = null;
@@ -48,6 +82,7 @@
   /* ---------------- session ---------------- */
 
   socket.on('connect', () => {
+    calibrateClockBurst();
     const token = localStorage.getItem(TOKEN_KEY);
     if (!token) return show('screen-join');
     socket.emit('session:resume', { token }, (res) => {
@@ -80,7 +115,7 @@
 
   socket.on('room:state', (s) => {
     state = s;
-    clockOffset = s.serverTime - Date.now();
+    if (!Number.isFinite(bestRtt)) clockOffset = s.serverTime - Date.now();
     render();
   });
 
@@ -215,8 +250,17 @@
         's block).'
       : 'OFF (Выкл): Buzzers open immediately as soon as the question appears (green border). Players can buzz while reading.';
 
+    if (document.activeElement !== $('#set-buzzSyncMode')) {
+      $('#set-buzzSyncMode').value = s.buzzSyncMode || 'server';
+    }
+    $('#set-buzzSyncMode-desc').textContent =
+      s.buzzSyncMode === 'clientTimestamp'
+        ? `User Request Time (По нажатию игрока): Server waits ${s.buzzSyncWindowMs}ms and picks the player whose calibrated device timestamp was earliest (compensates Wi-Fi ping).`
+        : 'Server Arrival Time (По серверу): The first packet that reaches the server wins immediately.';
+
     const numFields = [
       'timeForBlockingButton',
+      'buzzSyncWindowMs',
       'readingSpeed',
       'timeForThinkingOnQuestion',
       'timeForPrintingAnswer',
@@ -225,6 +269,7 @@
       const input = $(`#set-${key}`);
       if (input && document.activeElement !== input) input.value = s[key];
       if (input && key === 'timeForBlockingButton') input.disabled = !s.falseStart;
+      if (input && key === 'buzzSyncWindowMs') input.disabled = s.buzzSyncMode !== 'clientTimestamp';
     }
     if (document.activeElement !== $('#set-ignoreWrong')) {
       $('#set-ignoreWrong').checked = !!s.ignoreWrong;
@@ -235,10 +280,19 @@
   $('#set-falseStart').addEventListener('change', (e) => {
     send('settings:update', { falseStart: e.target.checked });
   });
+  $('#set-buzzSyncMode').addEventListener('change', (e) => {
+    send('settings:update', { buzzSyncMode: e.target.value });
+  });
   $('#set-ignoreWrong').addEventListener('change', (e) => {
     send('settings:update', { ignoreWrong: e.target.checked });
   });
-  for (const key of ['timeForBlockingButton', 'readingSpeed', 'timeForThinkingOnQuestion', 'timeForPrintingAnswer']) {
+  for (const key of [
+    'timeForBlockingButton',
+    'buzzSyncWindowMs',
+    'readingSpeed',
+    'timeForThinkingOnQuestion',
+    'timeForPrintingAnswer',
+  ]) {
     $(`#set-${key}`).addEventListener('change', (e) => {
       const val = Number.parseInt(e.target.value, 10);
       if (Number.isFinite(val)) send('settings:update', { [key]: val });
@@ -431,8 +485,13 @@
       } else if (game.phase === 'answering') {
         banner.classList.add('state-answering');
         const winner = participants.find((p) => p.id === game.buzzer.winnerId);
+        const info = game.buzzer?.winnerInfo;
+        const timingNote =
+          info?.reactionMs != null
+            ? ` · ⏱️ ${info.reactionMs}ms (${info.mode === 'clientTimestamp' ? 'by user press time' : 'by server time'})`
+            : '';
         $('#stage-icon').textContent = '🎤';
-        $('#stage-title').textContent = `ANSWERING: ${winner ? winner.name : 'Player'} (Отвечает игрок)`;
+        $('#stage-title').textContent = `ANSWERING: ${winner ? winner.name : 'Player'} (Отвечает игрок)${timingNote}`;
         $('#stage-subtitle').textContent = you.canModerate
           ? 'Оцените ответ игрока: ✔ Correct или ✘ Wrong'
           : 'Слушаем ответ игрока…';
@@ -504,11 +563,15 @@
 
   /* ---------------- controls ---------------- */
 
-  $('#buzzer').addEventListener('pointerdown', () => socket.emit('game:buzz', {}, () => {}));
+  function triggerBuzz() {
+    socket.emit('game:buzz', { clientAt: Math.round(nowServer()) }, () => {});
+  }
+
+  $('#buzzer').addEventListener('pointerdown', triggerBuzz);
   document.addEventListener('keydown', (e) => {
     if (e.code === 'Space' && state?.you?.role === 'player' && document.activeElement.tagName !== 'INPUT') {
       e.preventDefault();
-      socket.emit('game:buzz', {}, () => {});
+      triggerBuzz();
     }
   });
 

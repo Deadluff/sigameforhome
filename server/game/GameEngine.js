@@ -38,9 +38,11 @@ export class GameEngine {
     clearTimeout(this.buzzWindowHandle);
     this.buzzer = {
       winnerId: null,
+      winnerInfo: null, // { mode, latencyMs } for UI feedback
+      openedAt: null, // server epoch ms when buzzers opened
       attempted: new Set(), // players who already answered this question
       blockedUntil: new Map(), // false-start penalties: playerId → epoch ms
-      pending: [], // presses collected inside the random window
+      pending: [], // presses collected inside the collection / random window
       remainingMs: null, // thinking time left when a player buzzed (resumed after a wrong answer)
     };
   }
@@ -207,8 +209,12 @@ export class GameEngine {
 
   openBuzzer(overrideSeconds) {
     this.assert(this.phase === PHASES.READING || this.phase === PHASES.ANSWERING, 'Buttons cannot be opened now');
+    clearTimeout(this.buzzWindowHandle);
     this.phase = PHASES.BUZZER_OPEN;
     this.buzzer.winnerId = null;
+    this.buzzer.winnerInfo = null;
+    this.buzzer.pending = [];
+    this.buzzer.openedAt = Date.now();
     const seconds =
       overrideSeconds != null
         ? overrideSeconds
@@ -216,11 +222,30 @@ export class GameEngine {
           ? this.buzzer.remainingMs / 1000
           : this.settings.timeForThinkingOnQuestion;
     this.startTimer('buzzer', seconds, () => this.revealAnswer());
-    this.room.emitEvent({ type: 'buzzerOpen' });
+    this.room.emitEvent({ type: 'buzzerOpen', openedAt: this.buzzer.openedAt });
   }
 
-  /** @returns {{ result: 'accepted'|'falseStart'|'queued'|'ignored' }} */
-  buzz(playerId) {
+  /**
+   * Normalises a client-supplied press timestamp (calibrated to server epoch ms)
+   * with anti-cheat bounds so a manipulated client clock cannot claim an impossible time.
+   */
+  resolvePressTimestamp(serverNow, rawClientAt) {
+    const openedAt = this.buzzer.openedAt ?? serverNow;
+    const num = Number(rawClientAt);
+    if (!Number.isFinite(num)) return serverNow;
+    // Allow at most 2000ms of one-way network transit delay, never after serverNow + 20ms,
+    // and never earlier than when the buzzer actually opened on this question.
+    const minAllowed = Math.max(openedAt, serverNow - 2000);
+    const maxAllowed = serverNow + 20;
+    return Math.min(maxAllowed, Math.max(minAllowed, num));
+  }
+
+  /**
+   * @param {string} playerId
+   * @param {{ clientAt?: number }} [meta]
+   * @returns {{ result: 'accepted'|'falseStart'|'queued'|'ignored' }}
+   */
+  buzz(playerId, meta = {}) {
     const now = Date.now();
     const player = this.room.participants.get(playerId);
     if (!player || player.role !== ROLES.PLAYER) return { result: 'ignored' };
@@ -238,14 +263,18 @@ export class GameEngine {
     if (this.buzzer.attempted.has(playerId)) return { result: 'ignored' };
     if ((this.buzzer.blockedUntil.get(playerId) ?? 0) > now) return { result: 'ignored' };
 
+    // 1. Random-within-interval mode (SIGame ButtonPressMode.RandomWithinInterval)
     if (this.settings.buttonPressMode === 'randomWithinInterval' && this.settings.buttonPressIntervalMs > 0) {
-      if (!this.buzzer.pending.includes(playerId)) this.buzzer.pending.push(playerId);
+      if (!this.buzzer.pending.some((p) => p.playerId === playerId)) {
+        this.buzzer.pending.push({ playerId, serverAt: now, effectiveAt: now });
+      }
       if (this.buzzer.pending.length === 1) {
         this.buzzWindowHandle = setTimeout(() => {
           const pool = this.buzzer.pending;
           this.buzzer.pending = [];
           if (this.phase === PHASES.BUZZER_OPEN && pool.length) {
-            this.grantAnswer(pool[Math.floor(Math.random() * pool.length)]);
+            const chosen = pool[Math.floor(Math.random() * pool.length)];
+            this.grantAnswer(chosen.playerId, { mode: 'random', reactionMs: chosen.serverAt - (this.buzzer.openedAt ?? chosen.serverAt) });
             this.room.changed();
           }
         }, this.settings.buttonPressIntervalMs);
@@ -253,18 +282,57 @@ export class GameEngine {
       return { result: 'queued' };
     }
 
-    this.grantAnswer(playerId);
+    // 2. Client Request Time sync mode ('clientTimestamp'):
+    //    Wait `buzzSyncWindowMs` after the first packet arrives so in-flight packets from
+    //    higher-latency mobile devices can arrive, then pick the earliest calibrated client timestamp.
+    if (this.settings.buzzSyncMode === 'clientTimestamp' && this.settings.buzzSyncWindowMs > 0) {
+      const effectiveAt = this.resolvePressTimestamp(now, meta?.clientAt);
+      if (!this.buzzer.pending.some((p) => p.playerId === playerId)) {
+        this.buzzer.pending.push({
+          playerId,
+          serverAt: now,
+          effectiveAt,
+          transitMs: Math.max(0, Math.round(now - effectiveAt)),
+        });
+      }
+      if (this.buzzer.pending.length === 1) {
+        this.buzzWindowHandle = setTimeout(() => {
+          const pool = this.buzzer.pending;
+          this.buzzer.pending = [];
+          if (this.phase === PHASES.BUZZER_OPEN && pool.length) {
+            pool.sort((a, b) => a.effectiveAt - b.effectiveAt || a.serverAt - b.serverAt);
+            const winner = pool[0];
+            this.grantAnswer(winner.playerId, {
+              mode: 'clientTimestamp',
+              reactionMs: Math.max(0, Math.round(winner.effectiveAt - (this.buzzer.openedAt ?? winner.effectiveAt))),
+              transitMs: winner.transitMs,
+              contenders: pool.length,
+            });
+            this.room.changed();
+          }
+        }, this.settings.buzzSyncWindowMs);
+      }
+      return { result: 'queued' };
+    }
+
+    // 3. Server Arrival Time sync mode ('server' — default):
+    //    First packet processed by the server wins immediately.
+    this.grantAnswer(playerId, {
+      mode: 'server',
+      reactionMs: Math.max(0, Math.round(now - (this.buzzer.openedAt ?? now))),
+    });
     this.room.changed();
     return { result: 'accepted' };
   }
 
-  grantAnswer(playerId) {
+  grantAnswer(playerId, winnerInfo = null) {
     // Pause the thinking timer: remaining time is restored if the answer is wrong.
     this.buzzer.remainingMs = this.timer ? Math.max(1000, this.timer.endsAt - Date.now()) : null;
     this.buzzer.winnerId = playerId;
+    this.buzzer.winnerInfo = winnerInfo;
     this.phase = PHASES.ANSWERING;
     this.startTimer('answering', this.settings.timeForPrintingAnswer);
-    this.room.emitEvent({ type: 'buzzAccepted', playerId });
+    this.room.emitEvent({ type: 'buzzAccepted', playerId, winnerInfo });
   }
 
   /** Host verdict on the current answer. */
@@ -356,6 +424,7 @@ export class GameEngine {
       },
       buzzer: {
         winnerId: this.buzzer.winnerId,
+        winnerInfo: this.buzzer.winnerInfo,
         attempted: [...this.buzzer.attempted],
         blockedUntil: viewer ? (this.buzzer.blockedUntil.get(viewer.id) ?? null) : null,
         blockedPlayers: [...this.buzzer.blockedUntil.entries()]
