@@ -63,6 +63,8 @@ Pack files are limited to 200 MB compressed, 1 GB extracted, and 256 MB per medi
    *(If macOS Gatekeeper blocks double-clicking `start.command` after cloning/downloading, either Right-Click → **Open**, or run `xattr -d com.apple.quarantine start.command start.sh` once in Terminal).*
 3. On the first run it installs dependencies, creates demo packs if `packs/` is empty, and prints your Mac's LAN link (`http://192.168.x.x:3000`) + a QR code for phones. To use a different port: `PORT=3001 ./start.sh`.
 
+For Steam Workshop downloads, keep the Steam desktop app open and signed in with SIGame added to your library. If the desktop download fails, the server installs Valve's macOS SteamCMD in `tools/steamcmd/` and tries it automatically. SIGame is listed for Windows only on Steam, and some Workshop items deny anonymous SteamCMD access. If this happens, download the item through Steam on a Windows computer and upload its `.siq` file in the host panel. SteamCMD can also use `STEAM_USER` and `STEAM_PASS` for an account with SIGame access.
+
 Want a pack to test with? Run `npm run make-sample` to create two demo packs (modern v5 format and legacy v4 format).
 
 ## Project structure

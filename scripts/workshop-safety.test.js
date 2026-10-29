@@ -1,5 +1,6 @@
 /** Workshop updates must preserve a working pack when a download is invalid. */
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,7 +10,8 @@ import AdmZip from 'adm-zip';
 const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'sigame-workshop-safety-'));
 process.env.PACKS_DIR = path.join(root, 'packs');
 process.env.CACHE_DIR = path.join(root, 'cache');
-const [{ storeWorkshopPack, locatePack, downloadWorkshopPack }, { redactSteamLog, createSteamLogForwarder }] = await Promise.all([
+process.env.TOOLS_DIR = path.join(root, 'tools');
+const [{ storeWorkshopPack, locatePack, downloadWorkshopPack }, { redactSteamLog, createSteamLogForwarder, ensureSteamcmd, steamcmdDownloadItem }] = await Promise.all([
   import('../server/steam/workshop.ts'), import('../server/steam/steamcmd.ts'),
 ]);
 after(async () => fsp.rm(root, { recursive: true, force: true }));
@@ -131,4 +133,46 @@ test('steamcmd progress redacts configured passwords', () => {
   forwarder.finish();
   forwarder.write('safe progress\n');
   assert.deepEqual(lines, ['login nick [redacted] failed', 'safe progress']);
+});
+
+test('macOS installs the Valve SteamCMD tarball as an executable', { skip: process.platform !== 'darwin' }, async () => {
+  const source = path.join(root, 'steamcmd-source');
+  await fsp.mkdir(source);
+  await fsp.writeFile(path.join(source, 'steamcmd.sh'), '#!/bin/sh\nexit 0\n');
+  const archive = path.join(root, 'steamcmd-test.tar.gz');
+  execFileSync('tar', ['-czf', archive, '-C', source, 'steamcmd.sh']);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    assert.match(String(url), /steamcmd_osx\.tar\.gz$/);
+    return new Response(await fsp.readFile(archive));
+  };
+  try {
+    const executable = await ensureSteamcmd();
+    assert.equal(await fsp.readFile(executable, 'utf8'), '#!/bin/sh\nexit 0\n');
+    assert.equal((await fsp.stat(executable)).mode & 0o111, 0o111);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('macOS reports the current Workshop depot error from Steam user logs', { skip: process.platform !== 'darwin' }, async () => {
+  const home = path.join(root, 'home');
+  const logDir = path.join(home, 'Library/Application Support/Steam/logs');
+  await fsp.mkdir(logDir, { recursive: true });
+  await fsp.writeFile(path.join(logDir, 'workshop_log.txt'), [
+    'Download item 111 requested by app',
+    'Missing decryption key',
+    'Download item 3778183287 requested by app',
+    'Update canceled: Missing decryption key',
+  ].join('\n'));
+  const executable = await ensureSteamcmd();
+  await fsp.writeFile(executable, '#!/bin/sh\necho "ERROR! Download item 3778183287 failed (Failure)"\n');
+  const originalHome = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    await assert.rejects(steamcmdDownloadItem(3553500, '3778183287'), /decryption key/);
+  } finally {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+  }
 });
