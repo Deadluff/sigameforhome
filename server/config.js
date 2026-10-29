@@ -1,6 +1,6 @@
 /**
  * Central configuration. Every value can be overridden with an environment
- * variable so the same build works from start.bat, Docker, or a dev shell.
+ * variable so the same build works from either launcher, Docker, or a dev shell.
  */
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,11 +25,14 @@ export const config = Object.freeze({
   /** Extracted pack media is cached here, one sub-folder per pack hash. */
   cacheDir: path.resolve(env('CACHE_DIR', path.join(ROOT_DIR, 'data', 'cache'))),
 
+  /** Optional isolated state file for testing or multiple local instances. */
+  roomStateFile: path.resolve(env('ROOM_STATE_FILE', path.join(ROOT_DIR, 'data', 'room-state.json'))),
+
   /** Third-party tools (steamcmd) are bootstrapped here on demand. */
   toolsDir: path.resolve(env('TOOLS_DIR', path.join(ROOT_DIR, 'tools'))),
 
-  /** Static web client. Will point to the React build (client/dist) in Step 5. */
-  publicDir: path.resolve(env('PUBLIC_DIR', path.join(ROOT_DIR, 'public'))),
+  /** Serve the built Vite client. PUBLIC_DIR remains available for custom deployments. */
+  publicDir: path.resolve(env('PUBLIC_DIR', path.join(ROOT_DIR, 'client', 'dist'))),
 
   /** How long a disconnected participant keeps their seat (ms). Phones drop sockets a lot. */
   reconnectGraceMs: Number(env('RECONNECT_GRACE_MS', 90_000)),

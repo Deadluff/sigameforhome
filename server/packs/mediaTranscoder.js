@@ -16,6 +16,7 @@
  * streaming required by Safari), caching the converted files alongside the extracted pack.
  */
 import { execFile } from 'node:child_process';
+import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -46,22 +47,19 @@ export async function needsIosVideoTranscode(filePath) {
   }
 
   try {
-    const buf = await fsp.readFile(filePath);
-    const latin = buf.toString('latin1');
-
-    // If our marker is already in the file metadata, it was already transcoded by us.
-    if (latin.includes('sigamelocal-ios')) return false;
-
-    const hasAv1 = latin.includes('av01');
-    const hasVp9 = latin.includes('vp09') || latin.includes('vp08');
-    const hasOpus = latin.includes('Opus') || latin.includes('dOps');
-    const hasVorbis = latin.includes('vorb');
-    const hasH264 = latin.includes('avc1');
-
-    if (hasAv1 || hasVp9 || hasOpus || hasVorbis || !hasH264) {
-      return true;
+    let marker = false;
+    let unsupported = false;
+    let hasH264 = false;
+    let tail = '';
+    // Codec tags may be near the end of an MP4; scan it in bounded chunks instead of loading gigabytes.
+    for await (const chunk of fs.createReadStream(filePath, { highWaterMark: 64 * 1024 })) {
+      const latin = tail + chunk.toString('latin1');
+      marker ||= latin.includes('sigamelocal-ios');
+      unsupported ||= ['av01', 'vp09', 'vp08', 'Opus', 'dOps', 'vorb'].some((tag) => latin.includes(tag));
+      hasH264 ||= latin.includes('avc1');
+      tail = latin.slice(-15);
     }
-    return false;
+    return !marker && (unsupported || !hasH264);
   } catch {
     return false;
   }
@@ -82,15 +80,28 @@ export function needsIosAudioTranscode(filePath) {
  * @param {string} filePath
  * @returns {Promise<string>} path to the compatible file
  */
-export function ensureIosCompatibleMedia(filePath) {
+export function ensureIosCompatibleMedia(filePath, packCacheDir = null) {
   if (activeTranscodes.has(filePath)) return activeTranscodes.get(filePath);
 
   const job = (async () => {
     if (!ffmpegPath || !(await pathExists(filePath))) return filePath;
 
+    // Keep generated files outside the archive's media folders. A pack may contain a
+    // file named clip.webm.ios.mp4, so an adjacent derivative is not trustworthy.
+    const derivative = (ext) => packCacheDir
+      ? path.join(packCacheDir, '_derived', `${path.relative(packCacheDir, filePath)}.ios.${ext}`)
+      : `${filePath}.ios.${ext}`;
+    const cachedVideo = derivative('mp4');
+    if (VIDEO_EXTS.has(path.extname(filePath).toLowerCase()) && await pathExists(cachedVideo)) return cachedVideo;
+    const cachedAudio = derivative('mp3');
+    if (needsIosAudioTranscode(filePath) && await pathExists(cachedAudio)) return cachedAudio;
+
     if (await needsIosVideoTranscode(filePath)) {
-      const tmpOut = `${filePath}.ios_${process.pid}_${Date.now()}.mp4`;
+      const converted = cachedVideo;
+      if (await pathExists(converted)) return converted;
+      const tmpOut = `${converted}.${process.pid}.${Date.now()}.tmp.mp4`;
       try {
+        await fsp.mkdir(path.dirname(converted), { recursive: true });
         await execFileAsync(
           ffmpegPath,
           [
@@ -107,8 +118,6 @@ export function ensureIosCompatibleMedia(filePath) {
             'libx264',
             '-preset',
             'ultrafast',
-            '- profile:v',
-            'main',
             '-pix_fmt',
             'yuv420p',
             '-crf',
@@ -124,33 +133,34 @@ export function ensureIosCompatibleMedia(filePath) {
             '-movflags',
             '+faststart',
             tmpOut,
-          ].filter((a) => a !== '- profile:v' && a !== 'main'), // keep full profile compatibility
+          ],
           { windowsHide: true, timeout: 120_000 },
         );
-        await fsp.rename(tmpOut, filePath);
+        await fsp.rename(tmpOut, converted);
       } catch (err) {
         await fsp.rm(tmpOut, { force: true }).catch(() => {});
         console.warn(`[transcode] Failed to convert video ${path.basename(filePath)}: ${err.message}`);
       }
-      return filePath;
+      return (await pathExists(converted)) ? converted : filePath;
     }
 
     if (needsIosAudioTranscode(filePath)) {
-      const markerPath = `${filePath}.ios_ok`;
-      if (await pathExists(markerPath)) return filePath;
-      const tmpOut = `${filePath}.ios_${process.pid}_${Date.now()}.mp3`;
+      const converted = cachedAudio;
+      if (await pathExists(converted)) return converted;
+      const tmpOut = `${converted}.${process.pid}.${Date.now()}.tmp.mp3`;
       try {
+        await fsp.mkdir(path.dirname(converted), { recursive: true });
         await execFileAsync(
           ffmpegPath,
           ['-y', '-i', filePath, '-vn', '-c:a', 'libmp3lame', '-q:a', '4', tmpOut],
           { windowsHide: true, timeout: 60_000 },
         );
-        await fsp.rename(tmpOut, filePath);
-        await fsp.writeFile(markerPath, '1');
+        await fsp.rename(tmpOut, converted);
       } catch (err) {
         await fsp.rm(tmpOut, { force: true }).catch(() => {});
         console.warn(`[transcode] Failed to convert audio ${path.basename(filePath)}: ${err.message}`);
       }
+      return (await pathExists(converted)) ? converted : filePath;
     }
 
     return filePath;
@@ -171,7 +181,8 @@ export async function backgroundTranscodePackMedia(cacheDir) {
   const candidates = [];
 
   for (const f of files) {
-    if ((await needsIosVideoTranscode(f)) || needsIosAudioTranscode(f)) {
+    if (!f.endsWith('.ios.mp4') && !f.endsWith('.ios.mp3') &&
+        ((await needsIosVideoTranscode(f)) || needsIosAudioTranscode(f))) {
       candidates.push(f);
     }
   }
@@ -181,12 +192,14 @@ export async function backgroundTranscodePackMedia(cacheDir) {
   console.log(`[media] Pre-converting ${candidates.length} media file(s) for iPhone/iPad compatibility…`);
 
   let index = 0;
+  let failed = 0;
   const worker = async () => {
     while (index < candidates.length) {
       const file = candidates[index++];
-      await ensureIosCompatibleMedia(file);
+      if (await ensureIosCompatibleMedia(file, cacheDir) === file) failed++;
     }
   };
   await Promise.all(Array.from({ length: concurrency }, () => worker()));
-  console.log(`[media] All ${candidates.length} media file(s) in ${path.basename(cacheDir)} are now iOS-compatible.`);
+  if (failed) console.warn(`[media] ${failed} of ${candidates.length} file(s) in ${path.basename(cacheDir)} could not be converted.`);
+  else console.log(`[media] All ${candidates.length} media file(s) in ${path.basename(cacheDir)} are now iOS-compatible.`);
 }

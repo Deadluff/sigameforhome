@@ -61,10 +61,12 @@ export async function walkFiles(dir) {
  * @param {(p: { received: number, total: number|null }) => void} [onProgress]
  */
 export async function downloadToFile(url, destination, onProgress) {
-  const res = await fetch(url, { redirect: 'follow' });
+  const maxBytes = 200 * 1024 * 1024;
+  const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(10 * 60_000) });
   if (!res.ok || !res.body) throw new Error(`HTTP ${res.status} while downloading ${url}`);
 
   const total = Number(res.headers.get('content-length')) || null;
+  if (total > maxBytes) throw new Error('Download exceeds the 200 MB limit');
   let received = 0;
   let lastReport = 0;
 
@@ -74,6 +76,7 @@ export async function downloadToFile(url, destination, onProgress) {
   const body = Readable.fromWeb(res.body);
   body.on('data', (chunk) => {
     received += chunk.length;
+    if (received > maxBytes) body.destroy(new Error('Download exceeds the 200 MB limit'));
     const now = Date.now();
     if (onProgress && now - lastReport > 250) {
       lastReport = now;

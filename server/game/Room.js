@@ -70,7 +70,7 @@ export class Room extends EventEmitter {
   /** Host always moderates; the owner moderates when no host is connected. */
   canModerate(pid) {
     const p = this.participants.get(pid);
-    if (!p) return false;
+    if (!p || p.displayOnly) return false;
     if (p.role === ROLES.HOST) return true;
     const host = this.host();
     return pid === this.ownerId && !(host && host.connected);
@@ -78,7 +78,7 @@ export class Room extends EventEmitter {
 
   /** Pack/settings management: moderators and the owner. */
   canManage(pid) {
-    return pid === this.ownerId || this.canModerate(pid);
+    return !this.participants.get(pid)?.displayOnly && (pid === this.ownerId || this.canModerate(pid));
   }
 
   /* ------------------------------------------------------------ sessions */
@@ -87,7 +87,7 @@ export class Room extends EventEmitter {
    * Creates a new participant and applies the role-assignment rules.
    * @returns {{ participant: Participant, token: string }}
    */
-  join(rawNickname) {
+  join(rawNickname, asSpectator = false) {
     const name = String(rawNickname ?? '')
       .replace(/[\u0000-\u001f\u007f]/g, '')
       .trim()
@@ -98,14 +98,17 @@ export class Room extends EventEmitter {
     if (taken) throw new Error('This nickname is already taken');
 
     const isFirst = this.ownerId === null;
+    if (isFirst && asSpectator) throw new Error('A host or player must join before opening the TV view');
     let role;
     if (isFirst) role = ROLES.PENDING;
+    else if (asSpectator) role = ROLES.SPECTATOR;
     else role = this.hasFreePlayerSlot() ? ROLES.PLAYER : ROLES.SPECTATOR;
 
     /** @type {Participant} */
     const participant = {
       id: crypto.randomUUID(),
       token: crypto.randomBytes(24).toString('base64url'),
+      mediaTicket: crypto.randomBytes(24).toString('base64url'),
       name,
       role,
       score: 0,
@@ -113,7 +116,9 @@ export class Room extends EventEmitter {
       socketId: null,
       joinedAt: Date.now(),
       // Auto-assigned spectators are promoted automatically when a player slot frees up.
-      autoSpectator: role === ROLES.SPECTATOR,
+      // A display-only TV never inherits a player seat when one opens.
+      autoSpectator: role === ROLES.SPECTATOR && !asSpectator,
+      displayOnly: asSpectator,
     };
     this.participants.set(participant.id, participant);
     this.tokens.set(participant.token, participant.id);
@@ -132,9 +137,13 @@ export class Room extends EventEmitter {
   /** Binds a socket to a participant. Returns the previous socket id (to disconnect a stale tab). */
   attach(pid, socketId) {
     const p = this.participants.get(pid);
+    // A new socket must not revive media URLs captured from an earlier connection.
+    p.mediaTicket = crypto.randomBytes(24).toString('base64url');
     const previous = p.socketId && p.socketId !== socketId ? p.socketId : null;
     p.socketId = socketId;
     p.connected = true;
+    if (!this.participants.get(this.ownerId)?.connected &&
+        !this.removalTimers.has(this.ownerId)) this.reassignOwner();
     clearTimeout(this.removalTimers.get(pid));
     this.removalTimers.delete(pid);
     this.changed();
@@ -160,13 +169,22 @@ export class Room extends EventEmitter {
     this.removalTimers.delete(pid);
     if (!p || p.connected) return;
     const inGame = this.engine.phase !== PHASES.LOBBY;
-    if (inGame && (p.role === ROLES.PLAYER || p.role === ROLES.HOST)) return;
+    if (inGame && (p.role === ROLES.PLAYER || p.role === ROLES.HOST)) {
+      // Keep scores/seats for reconnects, but let a connected participant recover moderation.
+      if (this.ownerId === pid) {
+        this.reassignOwner();
+        this.changed();
+      }
+      return;
+    }
     this.remove(pid);
   }
 
   remove(pid) {
     const p = this.participants.get(pid);
     if (!p) return;
+    const wasAuctionTurn = this.engine.phase === PHASES.STAKE_AUCTION &&
+      this.engine.auctionTurnId() === pid;
     clearTimeout(this.removalTimers.get(pid));
     this.removalTimers.delete(pid);
     this.participants.delete(pid);
@@ -174,14 +192,17 @@ export class Room extends EventEmitter {
     if (this.engine.chooserId === pid) this.engine.chooserId = this.players()[0]?.id ?? null;
     if (this.ownerId === pid) this.reassignOwner();
     this.promoteSpectators();
+    if (wasAuctionTurn) this.engine.advanceStakeAuction();
     this.changed();
   }
 
   reassignOwner() {
-    const candidates = [...this.participants.values()].sort(
-      (a, b) => Number(b.connected) - Number(a.connected) || a.joinedAt - b.joinedAt,
+    const candidates = [...this.participants.values()].filter((p) => !p.displayOnly).sort(
+      (a, b) => Number(b.connected) - Number(a.connected) ||
+        Number(b.role === ROLES.PLAYER || b.role === ROLES.HOST) -
+        Number(a.role === ROLES.PLAYER || a.role === ROLES.HOST) || a.joinedAt - b.joinedAt,
     );
-    this.ownerId = candidates[0]?.id ?? null;
+    this.ownerId = candidates.find((p) => p.connected)?.id ?? candidates[0]?.id ?? null;
     // If the new owner never chose a role (impossible today, but keep invariants) nothing else to do.
     // If everyone left, the next joiner becomes the new "first" and gets the Host/Player choice.
   }
@@ -190,7 +211,7 @@ export class Room extends EventEmitter {
   promoteSpectators() {
     if (this.engine.phase !== PHASES.LOBBY) return;
     const waiting = [...this.participants.values()]
-      .filter((p) => p.role === ROLES.SPECTATOR && p.autoSpectator)
+      .filter((p) => p.role === ROLES.SPECTATOR && p.autoSpectator && !p.displayOnly)
       .sort((a, b) => a.joinedAt - b.joinedAt);
     for (const s of waiting) {
       if (!this.hasFreePlayerSlot()) break;
@@ -225,8 +246,12 @@ export class Room extends EventEmitter {
   setRole(actorId, targetId, role) {
     const target = this.participants.get(targetId);
     if (!target) throw new Error('Unknown participant');
+    if (target.displayOnly && role !== ROLES.SPECTATOR) throw new Error('TV views remain spectators');
     if (![ROLES.HOST, ROLES.PLAYER, ROLES.SPECTATOR].includes(role)) throw new Error('Invalid role');
     if (target.role === role) return;
+    if (this.engine.phase !== PHASES.LOBBY && role === ROLES.HOST && target.role === ROLES.PLAYER) {
+      throw new Error('A player cannot become host during a game');
+    }
 
     const self = actorId === targetId;
     const moderator = this.canModerate(actorId);
@@ -240,9 +265,13 @@ export class Room extends EventEmitter {
       if (role === ROLES.PLAYER && !this.hasFreePlayerSlot()) throw new Error('All player slots are taken');
     }
 
+    const wasAuctionTurn = this.engine.phase === PHASES.STAKE_AUCTION &&
+      this.engine.auctionTurnId() === targetId;
     target.role = role;
     delete target.autoSpectator;
     this.promoteSpectators();
+    // A reseated bidder cannot act, so let the next eligible player bid immediately.
+    if (wasAuctionTurn && role !== ROLES.PLAYER) this.engine.advanceStakeAuction();
     this.changed();
   }
 
@@ -297,11 +326,58 @@ export class Room extends EventEmitter {
     this.emit('event', { ...evt, at: Date.now() });
   }
 
+  /** Media tickets identify a viewer without exposing their session token in URLs. */
+  mediaUrl(url, viewer) {
+    return url?.startsWith('/media/') && viewer ? `${url}?ticket=${viewer.mediaTicket}` : url;
+  }
+
+  canAccessMedia(ticket, requestPath) {
+    if (typeof ticket !== 'string' || !ticket) return false;
+    const viewer = [...this.participants.values()].find((p) => p.mediaTicket === ticket);
+    const current = this.engine.current;
+    if (!viewer?.connected || !this.loadedPack) return false;
+    const canonical = (url) => {
+      if (!url?.startsWith('/media/')) return null;
+      return new URL(url, 'http://local').pathname.split('/').map(decodeURIComponent).join('/');
+    };
+    let requested;
+    try {
+      requested = requestPath.split('/').map(decodeURIComponent).join('/');
+    } catch { return false; }
+    const allowed = (item) => {
+      const source = canonical(item?.url);
+      if (!source) return false;
+      if (source === requested) return true;
+      // Derivatives live outside archive media folders, so a pack-authored file
+      // with an .ios suffix cannot inherit access to a visible source clip.
+      const parts = source.split('/');
+      const generated = (ext) => `/media/${parts[2]}/_derived/${parts.slice(3).join('/')}.ios.${ext}`;
+      return (item.type === 'video' && requested === generated('mp4')) ||
+        (item.type === 'audio' && requested === generated('mp3'));
+    };
+    if (allowed(this.loadedPack.pack.logo)) return true;
+    if (!current || current.type === 'secretNoQuestion') return false;
+    const hiddenPhases = ['specialSetup', 'finalWager', 'stakeAuction'];
+    const visible = !hiddenPhases.includes(this.engine.phase) &&
+      !(this.engine.phase === 'paused' && hiddenPhases.includes(this.engine.paused?.phase));
+    if (visible && current.question.content.some(allowed)) return true;
+    const canSeeAnswer = viewer.role === ROLES.HOST || current.answerShown;
+    return canSeeAnswer && current.question.answerContent.some(allowed);
+  }
+
   /** Personalised state for one participant. */
   snapshotFor(pid) {
     const viewer = this.participants.get(pid) ?? null;
     const canModerate = this.canModerate(pid);
     const pack = this.loadedPack?.pack;
+    const game = this.engine.getView(viewer, canModerate);
+    if (game.current) {
+      game.current.content = game.current.content.map((item) => ({ ...item, url: this.mediaUrl(item.url, viewer) }));
+      if (game.current.answerContent) {
+        game.current.answerContent = game.current.answerContent.map((item) =>
+          ({ ...item, url: this.mediaUrl(item.url, viewer) }));
+      }
+    }
 
     return {
       serverTime: Date.now(), // lets clients correct clock skew for countdowns
@@ -322,19 +398,20 @@ export class Room extends EventEmitter {
           score: p.score,
           connected: p.connected,
           isOwner: p.id === this.ownerId,
+          displayOnly: !!p.displayOnly,
         })),
       settings: this.settings,
       pack: pack && {
         file: this.loadedPack.file,
         packId: this.loadedPack.packId,
         name: pack.name,
-        logo: pack.logo?.url ?? null,
+        logo: this.mediaUrl(pack.logo?.url ?? null, viewer),
         difficulty: pack.difficulty,
         authors: pack.info.authors,
         stats: pack.stats,
         rounds: pack.rounds.map((r) => ({ name: r.name, type: r.type, themes: r.themes.length })),
       },
-      game: this.engine.getView(viewer, canModerate),
+      game,
     };
   }
 }

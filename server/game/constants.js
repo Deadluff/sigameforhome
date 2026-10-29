@@ -13,6 +13,15 @@ export const PHASES = Object.freeze({
   LOBBY: 'lobby',
   /** Round board shown, chooser picks a question. */
   BOARD: 'board',
+  SPECIAL_SETUP: 'specialSetup',
+  STAKE_AUCTION: 'stakeAuction',
+  FOR_ALL_ANSWERING: 'forAllAnswering',
+  FOR_ALL_JUDGE: 'forAllJudge',
+  FINAL_WAGER: 'finalWager',
+  FINAL_THEMES: 'finalThemes',
+  FINAL_QUESTION: 'finalQuestion',
+  FINAL_JUDGE: 'finalJudge',
+  PAUSED: 'paused',
   /** Question content is being shown/read. Pressing now = false start. */
   READING: 'reading',
   /** Buzzers are live. */
@@ -21,6 +30,8 @@ export const PHASES = Object.freeze({
   ANSWERING: 'answering',
   /** Correct answer displayed. */
   REVEAL: 'reveal',
+  /** Players vote on a disputed verdict after the answer is revealed. */
+  APPEAL_VOTE: 'appealVote',
   ROUND_END: 'roundEnd',
   GAME_OVER: 'gameOver',
 });

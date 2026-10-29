@@ -13,17 +13,21 @@
 body { margin: 0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); }
 #app { max-width: 1120px; margin: 0 auto; padding: 12px; }
 .hidden { display: none !important; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .card { background: var(--card); border-radius: 12px; padding: 16px; margin: 10px 0; }
 .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
+#join-form label { display: block; margin-bottom: 6px; }
 input[type="text"], input[type="number"], input:not([type]) {
   flex: 1; padding: 10px 12px; border-radius: 8px; border: 1px solid #3949ab;
   background: #10173a; color: #fff; font-size: 16px;
 }
+select { padding: 10px; background: #10173a; color: #fff; border: 1px solid #3949ab; border-radius: 8px; }
 button {
   padding: 10px 14px; border: 0; border-radius: 8px; background: var(--accent);
   color: #fff; font-size: 15px; font-weight: 600; cursor: pointer;
 }
 button:disabled { opacity: .4; cursor: default; }
+:focus-visible { outline: 3px solid #ffe082; outline-offset: 2px; }
 button.big { font-size: 22px; padding: 24px; flex: 1; }
 button.ok { background: var(--ok); }
 button.bad { background: var(--bad); }
@@ -147,6 +151,13 @@ button.bad { background: var(--bad); }
   padding: 10px 12px; background: #12183b; border-radius: 8px;
   border-left: 4px solid var(--accent); margin-bottom: 10px; font-weight: 600;
 }
+.pack-upload-form { padding: 12px; background: #12183b; border-radius: 8px; }
+.pack-upload-form label { display: block; font-weight: 600; margin-bottom: 6px; }
+.pack-upload-form .row { align-items: stretch; }
+.pack-upload-form input[type="file"] { flex: 1 1 220px; min-width: 0; max-width: 100%; }
+.pack-upload-form button { min-height: 44px; }
+.pack-upload-form progress { display: block; width: 100%; height: 12px; }
+.pack-upload-form p { margin: 8px 0 0; overflow-wrap: anywhere; }
 .settings-box {
   background: #12183b; border-radius: 10px; padding: 14px;
 }
@@ -165,18 +176,46 @@ button.bad { background: var(--bad); }
 }
 .settings-grid label {
   display: flex; flex-direction: column; gap: 4px; font-size: 13px;
-  background: #171f4c; padding: 8px 10px; border-radius: 8px;
+  min-width: 0; background: #171f4c; padding: 8px 10px; border-radius: 8px;
 }
-.settings-grid label:last-child {
+.settings-grid select, .settings-grid input[type="number"] { width: 100%; min-width: 0; }
+.settings-grid .setting-check {
   grid-column: 1 / -1; flex-direction: row; align-items: center; gap: 8px; cursor: pointer;
 }
 .start-row { justify-content: flex-end; margin-top: 14px; }
 .btn-start { font-size: 18px; padding: 14px 28px; background: #00c853; color: #052612; font-weight: 800; }
 
+#stake-auction { border: 2px solid #ffd54f; }
+#stake-auction h3 { margin: 0 0 8px; }
+#stake-auction-status { font-size: 18px; font-weight: 700; margin: 8px 0; }
+#stake-auction-hint { margin-bottom: 0; color: #d7ddff; }
+#stake-bid-amount { max-width: 180px; }
+#stake-pass { background: #4b577b; }
+#for-all h3 { margin: 0 0 8px; }
+#for-all-status { margin: 8px 0 14px; }
+#for-all-answer-form label { display: block; margin-bottom: 6px; font-weight: 600; }
+#for-all-answer {
+  display: block; width: 100%; min-height: 88px; margin-bottom: 10px; padding: 10px 12px;
+  border: 1px solid #3949ab; border-radius: 8px; background: #10173a; color: #fff;
+  font: inherit; resize: vertical;
+}
+#for-all-answer-form button { min-height: 44px; }
+.for-all-response { padding: 12px 0; border-top: 1px solid #3949ab; }
+.for-all-response p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.for-all-response button { margin: 0 8px 8px 0; min-height: 44px; }
+#appeals h3 { margin: 0 0 8px; }
+#appeal-status { margin: 8px 0 14px; }
+.appeal-judgment { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 0; border-top: 1px solid #3949ab; }
+.appeal-judgment span { min-width: 0; overflow-wrap: anywhere; }
+.appeal-judgment button, #appeal-vote-actions button, #appeal-close { min-height: 44px; }
+#appeal-vote-actions { margin: 10px 0; }
+
 /* Board */
 .board { display: grid; gap: 4px; }
 .board .theme { background: #26307a; padding: 8px; border-radius: 6px; font-weight: 600; display: flex; align-items: center; }
 .board .cell { background: var(--accent); border-radius: 6px; padding: 12px 0; text-align: center; font-weight: 700; cursor: pointer; }
+.board button.cell { width: 100%; min-width: 44px; }
+.board button.cell:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 .board .cell.used { background: #222a55; color: transparent; cursor: default; }
 #question img, #question video { max-width: 100%; max-height: 50vh; display: block; margin: 8px auto; border-radius: 8px; }
 #question audio { width: 100%; max-width: 480px; display: block; margin: 8px auto; }
@@ -187,6 +226,7 @@ button.bad { background: var(--bad); }
   padding: 12px 20px; border-radius: 10px; box-shadow: 0 0 14px rgba(255, 152, 0, 0.5);
 }
 .answer { margin-top: 12px; padding: 10px; background: #123a1f; border-radius: 8px; border-left: 4px solid #00e676; }
+#host-answer { border-left: 4px solid #00e676; }
 
 /* Player Buzzer Button */
 .buzzer {
@@ -196,6 +236,36 @@ button.bad { background: var(--bad); }
   transition: transform .08s, background .15s, border-color .15s, box-shadow .15s;
   user-select: none; -webkit-user-select: none; touch-action: manipulation;
 }
+.buzzer.moderator-buzzer { position: static; }
+#connection-status:not(:empty) { padding: 10px; background: #7a3e00; border-radius: 8px; }
+@media (max-width: 600px) {
+  .manage-grid { grid-template-columns: minmax(0, 1fr); }
+  .manage-col { min-width: 0; }
+  #stake-bid-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #stake-bid-form label, #stake-bid-amount { grid-column: 1 / -1; }
+  #stake-bid-form button { min-height: 48px; }
+  #stake-bid-amount { width: 100%; max-width: none; }
+  .topbar { flex-wrap: wrap; }
+  .stage-banner { padding: 10px; }
+  .stage-title { font-size: 17px; }
+  .stage-subtitle { font-size: 12px; }
+  .stage-countdown { font-size: 18px; }
+  .stage-icon { font-size: 24px; }
+  /* Long option labels must not widen the grid beyond a narrow phone. */
+  .settings-grid { grid-template-columns: minmax(0, 1fr); }
+  .board { overflow-x: auto; }
+  #buzzer-main { font-size: 28px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stage-banner.state-open { animation: none; }
+  .player, .stage-banner, .buzzer { transition: none; }
+}
+.tv-mode #manage, .tv-mode #host-controls, .tv-mode #buzzer, .tv-mode #host-answer, .tv-mode #special-setup, .tv-mode #stake-bid-form, .tv-mode #for-all-answer-form, .tv-mode #for-all-host, .tv-mode #final-wager, .tv-mode #final-host { display: none !important; }
+.tv-mode #app { max-width: none; padding: 2vw; }
+.tv-mode .topbar { font-size: clamp(24px, 3vw, 56px); }
+.tv-mode .stage-title { font-size: clamp(28px, 3vw, 54px); }
+.tv-mode #question { font-size: clamp(24px, 3vw, 54px); text-align: center; }
+.tv-mode .board .cell, .tv-mode .board .theme { font-size: clamp(20px, 2vw, 38px); }
 .buzzer:active { transform: scale(0.98); }
 #buzzer-main { font-size: 34px; font-weight: 900; letter-spacing: 1px; }
 #buzzer-sub { font-size: 14px; font-weight: 600; opacity: 0.92; }

@@ -20,6 +20,35 @@ const STEAMCMD_EXE = path.join(STEAMCMD_DIR, IS_WINDOWS ? 'steamcmd.exe' : 'stea
 
 let bootstrapPromise = null;
 
+/** Steamcmd may echo commands, including +login credentials, into its logs. */
+export function redactSteamLog(line, password = config.steam.pass) {
+  return password ? line.replaceAll(password, '[redacted]') : line;
+}
+
+/** Forward only complete, reasonably sized lines so split secrets cannot leak. */
+export function createSteamLogForwarder(onLog, password = config.steam.pass) {
+  let partialLine = '';
+  let droppingLine = false;
+  const emit = () => {
+    if (!droppingLine && partialLine.trim()) onLog(redactSteamLog(partialLine.trim(), password));
+    partialLine = '';
+    droppingLine = false;
+  };
+  return {
+    write(chunk) {
+      for (const part of chunk.split(/(\r\n|\n|\r)/)) {
+        if (part === '\r\n' || part === '\n' || part === '\r') {
+          emit();
+        } else if (!droppingLine) {
+          if (partialLine.length + part.length <= 4096) partialLine += part;
+          else { partialLine = ''; droppingLine = true; }
+        }
+      }
+    },
+    finish: emit,
+  };
+}
+
 /**
  * Makes sure steamcmd exists locally, downloading it if needed.
  * Concurrent callers share the same bootstrap promise.
@@ -49,24 +78,30 @@ function runSteamcmd(exe, args, onLog) {
   return new Promise((resolve, reject) => {
     const child = spawn(exe, args, { cwd: STEAMCMD_DIR, windowsHide: true });
     let output = '';
+    const maxOutputChars = 256 * 1024;
+    const stdoutLogs = createSteamLogForwarder(onLog);
+    const stderrLogs = createSteamLogForwarder(onLog);
     const timer = setTimeout(() => {
       child.kill();
       reject(new Error('steamcmd timed out'));
     }, config.steam.steamcmdTimeoutMs);
 
-    const onData = (buf) => {
+    const onData = (logs) => (buf) => {
       const chunk = buf.toString('utf8');
-      output += chunk;
-      for (const line of chunk.split(/\r?\n/)) if (line.trim()) onLog(line.trim());
+      // Keep enough tail text for success/failure matching without retaining a long session log.
+      output = (output + chunk).slice(-maxOutputChars);
+      logs.write(chunk);
     };
-    child.stdout.on('data', onData);
-    child.stderr.on('data', onData);
+    child.stdout.on('data', onData(stdoutLogs));
+    child.stderr.on('data', onData(stderrLogs));
     child.on('error', (err) => {
       clearTimeout(timer);
       reject(err);
     });
     child.on('close', (code) => {
       clearTimeout(timer);
+      stdoutLogs.finish();
+      stderrLogs.finish();
       resolve({ code, output });
     });
   });

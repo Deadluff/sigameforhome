@@ -296,6 +296,7 @@ function parseDuration(s) {
 }
 
 const V5_TYPES = new Set(['simple', 'secret', 'secretPublicPrice', 'secretNoQuestion', 'stake', 'noRisk', 'forAll']);
+const MAX_CONTENT_XML_BYTES = 10 * 1024 * 1024;
 
 function parseModernQuestion(q, resolver) {
   let content = [];
@@ -406,6 +407,8 @@ export function readPackHeader(filePath) {
   const zip = new AdmZip(filePath);
   const entry = findContentEntry(zip);
   if (!entry) throw new Error('content.xml not found');
+  // Listing is allowed before loading, so it needs the same XML bound as parseSiq.
+  if (entry.header.size > MAX_CONTENT_XML_BYTES) throw new Error('Pack content.xml exceeds 10 MB');
   const root = xmlParser.parse(entry.getData().toString('utf8'));
   const pkg = root.package ?? {};
   return {
@@ -443,8 +446,15 @@ async function extractMedia(zip, destDir) {
  */
 export async function parseSiq(filePath, { mediaBaseUrl = '', extractTo } = {}) {
   const zip = new AdmZip(filePath);
+  // Bound untrusted archive expansion before reading any entry into memory.
+  const entries = zip.getEntries();
+  const expanded = entries.reduce((sum, entry) => sum + (entry.header?.size ?? 0), 0);
+  if (entries.length > 5000 || expanded > 1024 * 1024 * 1024) {
+    throw new Error('Pack has too many files or exceeds 1 GB when extracted');
+  }
   const contentEntry = findContentEntry(zip);
   if (!contentEntry) throw new Error(`"${path.basename(filePath)}" is not a valid .siq (content.xml missing)`);
+  if (contentEntry.header.size > MAX_CONTENT_XML_BYTES) throw new Error('Pack content.xml exceeds 10 MB');
 
   // Strip a UTF-8 BOM if present; SIGame's own writer emits one.
   const xml = contentEntry.getData().toString('utf8').replace(/^\uFEFF/, '');

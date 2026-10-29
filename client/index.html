@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SIGame Local</title>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <main id="app">
+    <section id="screen-join" class="screen card">
+      <h1>SIGame Local</h1>
+      <form id="join-form">
+        <label for="nickname">Nickname</label>
+        <input id="nickname" maxlength="24" placeholder="Your nickname" autocomplete="off" required />
+        <button type="submit">Join</button>
+      </form>
+      <p class="error" id="join-error" role="alert"></p>
+    </section>
+
+    <section id="screen-role" class="screen card hidden">
+      <h2>You are the first one here!</h2>
+      <p>How do you want to play?</p>
+      <div class="row">
+        <button data-role="host" class="big">🎙️ Host (Ведущий)</button>
+        <button data-role="player" class="big">🔔 Player (Игрок)</button>
+      </div>
+    </section>
+
+    <section id="screen-game" class="screen hidden">
+      <header class="topbar">
+        <span id="me"></span>
+        <span id="phase" role="status" aria-live="polite"></span>
+        <span id="timer"></span>
+      </header>
+      <div id="connection-status" role="status" aria-live="polite"></div>
+
+      <div id="players" class="players"></div>
+
+      <!-- High-visibility stage & buzzer orientier banner (reading / buzz open / answering / reveal) -->
+      <div id="stage-banner" class="stage-banner hidden">
+        <div class="stage-banner-header">
+          <span id="stage-icon" class="stage-icon"></span>
+          <div class="stage-text">
+            <div id="stage-title" class="stage-title"></div>
+            <div id="stage-subtitle" class="stage-subtitle"></div>
+          </div>
+          <span id="stage-countdown" class="stage-countdown"></span>
+        </div>
+        <div class="stage-progress-track">
+          <div id="stage-progress-fill" class="stage-progress-fill"></div>
+        </div>
+      </div>
+
+      <!-- Pre-game Host Settings & Pack Manager -->
+      <div id="manage" class="card hidden">
+        <div class="manage-grid">
+          <div class="manage-col">
+            <h3>📦 Question Packs (.siq)</h3>
+            <div id="pack-current" class="pack-current"></div>
+            <button id="btn-refresh-packs" type="button">Refresh packs</button>
+            <ul id="pack-list"></ul>
+            <form id="pack-upload-form" class="pack-upload-form">
+              <label for="pack-upload-file">Upload a .siq pack from this device</label>
+              <div class="row">
+                <input id="pack-upload-file" type="file" accept=".siq" required />
+                <button id="pack-upload-button" type="submit">Upload pack</button>
+              </div>
+              <progress id="pack-upload-progress" class="hidden" max="100" value="0" aria-label="Pack upload progress"></progress>
+              <p id="pack-upload-status" role="status" aria-live="polite"></p>
+            </form>
+            <form id="steam-form" class="row">
+              <label class="sr-only" for="steam-link">Steam Workshop link or ID</label>
+              <input id="steam-link" placeholder="Steam Workshop link or ID" />
+              <button type="submit">Download</button>
+            </form>
+            <pre id="steam-log"></pre>
+          </div>
+
+          <div class="manage-col">
+            <h3>⚙️ Game Settings (Before Start)</h3>
+            <div class="settings-box">
+              <label class="setting-toggle">
+                <input type="checkbox" id="set-falseStart" />
+                <div>
+                  <strong>Фальшстарт (False start / Block buzz during reading)</strong>
+                  <small id="set-falseStart-desc"></small>
+                </div>
+              </label>
+
+              <div class="settings-grid">
+                <label><span>Game mode</span><select id="set-gameMode"><option value="classic">Guided (standard, no-risk, stake, secret, for-all, final)</option><option value="simple">Simple (special questions use normal rules)</option></select></label>
+                <label>
+                  <span>⏱️ Penalty block on false start (sec)</span>
+                  <input type="number" id="set-timeForBlockingButton" min="0" max="10" />
+                </label>
+                <label>
+                  <span>📖 Reading speed (chars / sec)</span>
+                  <input type="number" id="set-readingSpeed" min="1" max="100" />
+                </label>
+                <label>
+                  <span>🔔 Time to press button (sec)</span>
+                  <input type="number" id="set-timeForThinkingOnQuestion" min="1" max="120" />
+                </label>
+                <label>
+                  <span>🗣️ Time to answer (sec)</span>
+                  <input type="number" id="set-timeForPrintingAnswer" min="1" max="300" />
+                </label>
+                <label>
+                  <span>🔨 Time to make a stake (sec)</span>
+                  <input type="number" id="set-timeForMakingStake" min="1" max="300" />
+                </label>
+                <label>
+                  <span>✍️ Time for a special answer (sec)</span>
+                  <input type="number" id="set-timeForThinkingOnSpecial" min="1" max="300" />
+                </label>
+                <label>
+                  <span>🏆 Final answer time (sec)</span>
+                  <input type="number" id="set-timeForFinalThinking" min="1" max="300" />
+                </label>
+                <label>
+                  <span>⏳ Round length (sec, 0 = unlimited)</span>
+                  <input type="number" id="set-timeOfRound" min="0" max="7200" />
+                </label>
+                <label class="setting-check">
+                  <input type="checkbox" id="set-ignoreWrong" />
+                  <span>Do not subtract points for wrong answers</span>
+                </label>
+                <label class="setting-check">
+                  <input type="checkbox" id="set-playAllQuestionsInFinalRound" />
+                  <span>Play every final theme (one question per theme)</span>
+                </label>
+                <label class="setting-check">
+                  <input type="checkbox" id="set-useApellations" />
+                  <span>Allow appeals after the answer is revealed</span>
+                </label>
+              </div>
+              <p>Open <a href="/?tv" target="_blank" rel="noopener">TV view</a> on a shared screen after someone joins.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="row start-row">
+          <span id="start-hint" role="status"></span>
+          <button id="btn-start" class="btn-start">▶ Start Game</button>
+        </div>
+      </div>
+
+      <div id="board" class="board"></div>
+      <div id="question" class="card question-card hidden"></div>
+      <div id="host-answer" class="card hidden" aria-live="off"></div>
+      <form id="special-setup" class="card hidden">
+        <strong>Special question setup</strong>
+        <div class="row"><label for="special-player">Answering player</label><select id="special-player" required></select>
+        <label for="special-price">Value</label><input id="special-price" type="number" required />
+        <button type="submit">Show question</button></div>
+      </form>
+      <section id="stake-auction" class="card hidden" aria-labelledby="stake-auction-title">
+        <h3 id="stake-auction-title">Question auction</h3>
+        <p id="stake-auction-status" role="status" aria-live="polite"></p>
+        <form id="stake-bid-form" class="row hidden">
+          <label for="stake-bid-amount">Your bid</label>
+          <input id="stake-bid-amount" type="number" inputmode="numeric" required />
+          <button type="submit">Bid</button>
+          <button id="stake-all-in" type="button">All in</button>
+          <button id="stake-pass" type="button">Pass</button>
+        </form>
+        <p id="stake-auction-hint"></p>
+      </section>
+      <section id="for-all" class="card hidden" aria-labelledby="for-all-title">
+        <h3 id="for-all-title">Everyone answers</h3>
+        <p id="for-all-status" role="status" aria-live="polite"></p>
+        <form id="for-all-answer-form" class="hidden">
+          <label for="for-all-answer">Your private answer</label>
+          <textarea id="for-all-answer" rows="3" maxlength="350" required></textarea>
+          <button type="submit">Submit answer</button>
+        </form>
+        <div id="for-all-host" class="hidden">
+          <button id="for-all-close" type="button">Close answers</button>
+          <div id="for-all-answers"></div>
+        </div>
+      </section>
+      <section id="appeals" class="card hidden" aria-labelledby="appeals-title">
+        <h3 id="appeals-title">Appeals</h3>
+        <p id="appeal-status" role="status" aria-live="polite"></p>
+        <div id="appeal-judgments"></div>
+        <div id="appeal-vote-actions" class="row hidden">
+          <button id="appeal-support" type="button" class="ok">Support appeal</button>
+          <button id="appeal-oppose" type="button" class="bad">Keep original verdict</button>
+        </div>
+        <button id="appeal-close" type="button" class="hidden">Close vote</button>
+      </section>
+      <form id="final-wager" class="card hidden">
+        <label for="final-amount">Final wager</label>
+        <input id="final-amount" type="number" min="0" required />
+        <button type="submit">Submit wager</button>
+        <span id="final-wager-status"></span>
+      </form>
+      <div id="final-host" class="card hidden">
+        <button id="btn-open-final">Show final question</button>
+        <button id="btn-close-final">Finish answer time</button>
+        <div class="row"><label class="sr-only" for="final-player">Player to judge</label><select id="final-player"></select>
+          <button id="btn-final-correct" class="ok">Correct</button>
+          <button id="btn-final-wrong" class="bad">Wrong</button></div>
+      </div>
+
+      <div id="host-controls" class="row hidden">
+        <button data-act="game:pause" id="btn-pause">⏸ Pause</button>
+        <button data-act="game:resume" id="btn-resume">▶ Resume</button>
+        <button data-act="game:openBuzzer" id="btn-open-buzzer">🔓 Open buttons now</button>
+        <button data-act="judge-ok" class="ok">✔ Correct</button>
+        <button data-act="judge-bad" class="bad">✘ Wrong</button>
+        <button data-act="game:reveal">👁️ Show answer</button>
+        <button data-act="game:next">Next ▶</button>
+        <button data-act="game:nextRound">⏭️ Next round</button>
+        <button data-act="game:stop" class="bad">⏹️ Stop game</button>
+      </div>
+
+      <button id="buzzer" class="buzzer hidden">
+        <span id="buzzer-main">BUZZ</span>
+        <small id="buzzer-sub"></small>
+      </button>
+    </section>
+  </main>
+
+  <script type="module" src="/src/app.ts"></script>
+</body>
+</html>

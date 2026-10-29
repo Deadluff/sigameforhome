@@ -64,6 +64,9 @@ export function registerSocketHandlers(io, room) {
         try {
           const pid = socket.data.pid;
           if (access !== 'none' && !pid) throw new Error('Join the game first');
+          if (access !== 'none' && room.participants.get(pid)?.socketId !== socket.id) {
+            throw new Error('Session is no longer active');
+          }
           if (access === 'moderator' && !room.canModerate(pid)) throw new Error('Only the host can do that');
           if (access === 'manager' && !room.canManage(pid)) throw new Error('Only the host or owner can do that');
           const result = await handler(payload ?? {}, pid);
@@ -87,15 +90,16 @@ export function registerSocketHandlers(io, room) {
     /* ---- session ---- */
 
     on('session:resume', 'none', ({ token }) => {
+      if (socket.data.pid) throw new Error('Already joined');
       const participant = room.resume(token);
       if (!participant) return { resumed: false };
       bind(participant);
       return { resumed: true };
     });
 
-    on('session:join', 'none', ({ nickname }) => {
+    on('session:join', 'none', ({ nickname, asSpectator }) => {
       if (socket.data.pid) throw new Error('Already joined');
-      const { participant, token } = room.join(nickname);
+      const { participant, token } = room.join(nickname, asSpectator === true);
       bind(participant);
       return { token, role: participant.role };
     });
@@ -142,12 +146,32 @@ export function registerSocketHandlers(io, room) {
 
     on('game:start', 'manager', () => room.engine.start());
     on('game:stop', 'moderator', () => room.engine.stop());
+    on('game:pause', 'moderator', () => room.engine.pause());
+    on('game:resume', 'moderator', () => room.engine.resume());
     on('game:select', 'member', ({ themeIndex, questionIndex }, pid) =>
       room.engine.selectQuestion(pid, room.canModerate(pid), Number(themeIndex), Number(questionIndex)),
     );
+    on('game:removeFinalTheme', 'member', ({ themeIndex }, pid) =>
+      room.engine.removeFinalTheme(pid, room.canModerate(pid), Number(themeIndex)));
+    on('game:configureSpecial', 'moderator', ({ playerId, price }) =>
+      room.engine.configureSpecial(playerId, Number(price)));
+    on('game:stakeBid', 'member', ({ amount, allIn }, pid) => room.engine.bidStake(pid, amount, allIn));
+    on('game:stakePass', 'member', (_, pid) => room.engine.passStake(pid));
+    on('game:forAllAnswer', 'member', ({ answer }, pid) => room.engine.submitForAllAnswer(pid, answer));
+    on('game:closeForAll', 'moderator', () => room.engine.closeForAllAnswers());
+    on('game:judgeForAll', 'moderator', ({ playerId, correct }) => room.engine.judgeForAll(playerId, correct));
+    on('game:finalWager', 'member', ({ amount }, pid) => room.engine.setFinalWager(pid, Number(amount)));
+    on('game:openFinal', 'moderator', () => room.engine.openFinal());
+    on('game:closeFinal', 'moderator', () => room.engine.closeFinal());
+    on('game:judgeFinal', 'moderator', ({ playerId, correct }) => room.engine.judgeFinal(playerId, correct === true));
     on('game:openBuzzer', 'moderator', () => room.engine.openBuzzer());
     on('game:buzz', 'member', (_, pid) => room.engine.buzz(pid));
     on('game:judge', 'moderator', ({ correct }) => room.engine.judge(!!correct));
+    on('game:appealRequest', 'member', ({ judgmentId }, pid) =>
+      room.engine.requestAppeal(pid, judgmentId));
+    on('game:appealVote', 'member', ({ support }, pid) =>
+      room.engine.voteAppeal(pid, support));
+    on('game:appealClose', 'moderator', () => room.engine.resolveAppeal());
     on('game:reveal', 'moderator', () => room.engine.revealAnswer());
     on('game:next', 'moderator', () => room.engine.next());
     on('game:nextRound', 'moderator', () => room.engine.nextRound());
