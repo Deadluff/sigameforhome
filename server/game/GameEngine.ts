@@ -374,9 +374,10 @@ export class GameEngine {
         this.current?.type === 'forAll' ? this.openForAllAnswers() : this.openBuzzer()
         : saved.timerName === 'stake' ? () => this.passStake(this.auctionTurnId())
         : saved.timerName === 'forAll' ? () => this.closeForAllAnswers()
-        : saved.timerName === 'buzzer' ? () => this.revealAnswer()
+        : saved.timerName === 'buzzer' ? () => this.revealAnswer({ showAnswer: false })
           : saved.timerName === 'final' ? () => this.closeFinal()
-            : saved.timerName === 'appeal' ? () => this.resolveAppeal() : undefined;
+            : saved.timerName === 'appeal' ? () => this.resolveAppeal()
+              : saved.timerName === 'reveal' ? () => this.next() : undefined;
       this.startTimer(saved.timerName, Math.max(0.001, saved.timerMs / 1000), onExpire);
     }
     if (this.phase === PHASES.BUZZER_OPEN && this.buzzer.pending.length) {
@@ -466,11 +467,21 @@ export class GameEngine {
   }
 
   nextRound(): void {
-    this.assert(this.phase === PHASES.ROUND_END, 'Finish the current round first');
+    this.assert(this.phase !== PHASES.LOBBY && this.phase !== PHASES.GAME_OVER, 'Start the game first');
     this.assert(this.pack, 'No pack loaded');
     const next = this.pack.rounds[this.roundIndex + 1];
     if (next) this.enterRound(this.roundIndex + 1);
     else this.finish();
+  }
+
+  prevRound(): void {
+    this.assert(this.phase !== PHASES.LOBBY, 'Start the game first');
+    this.assert(this.pack, 'No pack loaded');
+    const targetIndex = this.phase === PHASES.GAME_OVER
+      ? Math.max(0, this.pack.rounds.length - 1)
+      : this.roundIndex - 1;
+    this.assert(targetIndex >= 0 && this.pack.rounds[targetIndex], 'Already at the first round');
+    this.enterRound(targetIndex);
   }
 
   finish(): void {
@@ -822,7 +833,7 @@ export class GameEngine {
           : this.settings.timeForThinkingOnQuestion;
     this.startTimer('buzzer', seconds, () => {
       // A press inside the countdown still counts when its random window outlasts the countdown.
-      if (!this.buzzer.pending.length) return this.revealAnswer();
+      if (!this.buzzer.pending.length) return this.revealAnswer({ showAnswer: false });
       clearTimeout(this.buzzWindowHandle);
       const pool = this.buzzer.pending;
       this.buzzer.pending = [];
@@ -929,7 +940,7 @@ export class GameEngine {
         this.settings.ignoreWrong || this.current.type === 'noRisk' ? 0 : -price);
       this.chooserId = this.buzzer.winnerId;
       this.room.emitEvent({ type: 'answerJudged', playerId: this.buzzer.winnerId, correct: true, delta: price });
-      this.revealAnswer();
+      this.revealAnswer({ showAnswer: true, autoNext: true });
       return;
     }
 
@@ -942,10 +953,19 @@ export class GameEngine {
 
     const someoneLeft = this.activePlayers().some((p) => !this.buzzer.attempted.has(p.id));
     if (someoneLeft && !this.isAssignedQuestion()) this.openBuzzer();
-    else this.revealAnswer();
+    else this.revealAnswer({ showAnswer: false });
   }
 
-  revealAnswer(): void {
+  estimateRevealSeconds(question: Question): number {
+    let seconds = 3;
+    for (const item of question.answerContent) {
+      if (item.duration) seconds = Math.max(seconds, Math.ceil(item.duration));
+      else if (item.type === 'audio' || item.type === 'video') seconds = Math.max(seconds, 5);
+    }
+    return seconds;
+  }
+
+  revealAnswer({ showAnswer = true, autoNext = false }: { showAnswer?: boolean; autoNext?: boolean } = {}): void {
     this.assert((QUESTION_PHASES.has(this.phase) && this.round?.type !== 'final') ||
       (this.phase === PHASES.FINAL_JUDGE && this.finalEligibleIds().every((id) => this.finalJudged.has(id))),
       'Judge every final answer before revealing');
@@ -956,12 +976,15 @@ export class GameEngine {
     this.clearTimer();
     clearTimeout(this.buzzWindowHandle);
     this.phase = PHASES.REVEAL;
-    this.current.answerShown = true;
+    this.current.answerShown = showAnswer;
+    if (autoNext) {
+      this.startTimer('reveal', this.estimateRevealSeconds(this.current.question), () => this.next());
+    }
   }
 
   /** An answerer may challenge a rejection; another player may challenge an acceptance. */
   requestAppeal(requesterId: string, judgmentId: number): void {
-    this.assert(this.phase === PHASES.REVEAL && this.current?.answerShown, 'Appeals open after the answer is revealed');
+    this.assert(this.phase === PHASES.REVEAL && this.current, 'Appeals open after the answer is revealed');
     this.assert(this.settings.useApellations, 'Appeals are disabled');
     const requester = this.room.participants.get(requesterId);
     this.assert(requester?.role === ROLES.PLAYER && requester.connected, 'Only connected players may appeal');
@@ -1166,8 +1189,12 @@ export class GameEngine {
           ? Object.fromEntries(this.finalEligibleIds().map((id) => [id, this.finalWagers.get(id)])) : null,
         judged: [...this.finalJudged],
       } : null,
-      // Verdicts are only public with the answer; votes stay private until resolution.
-      appeals: c?.answerShown ? {
+      // Verdicts are public once the question reaches reveal; votes stay private until resolution.
+      appeals: c && (
+        this.phase === PHASES.REVEAL ||
+        this.phase === PHASES.APPEAL_VOTE ||
+        (this.phase === PHASES.PAUSED && (this.paused?.phase === PHASES.REVEAL || this.paused?.phase === PHASES.APPEAL_VOTE))
+      ) ? {
         judgments: c.judgments.filter((item) => item.kind !== 'gift').map((item) => ({
           id: item.id, playerId: item.playerId, correct: item.correct, delta: item.delta,
           appealed: item.appealed, voided: item.voided,

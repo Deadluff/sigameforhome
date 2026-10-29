@@ -183,6 +183,7 @@ export function registerSocketHandlers(io: Server, room: Room): void {
     on('game:appealClose', 'moderator', () => room.engine.resolveAppeal());
     on('game:reveal', 'moderator', () => room.engine.revealAnswer());
     on('game:next', 'moderator', () => room.engine.next());
+    on('game:prevRound', 'moderator', () => room.engine.prevRound());
     on('game:nextRound', 'moderator', () => room.engine.nextRound());
 
     socket.on('disconnect', () => {
