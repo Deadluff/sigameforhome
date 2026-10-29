@@ -1,4 +1,4 @@
-/** Shared enums. Also mirrored in the client. */
+/** Shared enums & union types. */
 
 export const ROLES = Object.freeze({
   /** First connection hasn't picked yet. */
@@ -7,7 +7,9 @@ export const ROLES = Object.freeze({
   HOST: 'host',
   PLAYER: 'player',
   SPECTATOR: 'spectator',
-});
+} as const);
+
+export type Role = (typeof ROLES)[keyof typeof ROLES];
 
 export const PHASES = Object.freeze({
   LOBBY: 'lobby',
@@ -34,4 +36,6 @@ export const PHASES = Object.freeze({
   APPEAL_VOTE: 'appealVote',
   ROUND_END: 'roundEnd',
   GAME_OVER: 'gameOver',
-});
+} as const);
+
+export type Phase = (typeof PHASES)[keyof typeof PHASES];

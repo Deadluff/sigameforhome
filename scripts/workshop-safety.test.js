@@ -10,7 +10,7 @@ const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'sigame-workshop-safety-')
 process.env.PACKS_DIR = path.join(root, 'packs');
 process.env.CACHE_DIR = path.join(root, 'cache');
 const [{ storeWorkshopPack, locatePack }, { redactSteamLog, createSteamLogForwarder }] = await Promise.all([
-  import('../server/steam/workshop.js'), import('../server/steam/steamcmd.js'),
+  import('../server/steam/workshop.ts'), import('../server/steam/steamcmd.ts'),
 ]);
 after(async () => fsp.rm(root, { recursive: true, force: true }));
 const minimalXml = '<package name="Updated" version="5"><rounds><round name="One"><themes><theme name="T"><questions><question price="100"><params><param name="question" type="content"><item>Q</item></param></params><right><answer>A</answer></right></question></questions></theme></themes></round></rounds></package>';

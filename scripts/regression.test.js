@@ -11,11 +11,11 @@ process.env.CACHE_DIR = path.join(root, 'cache');
 process.env.ROOM_STATE_FILE = path.join(root, 'room-state.json');
 
 // Config reads environment variables when imported, so create the fixture first.
-await import('./make-sample-pack.js');
+await import('./make-sample-pack.ts');
 const [{ Room }, { listPacks, loadPack }, { persistRoom, restoreRoom }] = await Promise.all([
-  import('../server/game/Room.js'),
-  import('../server/packs/packManager.js'),
-  import('../server/game/persistence.js'),
+  import('../server/game/Room.ts'),
+  import('../server/packs/packManager.ts'),
+  import('../server/game/persistence.ts'),
 ]);
 const file = (await listPacks()).find((pack) => pack.name.includes('v5')).file;
 const loaded = await loadPack(file);

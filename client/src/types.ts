@@ -37,6 +37,8 @@ export interface RoomState {
     timeForThinkingOnSpecial: number;
     timeForFinalThinking: number;
     timeOfRound: number;
+    buzzSyncMode: 'server' | 'clientTimestamp';
+    buzzSyncWindowMs: number;
     [key: string]: string | number | boolean;
   };
   pack: {
@@ -69,6 +71,7 @@ export interface RoomState {
     } | null;
     buzzer: {
       winnerId: string | null;
+      winnerInfo: { mode: 'server' | 'clientTimestamp' | 'random'; reactionMs: number; transitMs?: number; contenders?: number } | null;
       attempted: string[];
       blockedUntil: number | null;
       blockedPlayers: { id: string; until: number }[];
@@ -177,5 +180,6 @@ export type ClientToServerEvents = {
 } & {
   'session:join': (payload: { nickname: string; asSpectator?: boolean }, ack: (result: JoinAck) => void) => void;
   'session:resume': (payload: { token: string }, ack: (result: { ok: boolean; resumed?: boolean }) => void) => void;
-  'game:buzz': (payload: Record<string, never>, ack: (result: Ack) => void) => void;
+  'game:buzz': (payload: { clientAt: number }, ack: (result: Ack) => void) => void;
+  'clock:ping': (payload: Record<string, never>, ack: (result: { ok: boolean; serverTime: number }) => void) => void;
 };

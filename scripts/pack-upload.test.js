@@ -6,8 +6,8 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { test } from 'node:test';
 import AdmZip from 'adm-zip';
-import { Room } from '../server/game/Room.js';
-import { canUpload, saveUploadedPack, UploadError, uploadFileStem } from '../server/packs/upload.js';
+import { Room } from '../server/game/Room.ts';
+import { canUpload, saveUploadedPack, UploadError, uploadFileStem } from '../server/packs/upload.ts';
 
 function fixture() {
   const zip = new AdmZip();

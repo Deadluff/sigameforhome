@@ -10,7 +10,7 @@ const modules = path.join(root, 'node_modules');
 const stamp = path.join(modules, '.sigame-install');
 const lockfile = path.join(root, 'package-lock.json');
 const commandSuffix = process.platform === 'win32' ? '.cmd' : '';
-const buildTools = ['vite', 'tsc'].map((name) => path.join(modules, '.bin', `${name}${commandSuffix}`));
+const buildTools = ['vite', 'tsc', 'tsx'].map((name) => path.join(modules, '.bin', `${name}${commandSuffix}`));
 
 const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number);
 if (!((nodeMajor === 20 && nodeMinor >= 19) ||
@@ -55,8 +55,20 @@ if (build.error || build.status !== 0) {
   process.exit(build.status || 1);
 }
 
-fs.mkdirSync(path.join(root, 'packs'), { recursive: true });
-const server = spawnSync(process.execPath, [path.join(root, 'server', 'index.js')], {
+const packsDir = path.join(root, 'packs');
+fs.mkdirSync(packsDir, { recursive: true });
+if (!fs.readdirSync(packsDir).some((name) => name.toLowerCase().endsWith('.siq'))) {
+  // A fresh install should be playable before the host downloads a pack.
+  const sample = spawnSync(process.execPath, ['--import', 'tsx', path.join(root, 'scripts', 'make-sample-pack.ts')], {
+    cwd: root,
+    stdio: 'inherit',
+  });
+  if (sample.error || sample.status !== 0) {
+    console.error(sample.error ?? 'Sample pack generation failed.');
+    process.exit(sample.status || 1);
+  }
+}
+const server = spawnSync(process.execPath, ['--import', 'tsx', path.join(root, 'server', 'index.ts')], {
   cwd: root,
   stdio: 'inherit',
 });

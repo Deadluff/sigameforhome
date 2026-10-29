@@ -4,8 +4,8 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { Room } from '../server/game/Room.js';
-import { ensureIosCompatibleMedia, needsIosVideoTranscode } from '../server/packs/mediaTranscoder.js';
+import { Room } from '../server/game/Room.ts';
+import { ensureIosCompatibleMedia, needsIosVideoTranscode } from '../server/packs/mediaTranscoder.ts';
 
 test('codec tags split across read chunks are still detected', async (t) => {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'sigame-media-'));

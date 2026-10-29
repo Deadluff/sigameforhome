@@ -2,8 +2,8 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { test } from 'node:test';
-import { Room } from '../server/game/Room.js';
-import { registerSocketHandlers } from '../server/socket/handlers.js';
+import { Room } from '../server/game/Room.ts';
+import { registerSocketHandlers } from '../server/socket/handlers.ts';
 
 class FakeSocket extends EventEmitter {
   constructor(id) {

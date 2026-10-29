@@ -88,11 +88,26 @@
                 </div>
               </label>
 
+              <label class="setting-toggle setting-sync-box" for="set-buzzSyncMode">
+                <span>
+                  <strong>⚡ Buzzer synchronization</strong>
+                  <select id="set-buzzSyncMode" class="setting-select">
+                    <option value="server">First packet received by server</option>
+                    <option value="clientTimestamp">Earliest calibrated button press</option>
+                  </select>
+                  <small id="set-buzzSyncMode-desc"></small>
+                </span>
+              </label>
+
               <div class="settings-grid">
                 <label><span>Game mode</span><select id="set-gameMode"><option value="classic">Guided (standard, no-risk, stake, secret, for-all, final)</option><option value="simple">Simple (special questions use normal rules)</option></select></label>
                 <label>
                   <span>⏱️ Penalty block on false start (sec)</span>
                   <input type="number" id="set-timeForBlockingButton" min="0" max="10" />
+                </label>
+                <label>
+                  <span>📡 Button sync window (ms)</span>
+                  <input type="number" id="set-buzzSyncWindowMs" min="20" max="500" step="10" />
                 </label>
                 <label>
                   <span>📖 Reading speed (chars / sec)</span>

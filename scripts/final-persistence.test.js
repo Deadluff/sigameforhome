@@ -10,8 +10,8 @@ const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'sigame-final-restart-'));
 process.env.PACKS_DIR = path.join(root, 'packs');
 process.env.CACHE_DIR = path.join(root, 'cache');
 const [{ Room }, { loadPack }, { persistRoom, restoreRoom }] = await Promise.all([
-  import('../server/game/Room.js'), import('../server/packs/packManager.js'),
-  import('../server/game/persistence.js'),
+  import('../server/game/Room.ts'), import('../server/packs/packManager.ts'),
+  import('../server/game/persistence.ts'),
 ]);
 after(async () => fsp.rm(root, { recursive: true, force: true }));
 

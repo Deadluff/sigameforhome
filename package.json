@@ -4,21 +4,26 @@
   "private": true,
   "description": "Self-hosted LAN Jeopardy-style game inspired by SIGame. Supports original .siq packs and Steam Workshop downloads.",
   "type": "module",
-  "main": "server/index.js",
+  "main": "server/index.ts",
   "engines": {
     "node": "^20.19.0 || >=22.12.0"
   },
   "scripts": {
     "start": "node scripts/start.js",
-    "dev": "npm run build && node --watch server/index.js",
+    "dev": "npm run build && tsx watch server/index.ts",
     "dev:client": "vite",
     "build": "tsc --noEmit && vite build",
-    "test": "node --test scripts/regression.test.js scripts/stake-auction.test.js scripts/media.test.js scripts/for-all.test.js scripts/pack-limits.test.js scripts/final-round.test.js scripts/final-persistence.test.js scripts/engine-recovery.test.js scripts/pack-upload.test.js scripts/workshop-safety.test.js scripts/appeals.test.js scripts/session-binding.test.js",
-    "inspect-pack": "node scripts/inspect-pack.js",
-    "make-sample": "node scripts/make-sample-pack.js",
-    "smoke": "node scripts/smoke-test.js"
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test scripts/regression.test.js scripts/stake-auction.test.js scripts/media.test.js scripts/for-all.test.js scripts/pack-limits.test.js scripts/final-round.test.js scripts/final-persistence.test.js scripts/engine-recovery.test.js scripts/pack-upload.test.js scripts/workshop-safety.test.js scripts/appeals.test.js scripts/session-binding.test.js",
+    "inspect-pack": "node --import tsx scripts/inspect-pack.ts",
+    "make-sample": "node --import tsx scripts/make-sample-pack.ts",
+    "smoke": "node --import tsx scripts/smoke-test.ts"
   },
   "dependencies": {
+    "@types/adm-zip": "^0.5.7",
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.6.6",
+    "@types/qrcode-terminal": "^0.12.2",
     "adm-zip": "^0.5.16",
     "express": "^4.21.1",
     "fast-xml-parser": "^4.5.0",
@@ -29,7 +34,8 @@
     "steamworks.js": "^0.4.0"
   },
   "devDependencies": {
-    "typescript": "^5.9.3",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
     "vite": "npm:rolldown-vite@7.3.1"
   }
 }

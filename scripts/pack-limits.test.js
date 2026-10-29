@@ -10,7 +10,7 @@ const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'sigame-pack-limits-'));
 process.env.PACKS_DIR = root;
 process.env.CACHE_DIR = path.join(root, 'cache');
 const [{ readPackHeader, parseSiq }, { listPacks }] = await Promise.all([
-  import('../server/packs/siqParser.js'), import('../server/packs/packManager.js'),
+  import('../server/packs/siqParser.ts'), import('../server/packs/packManager.ts'),
 ]);
 after(async () => fsp.rm(root, { recursive: true, force: true }));
 

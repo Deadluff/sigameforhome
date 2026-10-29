@@ -9,9 +9,9 @@ import { setTimeout as delay } from 'node:timers/promises';
 const root = await mkdtemp(path.join(os.tmpdir(), 'sigame-engine-recovery-'));
 process.env.PACKS_DIR = path.join(root, 'packs');
 process.env.CACHE_DIR = path.join(root, 'cache');
-await import('./make-sample-pack.js');
+await import('./make-sample-pack.ts');
 const [{ Room }, { loadPack }] = await Promise.all([
-  import('../server/game/Room.js'), import('../server/packs/packManager.js'),
+  import('../server/game/Room.ts'), import('../server/packs/packManager.ts'),
 ]);
 const loaded = await loadPack('Demo pack (v5 format).siq');
 after(async () => rm(root, { recursive: true, force: true }));
@@ -95,4 +95,25 @@ test('a queued press before the buzzer deadline is accepted when its random wind
   assert.equal(engine.phase, 'answering');
   assert.equal(engine.buzzer.winnerId, alice.id);
   assert.equal(engine.buzzer.remainingMs, 1000);
+});
+
+test('timestamp-synced presses retain their ordering when the buzzer deadline ends the collection window', async (t) => {
+  const { room, host, players: [alice, bob] } = game(t);
+  room.updateSettings(host.id, {
+    buzzSyncMode: 'clientTimestamp',
+    buzzSyncWindowMs: 500,
+    timeForThinkingOnQuestion: 1,
+  });
+  const engine = room.engine;
+  engine.selectQuestion(host.id, true, 0, 0);
+  engine.openBuzzer();
+  const openedAt = engine.buzzer.openedAt;
+  await delay(650);
+  assert.equal(engine.buzz(alice.id, { clientAt: openedAt + 100 }).result, 'queued');
+  assert.equal(engine.buzz(bob.id, { clientAt: openedAt + 50 }).result, 'queued');
+  await delay(450);
+  assert.equal(engine.phase, 'answering');
+  assert.equal(engine.buzzer.winnerId, bob.id);
+  assert.equal(engine.buzzer.winnerInfo.mode, 'clientTimestamp');
+  assert.equal(engine.buzzer.winnerInfo.contenders, 2);
 });

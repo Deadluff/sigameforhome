@@ -1,28 +1,28 @@
 /**
- * Entry point: Express (static client + REST + pack media) and Socket.io on one port.
+ * Entry point: Express (built client + REST + pack media)
+ * and Socket.io on one port.
  */
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
-import express from 'express';
+import express, { type NextFunction, type Request, type Response } from 'express';
 import qrcode from 'qrcode-terminal';
 import { Server } from 'socket.io';
-import { config } from './config.js';
-import { Room } from './game/Room.js';
-import { persistRoom, restoreRoom } from './game/persistence.js';
-import { ensureIosCompatibleMedia } from './packs/mediaTranscoder.js';
-import { listPacks } from './packs/packManager.js';
-import { canUpload, MAX_UPLOAD_BYTES, saveUploadedPack, UploadError } from './packs/upload.js';
-import { registerSocketHandlers } from './socket/handlers.js';
-import { ensureDir, safeJoin } from './utils/fsx.js';
-import { getLanAddresses } from './utils/network.js';
+import { config } from './config.ts';
+import { Room } from './game/Room.ts';
+import { persistRoom, restoreRoom } from './game/persistence.ts';
+import { ensureIosCompatibleMedia } from './packs/mediaTranscoder.ts';
+import { listPacks } from './packs/packManager.ts';
+import { canUpload, MAX_UPLOAD_BYTES, saveUploadedPack, UploadError } from './packs/upload.ts';
+import { registerSocketHandlers } from './socket/handlers.ts';
+import { ensureDir, safeJoin } from './utils/fsx.ts';
+import { getLanAddresses } from './utils/network.ts';
 
 await Promise.all([ensureDir(config.packsDir), ensureDir(config.cacheDir)]);
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
-  // Mobile browsers on flaky Wi-Fi: detect dead sockets reasonably fast.
   pingInterval: 10_000,
   pingTimeout: 8_000,
   maxHttpBufferSize: 1e6,
@@ -37,15 +37,14 @@ registerSocketHandlers(io, room);
 
 app.disable('x-powered-by');
 
-/** Basic info for the client (e.g. to show the join link / QR on the host screen). */
-app.get('/api/info', (_req, res) => {
+app.get('/api/info', (_req: Request, res: Response) => {
   res.json({
     port: config.port,
     urls: getLanAddresses().map((a) => `http://${a.address}:${config.port}`),
   });
 });
 
-app.get('/api/packs', async (_req, res, next) => {
+app.get('/api/packs', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     res.json(await listPacks());
   } catch (err) {
@@ -78,12 +77,12 @@ app.post('/api/packs/upload', async (req, res) => {
  * Before serving video/audio, ensures the file is transcoded to H.264/AAC (MP4) or MP3
  * so iPhone & iPad Safari can play packs encoded with AV1/VP9/Opus.
  */
-app.use('/media', (req, res, next) => {
-  if (!room.canAccessMedia(req.query.ticket, `/media${req.path}`)) return res.status(403).end();
+app.use('/media', (req: Request, res: Response, next: NextFunction) => {
+  if (!room.canAccessMedia(req.query.ticket, `/media${req.path}`)) { res.status(403).end(); return; }
   next();
 });
 
-app.use('/media', async (req, res, next) => {
+app.use('/media', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const decoded = req.path.split('/').filter(Boolean).map(decodeURIComponent);
     if (decoded.length >= 2) {
@@ -95,7 +94,8 @@ app.use('/media', async (req, res, next) => {
         if (playable !== filePath) {
           // Redirect to the derivative so Express supplies the correct media MIME type.
           const relative = path.relative(config.cacheDir, playable).split(path.sep).map(encodeURIComponent).join('/');
-          return res.redirect(307, `/media/${relative}?ticket=${encodeURIComponent(req.query.ticket)}`);
+          res.redirect(307, `/media/${relative}?ticket=${encodeURIComponent(String(req.query.ticket))}`);
+          return;
         }
       }
     }
@@ -119,13 +119,12 @@ app.use(
   }),
 );
 
-/** Web client. */
+/** Static web client assets (index.html, style.css, etc.). */
 if (fs.existsSync(config.publicDir)) {
   app.use(express.static(config.publicDir, { index: 'index.html' }));
 }
 
-// eslint-disable-next-line no-unused-vars
-app.use((err, _req, res, _next) => {
+app.use((err: Error & { status?: number }, _req: Request, res: Response, _next: NextFunction) => {
   if (err.status === 404) return res.status(404).end();
   console.error(err);
   res.status(500).json({ error: err.message });
@@ -133,7 +132,7 @@ app.use((err, _req, res, _next) => {
 
 /* --------------------------------------------------------------- startup */
 
-server.on('error', (err) => {
+server.on('error', (err: NodeJS.ErrnoException) => {
   if (err.code === 'EADDRINUSE') {
     console.error(`\n  Port ${config.port} is already in use. Close the other app or set PORT=3001 before starting again.\n`);
   } else {
@@ -147,7 +146,7 @@ server.listen(config.port, config.host, () => {
   const best = addresses[0] ? `http://${addresses[0].address}:${config.port}` : null;
 
   console.log('\n  ==============================================');
-  console.log('   SIGame Local server is running');
+  console.log('   SIGame Local server is running (TypeScript)');
   console.log('  ==============================================\n');
   console.log(`   On this PC:      http://localhost:${config.port}`);
   for (const a of addresses) {
@@ -160,14 +159,14 @@ server.listen(config.port, config.host, () => {
 
   if (best) {
     console.log('   Scan to join:');
-    qrcode.generate(best, { small: true }, (qr) => console.log(qr.replace(/^/gm, '   ')));
+    qrcode.generate(best, { small: true }, (qr: string) => console.log(qr.replace(/^/gm, '   ')));
   }
   console.log('   If phones cannot connect, allow Node.js through your firewall.\n');
 });
 
 /* Graceful shutdown on Ctrl+C. */
 let shuttingDown = false;
-for (const signal of ['SIGINT', 'SIGTERM']) {
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
     if (shuttingDown) return;
     shuttingDown = true;

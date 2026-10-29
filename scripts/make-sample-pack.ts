@@ -7,10 +7,9 @@
  */
 import path from 'node:path';
 import AdmZip from 'adm-zip';
-import { config } from '../server/config.js';
-import { ensureDir } from '../server/utils/fsx.js';
+import { config } from '../server/config.ts';
+import { ensureDir } from '../server/utils/fsx.ts';
 
-// 1×1 orange PNG.
 const PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==',
   'base64',
@@ -18,7 +17,7 @@ const PNG = Buffer.from(
 const IMAGE_NAME = 'кот.png';
 const IMAGE_ENTRY = `Images/${encodeURIComponent(IMAGE_NAME)}`;
 
-const themeV5 = (name, n) => `
+const themeV5 = (name: string, n: number): string => `
       <theme name="${name}">
         <questions>
           ${[1, 2, 3, 4, 5]
@@ -79,7 +78,7 @@ const contentV4 = `<?xml version="1.0" encoding="utf-8"?>
   </rounds>
 </package>`;
 
-async function writePack(fileName, xml) {
+async function writePack(fileName: string, xml: string): Promise<void> {
   const zip = new AdmZip();
   zip.addFile('content.xml', Buffer.from(xml, 'utf8'));
   zip.addFile(IMAGE_ENTRY, PNG);

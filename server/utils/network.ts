@@ -3,8 +3,14 @@
  */
 import os from 'node:os';
 
+export interface LanAddress {
+  address: string;
+  iface: string;
+  likelyVirtual: boolean;
+}
+
 /** Ranks private ranges so the most likely "home Wi-Fi" address is listed first. */
-function rank(ip) {
+function rank(ip: string): number {
   if (ip.startsWith('192.168.')) return 0;
   if (ip.startsWith('10.')) return 1;
   if (/^172\.(1[6-9]|2\d|3[01])\./.test(ip)) return 2;
@@ -15,14 +21,13 @@ function rank(ip) {
 const VIRTUAL_ADAPTER = /(vmware|virtualbox|vbox|hyper-v|vethernet|wsl|docker|loopback|tailscale|zerotier|hamachi)/i;
 
 /**
- * @returns {{ address: string, iface: string, likelyVirtual: boolean }[]}
- *          Non-internal IPv4 addresses, best candidates first.
+ * Returns non-internal IPv4 addresses, best candidates first.
  */
-export function getLanAddresses() {
-  const result = [];
+export function getLanAddresses(): LanAddress[] {
+  const result: LanAddress[] = [];
   for (const [iface, entries] of Object.entries(os.networkInterfaces())) {
     for (const e of entries ?? []) {
-      const isV4 = e.family === 'IPv4' || e.family === 4;
+      const isV4 = e.family === 'IPv4' || (e as unknown as { family: number }).family === 4;
       if (!isV4 || e.internal || e.address.startsWith('169.254.')) continue;
       result.push({ address: e.address, iface, likelyVirtual: VIRTUAL_ADAPTER.test(iface) });
     }

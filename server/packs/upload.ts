@@ -2,24 +2,27 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
+import type { IncomingMessage } from 'node:http';
 import path from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { config } from '../config.js';
-import { ensureDir, sanitizeSegment } from '../utils/fsx.js';
-import { parseSiq } from './siqParser.js';
+import { config } from '../config.ts';
+import type { Room } from '../game/Room.ts';
+import { ensureDir, sanitizeSegment } from '../utils/fsx.ts';
+import { parseSiq, type Package } from './siqParser.ts';
 
 export const MAX_UPLOAD_BYTES = 200 * 1024 * 1024;
 
 export class UploadError extends Error {
-  constructor(status, message) {
+  status: number;
+  constructor(status: number, message: string) {
     super(message);
     this.status = status;
   }
 }
 
 /** File names travel URI-encoded because HTTP request headers cannot carry arbitrary Unicode. */
-export function uploadFileStem(encodedName) {
+export function uploadFileStem(encodedName: unknown): string {
   if (typeof encodedName !== 'string' || !encodedName || encodedName.length > 720) {
     throw new UploadError(400, 'Choose a .siq file to upload');
   }
@@ -35,14 +38,19 @@ export function uploadFileStem(encodedName) {
 }
 
 /** The bearer token is the same secret used to resume a room seat. */
-export function canUpload(room, authorization) {
+export function canUpload(room: Room, authorization: unknown): boolean {
   if (typeof authorization !== 'string') return false;
   const token = /^Bearer ([A-Za-z0-9_-]+)$/.exec(authorization)?.[1];
   const pid = token && room.tokens.get(token);
   return !!pid && !!room.participants.get(pid)?.connected && room.canManage(pid);
 }
 
-export async function saveUploadedPack(source, encodedName, packsDir = config.packsDir, maxBytes = MAX_UPLOAD_BYTES) {
+export async function saveUploadedPack(
+  source: IncomingMessage,
+  encodedName: unknown,
+  packsDir = config.packsDir,
+  maxBytes = MAX_UPLOAD_BYTES,
+): Promise<{ file: string; name: string }> {
   const stem = uploadFileStem(encodedName);
   await ensureDir(packsDir);
   const temp = path.join(packsDir, `.upload-${crypto.randomUUID()}.tmp`);
@@ -57,9 +65,9 @@ export async function saveUploadedPack(source, encodedName, packsDir = config.pa
 
   try {
     await pipeline(source, limit, fs.createWriteStream(temp, { flags: 'wx', mode: 0o600 }));
-    let pack;
+    let pack: Package;
     try { pack = await parseSiq(temp); }
-    catch (err) { throw new UploadError(422, `Invalid .siq pack: ${err.message}`); }
+    catch (err) { throw new UploadError(422, `Invalid .siq pack: ${(err as Error).message}`); }
     if (!pack.rounds.length || !pack.stats.questions) {
       throw new UploadError(422, 'Pack has no playable questions');
     }
@@ -72,7 +80,7 @@ export async function saveUploadedPack(source, encodedName, packsDir = config.pa
         await fsp.link(temp, path.join(packsDir, file));
         return { file, name: pack.name };
       } catch (err) {
-        if (err.code !== 'EEXIST') throw err;
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
       }
     }
     throw new Error('Could not find a unique pack file name');

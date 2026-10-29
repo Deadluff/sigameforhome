@@ -47,6 +47,34 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
 
   let state: RoomState | null = null;
   let clockOffset = 0; // serverTime - Date.now()
+  let bestRtt = Infinity;
+
+  // Lowest-latency samples give client timestamps a stable server clock estimate.
+  function syncClockSample() {
+    if (!socket.connected) return;
+    const sentAt = Date.now();
+    socket.emit('clock:ping', {}, (res) => {
+      if (!res?.ok || !Number.isFinite(res.serverTime)) return;
+      const receivedAt = Date.now();
+      const rtt = receivedAt - sentAt;
+      const sampleOffset = res.serverTime + rtt / 2 - receivedAt;
+      if (rtt <= bestRtt) {
+        bestRtt = rtt;
+        clockOffset = sampleOffset;
+      } else {
+        clockOffset = clockOffset * 0.8 + sampleOffset * 0.2;
+      }
+    });
+  }
+
+  async function calibrateClockBurst() {
+    bestRtt = Infinity;
+    for (let i = 0; i < 4; i++) {
+      syncClockSample();
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+  }
+  setInterval(syncClockSample, 8000);
 
   /* ---------------- Web Audio cues ---------------- */
   let audioCtx: AudioContext | null = null;
@@ -104,6 +132,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   /* ---------------- session ---------------- */
 
   socket.on('connect', () => {
+    void calibrateClockBurst();
     $('#connection-status').textContent = '';
     const token = localStorage.getItem(TOKEN_KEY);
     if (!token) {
@@ -153,7 +182,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
 
   socket.on('room:state', (s: RoomState) => {
     state = s;
-    clockOffset = s.serverTime - Date.now();
+    if (!Number.isFinite(bestRtt)) clockOffset = s.serverTime - Date.now();
     render();
   });
 
@@ -597,7 +626,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   /* ---------------- lobby settings & packs ---------------- */
 
   const numberSettingKeys = [
-    'timeForBlockingButton', 'readingSpeed', 'timeForThinkingOnQuestion',
+    'timeForBlockingButton', 'buzzSyncWindowMs', 'readingSpeed', 'timeForThinkingOnQuestion',
     'timeForPrintingAnswer', 'timeForMakingStake', 'timeForThinkingOnSpecial',
     'timeForFinalThinking', 'timeOfRound',
   ] as const;
@@ -714,10 +743,18 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
         's block).'
       : 'OFF (Выкл): Buzzers open immediately as soon as the question appears (green border). Players can buzz while reading.';
 
+    if (document.activeElement !== select('#set-buzzSyncMode')) {
+      select('#set-buzzSyncMode').value = s.buzzSyncMode;
+    }
+    $('#set-buzzSyncMode-desc').textContent = s.buzzSyncMode === 'clientTimestamp'
+      ? `Collect presses for ${s.buzzSyncWindowMs}ms and compare calibrated device times.`
+      : 'The first press received by the server wins.';
+
     for (const key of numberSettingKeys) {
       const field = input(`#set-${key}`);
       if (document.activeElement !== field) field.value = String(s[key]);
       if (key === 'timeForBlockingButton') field.disabled = !s.falseStart;
+      if (key === 'buzzSyncWindowMs') field.disabled = s.buzzSyncMode !== 'clientTimestamp';
     }
     if (document.activeElement !== $('#set-ignoreWrong')) {
       input('#set-ignoreWrong').checked = s.ignoreWrong;
@@ -732,6 +769,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
 
   // Settings change listeners
   select('#set-gameMode').addEventListener('change', () => send('settings:update', { gameMode: select('#set-gameMode').value }));
+  select('#set-buzzSyncMode').addEventListener('change', () =>
+    send('settings:update', { buzzSyncMode: select('#set-buzzSyncMode').value as RoomState['settings']['buzzSyncMode'] }));
   input('#set-falseStart').addEventListener('change', () => {
     send('settings:update', { falseStart: input('#set-falseStart').checked });
   });
@@ -998,8 +1037,12 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       } else if (game.phase === 'answering') {
         banner.classList.add('state-answering');
         const winner = participants.find((p) => p.id === game.buzzer.winnerId);
+        const info = game.buzzer.winnerInfo;
+        const timingNote = info?.reactionMs != null
+          ? ` · ⏱️ ${info.reactionMs}ms (${info.mode === 'clientTimestamp' ? 'device press' : 'server time'})`
+          : '';
         $('#stage-icon').textContent = '🎤';
-        $('#stage-title').textContent = `ANSWERING: ${winner ? winner.name : 'Player'} (Отвечает игрок)`;
+        $('#stage-title').textContent = `ANSWERING: ${winner ? winner.name : 'Player'} (Отвечает игрок)${timingNote}`;
         $('#stage-subtitle').textContent = you.canModerate
           ? 'Оцените ответ игрока: ✔ Correct или ✘ Wrong'
           : 'Слушаем ответ игрока…';
@@ -1087,7 +1130,10 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
 
   /* ---------------- controls ---------------- */
 
-  $('#buzzer').addEventListener('pointerdown', () => socket.emit('game:buzz', {}, () => {}));
+  function triggerBuzz() {
+    socket.emit('game:buzz', { clientAt: Math.round(nowServer()) }, () => {});
+  }
+  $('#buzzer').addEventListener('pointerdown', triggerBuzz);
   document.addEventListener('keydown', (e) => {
     const focused = document.activeElement;
     // Space on another control should activate that control, not also buzz.
@@ -1095,7 +1141,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       (focused.isContentEditable || !!focused.closest('input, textarea, select, button, a, [role="button"]'));
     if (e.code === 'Space' && state?.you?.role === 'player' && state.game.current?.type !== 'forAll' && !otherControl) {
       e.preventDefault();
-      if (!e.repeat) socket.emit('game:buzz', {}, () => {});
+      if (!e.repeat) triggerBuzz();
     }
   });
 

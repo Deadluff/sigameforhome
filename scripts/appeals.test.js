@@ -7,9 +7,9 @@ import { after, test } from 'node:test';
 const root = await mkdtemp(path.join(os.tmpdir(), 'sigame-appeals-'));
 process.env.PACKS_DIR = path.join(root, 'packs');
 process.env.CACHE_DIR = path.join(root, 'cache');
-await import('./make-sample-pack.js');
+await import('./make-sample-pack.ts');
 const [{ Room }, { loadPack }] = await Promise.all([
-  import('../server/game/Room.js'), import('../server/packs/packManager.js'),
+  import('../server/game/Room.ts'), import('../server/packs/packManager.ts'),
 ]);
 const loaded = await loadPack('Demo pack (v5 format).siq');
 after(async () => rm(root, { recursive: true, force: true }));

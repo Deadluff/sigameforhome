@@ -3,7 +3,7 @@
 A self-hosted, LAN-only Jeopardy-style game for a room full of phones, inspired by
 [SIGame](https://github.com/VladimirKhil/SI) / [SIOnline](https://github.com/VladimirKhil/SIOnline).
 One Windows, macOS, or Linux computer runs the server. Everyone else opens the link in a browser.
-The browser client uses strict TypeScript and pinned Rolldown Vite 7 for Rust-backed bundling.
+The app uses TypeScript throughout. The browser client uses pinned Rolldown Vite 7 for Rust-backed bundling.
 
 ## Quick start
 
@@ -39,44 +39,62 @@ Pack files are limited to 200 MB compressed and 1 GB extracted.
 > Allow Node.js through your firewall so phones can connect. To use a different port,
 > set `PORT=3001` before starting (`set PORT=3001` on Windows, `PORT=3001 ./start.sh` on macOS/Linux).
 
+## Quick start (macOS)
+
+1. Install **Node.js 20.19+ or 22.12+** from https://nodejs.org (or via Homebrew: `brew install node`).
+2. Double-click **`start.command`** in Finder, or run **`./start.sh`** in Terminal:
+   ```bash
+   chmod +x start.sh start.command
+   ./start.sh
+   ```
+   *(If macOS Gatekeeper blocks double-clicking `start.command` after cloning/downloading, either Right-Click → **Open**, or run `xattr -d com.apple.quarantine start.command start.sh` once in Terminal).*
+3. On the first run it installs dependencies, creates demo packs if `packs/` is empty, and prints your Mac's LAN link (`http://192.168.x.x:3000`) + a QR code for phones. To use a different port: `PORT=3001 ./start.sh`.
+
 Want a pack to test with? Run `npm run make-sample` to create two demo packs (modern v5 format and legacy v4 format).
 
 ## Project structure
 
 ```
 sigamelocal/
-├─ start.bat / start.sh      Platform entry points
-├─ scripts/start.js          Shared installer and server launcher
+├─ start.bat / start.sh / start.command   Platform entry points
+├─ scripts/start.js          Shared installer, builder, and server launcher
+├─ tsconfig.json             TypeScript checks for client, server, and scripts
 ├─ package.json
 ├─ server/
-│  ├─ index.js               Express + Socket.io bootstrap, prints the LAN link and QR code
-│  ├─ config.js              Paths, port, Steam app id (env-overridable)
+│  ├─ index.ts               Express + Socket.io server; serves the Vite client
+│  ├─ config.ts              Typed paths, port, Steam app id (env-overridable)
 │  ├─ game/
-│  │  ├─ constants.js        ROLES, PHASES
-│  │  ├─ settings.js         Settings schema based on SIGame's AppSettings/TimeSettings
-│  │  ├─ Room.js             Participants, sessions/reconnect, role assignment, ownership
-│  │  └─ GameEngine.js       Board → reading → buzzer → answering → reveal state machine
-│  ├─ socket/handlers.js     Socket event API + permission checks
+│  │  ├─ constants.ts        ROLES, PHASES, Role/Phase union types
+│  │  ├─ settings.ts         GameSettings interface + schema based on SIGame's AppSettings/TimeSettings
+│  │  ├─ Room.ts             Participants, sessions/reconnect, role assignment, RoomSnapshot type
+│  │  └─ GameEngine.ts       Game rules, timers, and judging
+│  ├─ socket/handlers.ts     Typed Socket.io event API + permission checks
 │  ├─ packs/
-│  │  ├─ siqParser.js        .siq (zip + content.xml v4/v5) → normalised model, safe media extraction
-│  │  └─ packManager.js      List, load and cache packs
+│  │  ├─ siqParser.ts        .siq (zip + content.xml v4/v5) → Package model, safe media extraction
+│  │  ├─ mediaTranscoder.ts  Automatic AV1/VP9/Opus → H.264/AAC transcoding for iPhone/iPad
+│  │  └─ packManager.ts      List, load and cache packs
 │  ├─ steam/
-│  │  ├─ workshop.js         Link → id → Steam API → direct download or steamcmd → .siq in packs/
-│  │  └─ steamcmd.js         Installs steamcmd automatically and runs workshop_download_item
+│  │  ├─ workshop.ts         Link → id → Steam API → local Steam / Steamworks UGC / steamcmd → .siq
 │  └─ utils/                 Network (LAN IPs), filesystem helpers
 ├─ client/                   TypeScript browser client and Vite build output
 ├─ vite.config.ts            Vite build and development proxy
-├─ scripts/                  inspect-pack, make-sample-pack, smoke-test
+│  │  ├─ workshop.ts         Link → id → Steam API → local Steam / Steamworks UGC / steamcmd → .siq
+│  │  ├─ localSteam.ts       Local Steam library scanner + Steamworks UGC downloader
+│  │  └─ steamcmd.ts         Installs steamcmd automatically and runs workshop_download_item
+│  └─ utils/                 Network (LAN IPs), filesystem helpers (.ts)
+├─ client/                   TypeScript browser client and Vite build output
+├─ vite.config.ts            Vite build and development proxy
+├─ scripts/                  inspect-pack.ts, make-sample-pack.ts, smoke-test.ts
 ├─ packs/                    Your .siq files
-├─ data/cache/               Extracted media (safe to delete)
-└─ tools/steamcmd/           Created the first time you download from the Workshop
+├─ data/cache/               Extracted & iOS-transcoded media (safe to delete)
+└─ tools/steamcmd/           Created if the steamcmd fallback is used
 ```
 
 ## Scripts
 
 | Command | What it does |
 |---|---|
-| `npm start` | Install platform dependencies if needed, then start the server |
+| `npm start` | Install platform dependencies if needed, build the client, then start the server |
 | `npm run dev` | Build the client, then auto-restart the server on changes |
 | `npm run dev:client` | Vite client dev server on port 5173; proxies sockets and media to the server on port 3000 |
 | `npm run build` | Type-check and bundle the client into `client/dist` |

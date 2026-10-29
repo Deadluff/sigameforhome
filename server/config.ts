@@ -1,6 +1,6 @@
 /**
  * Central configuration. Every value can be overridden with an environment
- * variable so the same build works from either launcher, Docker, or a dev shell.
+ * variable so the same build works from start.bat, start.sh, Docker, or a dev shell.
  */
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,13 +8,34 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /** Project root (one level above /server). */
-export const ROOT_DIR = path.resolve(__dirname, '..');
+export const ROOT_DIR: string = path.resolve(__dirname, '..');
 
-const env = (name, fallback) => process.env[name] ?? fallback;
+const env = (name: string, fallback: string): string => process.env[name] ?? fallback;
 
-export const config = Object.freeze({
+export interface SteamConfig {
+  readonly sigameAppId: number;
+  readonly publishedFileDetailsUrl: string;
+  readonly steamcmdZipUrl: string;
+  readonly steamcmdTimeoutMs: number;
+  readonly user: string;
+  readonly pass: string;
+}
+
+export interface AppConfig {
+  readonly port: number;
+  readonly host: string;
+  readonly packsDir: string;
+  readonly cacheDir: string;
+  readonly toolsDir: string;
+  readonly publicDir: string;
+  readonly roomStateFile: string;
+  readonly reconnectGraceMs: number;
+  readonly steam: SteamConfig;
+}
+
+export const config: AppConfig = Object.freeze({
   /** HTTP + WebSocket port. */
-  port: Number(env('PORT', 3000)),
+  port: Number(env('PORT', '3000')),
 
   /** Bind address. 0.0.0.0 = reachable from the LAN. */
   host: env('HOST', '0.0.0.0'),
@@ -35,16 +56,16 @@ export const config = Object.freeze({
   publicDir: path.resolve(env('PUBLIC_DIR', path.join(ROOT_DIR, 'client', 'dist'))),
 
   /** How long a disconnected participant keeps their seat (ms). Phones drop sockets a lot. */
-  reconnectGraceMs: Number(env('RECONNECT_GRACE_MS', 90_000)),
+  reconnectGraceMs: Number(env('RECONNECT_GRACE_MS', '90000')),
 
   steam: Object.freeze({
     /** SIGame's Steam App ID – workshop items are published under it. */
-    sigameAppId: Number(env('SIGAME_APP_ID', 3553500)),
+    sigameAppId: Number(env('SIGAME_APP_ID', '3553500')),
     publishedFileDetailsUrl:
       'https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/',
     steamcmdZipUrl: 'https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip',
     /** Hard timeout for a single steamcmd run (first run self-updates, so be generous). */
-    steamcmdTimeoutMs: Number(env('STEAMCMD_TIMEOUT_MS', 15 * 60_000)),
+    steamcmdTimeoutMs: Number(env('STEAMCMD_TIMEOUT_MS', String(15 * 60_000))),
     /** Optional Steam credentials for steamcmd fallback (when Steam desktop app isn't running). */
     user: env('STEAM_USER', ''),
     pass: env('STEAM_PASS', ''),
