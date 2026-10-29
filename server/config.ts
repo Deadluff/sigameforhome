@@ -16,6 +16,7 @@ export interface SteamConfig {
   readonly sigameAppId: number;
   readonly publishedFileDetailsUrl: string;
   readonly steamcmdZipUrl: string;
+  readonly steamcmdMacUrl: string;
   readonly steamcmdTimeoutMs: number;
   readonly user: string;
   readonly pass: string;
@@ -64,6 +65,7 @@ export const config: AppConfig = Object.freeze({
     publishedFileDetailsUrl:
       'https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/',
     steamcmdZipUrl: 'https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip',
+    steamcmdMacUrl: 'https://steamcdn-a.akamaihd.net/client/installer/steamcmd_osx.tar.gz',
     /** Hard timeout for a single steamcmd run (first run self-updates, so be generous). */
     steamcmdTimeoutMs: Number(env('STEAMCMD_TIMEOUT_MS', String(15 * 60_000))),
     /** Optional Steam credentials for steamcmd fallback (when Steam desktop app isn't running). */

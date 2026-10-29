@@ -1,0 +1,67 @@
+/* Page frame: top bar, host column + table, podium row, action dock. */
+#app {
+  display: flex; flex-direction: column; min-height: 100vh; min-height: 100dvh;
+  max-width: 1440px; margin: 0 auto;
+  padding: 16px max(16px, env(safe-area-inset-right)) 16px max(16px, env(safe-area-inset-left));
+}
+#screen-game { display: flex; flex-direction: column; gap: var(--gap); flex: 1; }
+
+.topbar { display: flex; align-items: center; gap: 16px; min-height: 52px; padding: 0 4px; }
+.brand { font: 700 var(--t-l) var(--font-display); letter-spacing: -.02em; white-space: nowrap; }
+.topbar-round { flex: 1; min-width: 0; color: var(--mist); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topbar-round b { color: var(--paper); font-weight: 800; }
+.me-chip { display: inline-flex; align-items: center; gap: 8px; min-width: 0; font-weight: 800; white-space: nowrap; }
+.me-chip .role { padding: 2px 8px; border-radius: 999px; background: var(--set-raised); color: var(--mist); font-size: var(--t-xs); font-weight: 700; }
+#connection-status:empty { display: none; }
+#connection-status { padding: 10px 14px; border-radius: var(--r-control); background: #5a3300; border: 1px solid var(--lamp); font-weight: 700; }
+
+.stage-layout { display: grid; grid-template-columns: 264px minmax(0, 1fr); gap: var(--gap); align-items: stretch; }
+.host-col { display: flex; flex-direction: column; gap: var(--gap); min-width: 0; }
+/* The dock only groups markup; its children join the page column so sticky controls pin to the viewport. */
+.dock { display: contents; }
+
+/* One layout from lobby to final question, so players learn where things are before the game starts.
+   Podiums sit between the table and the controls, like contestant desks under the board. */
+/* At game over the ranked results replace the table and the podium row. */
+#screen-game[data-phase="gameOver"] .stage-layout, #screen-game[data-phase="gameOver"] > #players { display: none; }
+#screen-game > #players { order: 1; }
+#screen-game > .dock > * { order: 2; }
+#screen-game > #manage { order: 3; }
+/* Only the controls a person reaches for every few seconds stay pinned; panels scroll with the page. */
+#host-controls, .buzzer { position: sticky; bottom: max(8px, env(safe-area-inset-bottom)); z-index: 4; }
+/* A player who also moderates gets both toolbars; only the host toolbar stays pinned. */
+.buzzer.moderator-buzzer { position: static; }
+
+/* Desktop play fits one screen, like the show: the table absorbs whatever height the rest leaves. */
+@media (min-width: 861px) and (min-height: 620px) {
+  #screen-game:not([data-phase="lobby"]):not([data-phase="gameOver"]) { height: calc(100dvh - 32px); }
+  #screen-game:not([data-phase="lobby"]):not([data-phase="gameOver"]) .stage-layout { flex: 1 1 0; min-height: 0; grid-template-rows: minmax(0, 1fr); }
+  #screen-game:not([data-phase="lobby"]):not([data-phase="gameOver"]) #game-stage { min-height: 0; }
+  #screen-game:not([data-phase="lobby"]):not([data-phase="gameOver"]) #question { min-height: 0; overflow: auto; }
+  #screen-game:not([data-phase="lobby"]):not([data-phase="gameOver"]) #question img { height: min(30dvh, 460px); }
+  .host-col { min-height: 0; }
+}
+
+@media (max-width: 860px) {
+  .stage-layout { grid-template-columns: minmax(0, 1fr); }
+  .host-col { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: stretch; }
+  #host-seat:empty { display: none; }
+  .host-col:has(#host-seat:empty) { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 600px) {
+  #app { padding: 8px max(8px, env(safe-area-inset-right)) 8px max(8px, env(safe-area-inset-left)); }
+  #screen-game { gap: 8px; }
+  .topbar { gap: 10px; min-height: 44px; }
+  .brand { font-size: var(--t-m); }
+  .topbar-round { font-size: var(--t-xs); }
+  .me-chip .role { display: none; }
+  #btn-leave { min-height: 36px; padding: 6px 10px; font-size: var(--t-xs); }
+  .host-col { grid-template-columns: minmax(0, 1fr); }
+  #host-seat { display: none; }
+  /* When a phone user must act (bid, wager, written answer), the panel comes right under the table. */
+  #screen-game > .dock > .card { order: 1; }
+  #screen-game > #players { order: 2; }
+  #screen-game > .dock > #host-controls,
+  #screen-game > .dock > .buzzer { order: 3; }
+  #screen-game:has(.dock > .card:not(.hidden)) #game-stage { min-height: 24dvh; }
+}

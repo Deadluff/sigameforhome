@@ -1,9 +1,11 @@
 /**
  * Minimal steamcmd wrapper (fallback when the Steam desktop client is not running).
  */
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import fsp from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import AdmZip from 'adm-zip';
 import { config } from '../config.ts';
 import { downloadToFile, ensureDir, pathExists } from '../utils/fsx.ts';
@@ -11,6 +13,7 @@ import { downloadToFile, ensureDir, pathExists } from '../utils/fsx.ts';
 const IS_WINDOWS = process.platform === 'win32';
 const STEAMCMD_DIR = path.join(config.toolsDir, 'steamcmd');
 const STEAMCMD_EXE = path.join(STEAMCMD_DIR, IS_WINDOWS ? 'steamcmd.exe' : 'steamcmd.sh');
+const execFileAsync = promisify(execFile);
 
 let bootstrapPromise: Promise<string> | null = null;
 
@@ -47,14 +50,22 @@ export function createSteamLogForwarder(onLog: (line: string) => void, password 
 export function ensureSteamcmd(onLog: (line: string) => void = () => {}): Promise<string> {
   bootstrapPromise ??= (async (): Promise<string> => {
     if (await pathExists(STEAMCMD_EXE)) return STEAMCMD_EXE;
-    if (!IS_WINDOWS) {
-      throw new Error('Automatic steamcmd install is only supported on Windows. Install steamcmd and place it in tools/steamcmd.');
+    if (!IS_WINDOWS && process.platform !== 'darwin') {
+      throw new Error('Automatic steamcmd install is only supported on Windows and macOS. Install steamcmd and place it in tools/steamcmd.');
     }
     await ensureDir(STEAMCMD_DIR);
-    const zipPath = path.join(STEAMCMD_DIR, 'steamcmd.zip');
     onLog('Downloading steamcmd from Valve…');
-    await downloadToFile(config.steam.steamcmdZipUrl, zipPath);
-    new AdmZip(zipPath).extractAllTo(STEAMCMD_DIR, true);
+    if (IS_WINDOWS) {
+      const zipPath = path.join(STEAMCMD_DIR, 'steamcmd.zip');
+      await downloadToFile(config.steam.steamcmdZipUrl, zipPath);
+      new AdmZip(zipPath).extractAllTo(STEAMCMD_DIR, true);
+    } else {
+      // Valve ships macOS SteamCMD as a tarball, while Windows uses a zip.
+      const archivePath = path.join(STEAMCMD_DIR, 'steamcmd_osx.tar.gz');
+      await downloadToFile(config.steam.steamcmdMacUrl, archivePath);
+      await execFileAsync('tar', ['-xzf', archivePath, '-C', STEAMCMD_DIR]);
+      await fsp.chmod(STEAMCMD_EXE, 0o755);
+    }
     onLog('steamcmd installed. The first run will self-update, this can take a minute.');
     return STEAMCMD_EXE;
   })().catch((err) => {
@@ -103,10 +114,16 @@ function runSteamcmd(exe: string, args: string[], onLog: (line: string) => void)
 }
 
 async function readWorkshopLogError(itemId: string): Promise<string | null> {
-  const logPath = path.join(STEAMCMD_DIR, 'logs', 'workshop_log.txt');
+  // macOS SteamCMD writes Workshop logs to Steam's user data directory.
+  const logDir = process.platform === 'darwin'
+    ? path.join(os.homedir(), 'Library/Application Support/Steam/logs')
+    : path.join(STEAMCMD_DIR, 'logs');
+  const logPath = path.join(logDir, 'workshop_log.txt');
   try {
     const text = await fsp.readFile(logPath, 'utf8');
-    const lines = text.trim().split(/\r?\n/).slice(-25).join('\n');
+    const itemStart = text.lastIndexOf(`Download item ${itemId} requested`);
+    if (itemStart === -1) return null;
+    const lines = text.slice(itemStart).trim().split(/\r?\n/).slice(0, 25).join('\n');
     if (/Missing decryption key/i.test(lines)) {
       return (
         `Steam denied the depot decryption key for item ${itemId} to anonymous steamcmd. ` +

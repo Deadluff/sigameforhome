@@ -171,9 +171,14 @@ export interface CommandPayloads {
 
 export type CommandEvent = NoPayloadCommand | keyof CommandPayloads;
 
+// Player-specific fields mirror GameEngine.emitEvent payloads; the client uses them for podium replics.
 export type GameEvent =
-  | { type: 'answerJudged'; correct: boolean }
-  | { type: 'buzzerOpen' | 'buzzAccepted' | 'falseStart' | 'giftAwarded' | 'specialSetup' | 'questionSelected' | 'roundEnd' | 'stakeBid' | 'stakePass' | 'stakeWon' };
+  | { type: 'answerJudged'; correct: boolean; playerId?: string | null; delta?: number }
+  | { type: 'buzzAccepted' | 'falseStart' | 'stakePass'; playerId: string }
+  | { type: 'stakeBid'; playerId: string; amount: number; allIn: boolean }
+  | { type: 'stakeWon'; playerId: string; amount: number }
+  | { type: 'giftAwarded'; playerId: string; price: number }
+  | { type: 'buzzerOpen' | 'specialSetup' | 'questionSelected' | 'roundEnd' };
 
 export interface SteamProgress {
   stage: string;
