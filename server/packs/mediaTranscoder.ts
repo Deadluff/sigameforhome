@@ -19,6 +19,24 @@ const ffmpegPath = ffmpegStatic as unknown as string | null;
 
 const VIDEO_EXTS = new Set(['.mp4', '.m4v', '.mov', '.webm', '.mkv', '.avi']);
 const AUDIO_EXTS = new Set(['.ogg', '.opus', '.weba', '.flac']);
+export const MAX_CONCURRENT_TRANSCODES = Math.max(1, Math.min(3, Math.floor(os.cpus().length / 2)));
+
+let runningTranscodes = 0;
+const waitingTranscodes: Array<() => void> = [];
+
+/** Every pack warmup and HTTP conversion shares the same process-wide ffmpeg limit. */
+export async function runTranscodeTask<T>(task: () => Promise<T>): Promise<T> {
+  if (runningTranscodes < MAX_CONCURRENT_TRANSCODES) runningTranscodes++;
+  else await new Promise<void>((resolve) => waitingTranscodes.push(resolve));
+  try {
+    return await task();
+  } finally {
+    // Transfer the occupied slot to the next waiter before a new request can take it.
+    const next = waitingTranscodes.shift();
+    if (next) next();
+    else runningTranscodes--;
+  }
+}
 
 /** In-flight transcode promises keyed by absolute file path so concurrent requests share one job. */
 const activeTranscodes = new Map<string, Promise<string>>();
@@ -43,7 +61,7 @@ export async function needsIosVideoTranscode(filePath: string): Promise<boolean>
     for await (const chunk of fs.createReadStream(filePath, { highWaterMark: 64 * 1024 })) {
       const latin = tail + chunk.toString('latin1');
       marker ||= latin.includes('sigamelocal-ios');
-      unsupported ||= ['av01', 'vp09', 'vp08', 'Opus', 'dOps', 'vorb'].some((tag) => latin.includes(tag));
+      unsupported ||= ['av01', 'vp09', 'vp08', 'hvc1', 'hev1', 'Opus', 'dOps', 'vorb'].some((tag) => latin.includes(tag));
       hasH264 ||= latin.includes('avc1');
       tail = latin.slice(-15);
     }
@@ -85,7 +103,7 @@ export function ensureIosCompatibleMedia(filePath: string, packCacheDir: string 
       const tmpOut = `${converted}.${process.pid}.${Date.now()}.tmp.mp4`;
       try {
         await fsp.mkdir(path.dirname(converted), { recursive: true });
-        await execFileAsync(
+        await runTranscodeTask(() => execFileAsync(
           ffmpegPath,
           [
             '-y',
@@ -118,7 +136,7 @@ export function ensureIosCompatibleMedia(filePath: string, packCacheDir: string 
             tmpOut,
           ],
           { windowsHide: true, timeout: 120_000 },
-        );
+        ));
         await fsp.rename(tmpOut, converted);
       } catch (err) {
         await fsp.rm(tmpOut, { force: true }).catch(() => {});
@@ -133,11 +151,11 @@ export function ensureIosCompatibleMedia(filePath: string, packCacheDir: string 
       const tmpOut = `${converted}.${process.pid}.${Date.now()}.tmp.mp3`;
       try {
         await fsp.mkdir(path.dirname(converted), { recursive: true });
-        await execFileAsync(
+        await runTranscodeTask(() => execFileAsync(
           ffmpegPath,
           ['-y', '-i', filePath, '-vn', '-c:a', 'libmp3lame', '-q:a', '4', tmpOut],
           { windowsHide: true, timeout: 60_000 },
-        );
+        ));
         await fsp.rename(tmpOut, converted);
       } catch (err) {
         await fsp.rm(tmpOut, { force: true }).catch(() => {});
@@ -170,7 +188,7 @@ export async function backgroundTranscodePackMedia(cacheDir: string): Promise<vo
   }
   if (!candidates.length) return;
 
-  const concurrency = Math.max(1, Math.min(3, Math.floor(os.cpus().length / 2)));
+  const concurrency = MAX_CONCURRENT_TRANSCODES;
   console.log(`[media] Pre-converting ${candidates.length} media file(s) for iPhone/iPad compatibility…`);
 
   let index = 0;

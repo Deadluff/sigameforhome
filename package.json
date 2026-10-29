@@ -13,6 +13,7 @@
     "dev": "npm run build && tsx watch server/index.ts",
     "dev:client": "vite",
     "build": "tsc --noEmit && vite build",
+    "build:exe": "npm run build && node scripts/build-exe.mjs",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test scripts/regression.test.js scripts/stake-auction.test.js scripts/media.test.js scripts/for-all.test.js scripts/pack-limits.test.js scripts/final-round.test.js scripts/final-persistence.test.js scripts/engine-recovery.test.js scripts/pack-upload.test.js scripts/workshop-safety.test.js scripts/appeals.test.js scripts/session-binding.test.js",
     "inspect-pack": "node --import tsx scripts/inspect-pack.ts",
@@ -34,6 +35,8 @@
     "steamworks.js": "^0.4.0"
   },
   "devDependencies": {
+    "esbuild": "^0.27.7",
+    "postject": "^1.0.0-alpha.6",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vite": "npm:rolldown-vite@7.3.1"

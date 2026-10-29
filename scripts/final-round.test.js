@@ -86,12 +86,60 @@ test('default final setting ends after one chosen theme', (t) => {
   assert.equal(engine.phase, 'gameOver');
 });
 
+test('undo restores a final wager verdict and returns to final judging', (t) => {
+  const { room, host, player } = finalGame(t, false);
+  const engine = room.engine;
+  engine.removeFinalTheme(host.id, true, 0);
+  engine.removeFinalTheme(host.id, true, 1);
+  engine.selectQuestion(host.id, true, 2, 0);
+  const presentationId = engine.current.presentationId;
+  engine.setFinalWager(player.id, 200);
+  engine.openFinal();
+  engine.closeFinal();
+  engine.judgeFinal(player.id, true);
+  assert.equal(engine.phase, 'reveal');
+  assert.equal(player.score, 700);
+
+  engine.undoJudgment(presentationId, 1);
+  assert.equal(engine.phase, 'finalJudge');
+  assert.equal(player.score, 500);
+  assert.equal(engine.current.answerShown, false);
+  assert.equal(engine.finalJudged.has(player.id), false);
+  assert.equal(room.snapshotFor(player.id).game.current.right, null);
+  engine.judgeFinal(player.id, false);
+  assert.equal(player.score, 300);
+  assert.equal(engine.phase, 'reveal');
+});
+
+test('final theme countdown uses its own setting and restarts for each elimination', (t) => {
+  const { room, host } = finalGame(t);
+  const engine = room.engine;
+  room.updateSettings(host.id, { timeForChoosingFinalTheme: 7 });
+  engine.enterRound(2);
+  assert.equal(engine.timer?.name, 'choosingFinalTheme');
+  assert.equal(engine.timer?.durationMs, 7000);
+  engine.removeFinalTheme(host.id, true, 0);
+  assert.equal(engine.timer?.name, 'choosingFinalTheme');
+  assert.equal(engine.timer?.durationMs, 7000);
+  engine.removeFinalTheme(host.id, true, 1);
+  assert.equal(engine.timer?.name, 'choosing');
+});
+
 test('unavailable final themes are excluded from elimination and repeat play', (t) => {
   const { room } = finalGame(t);
   room.loadedPack.pack.rounds[2].themes[1].questions[0].price = -1;
   room.engine.enterRound(2);
   assert.deepEqual(room.engine.finalThemeIndices(), [0, 2]);
   assert.equal(room.engine.isAvailable(1, 0), false);
+});
+
+test('final theme elimination stops when the round deadline has passed', (t) => {
+  const { room, host } = finalGame(t);
+  const engine = room.engine;
+  engine.roundEndsAt = Date.now() - 1;
+  assert.throws(() => engine.removeFinalTheme(host.id, true, 0), /round has ended/);
+  assert.equal(engine.phase, 'roundEnd');
+  assert.deepEqual([...engine.removedFinalThemes], []);
 });
 
 test('a removed finalist cannot block the reveal', (t) => {
@@ -105,6 +153,35 @@ test('a removed finalist cannot block the reveal', (t) => {
   room.remove(player.id);
   engine.closeFinal();
   assert.equal(engine.phase, 'reveal');
+});
+
+test('a disconnected finalist with no wager does not block reveal', (t) => {
+  const { room, host, player } = finalGame(t, false);
+  const engine = room.engine;
+  engine.removeFinalTheme(host.id, true, 0);
+  engine.removeFinalTheme(host.id, true, 1);
+  engine.selectQuestion(host.id, true, 2, 0);
+  room.detach(player.id, 'player');
+  engine.openFinal();
+  assert.equal(engine.finalWagers.get(player.id), 0);
+  engine.closeFinal();
+  assert.equal(engine.phase, 'reveal');
+});
+
+test('a submitted final wager remains judgeable after disconnect', (t) => {
+  const { room, host, player } = finalGame(t, false);
+  const engine = room.engine;
+  engine.removeFinalTheme(host.id, true, 0);
+  engine.removeFinalTheme(host.id, true, 1);
+  engine.selectQuestion(host.id, true, 2, 0);
+  engine.setFinalWager(player.id, 200);
+  room.detach(player.id, 'player');
+  engine.openFinal();
+  engine.closeFinal();
+  assert.equal(engine.phase, 'finalJudge');
+  engine.judgeFinal(player.id, true);
+  assert.equal(engine.phase, 'reveal');
+  assert.equal(player.score, 700);
 });
 
 test('a recovered moderator can see wagers for judging without seeing the answer key', (t) => {

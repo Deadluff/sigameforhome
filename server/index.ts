@@ -58,7 +58,8 @@ app.post('/api/packs/upload', async (req, res) => {
   if (!req.is('application/octet-stream')) return res.status(415).json({ error: 'Upload a .siq file as application/octet-stream' });
   if (Number(req.headers['content-length']) > MAX_UPLOAD_BYTES) return res.status(413).json({ error: 'Pack exceeds the 200 MB limit' });
   try {
-    const result = await saveUploadedPack(req, req.headers['x-pack-name']);
+    const result = await saveUploadedPack(req, req.headers['x-pack-name'], config.packsDir,
+      MAX_UPLOAD_BYTES, () => canUpload(room, req.headers.authorization));
     res.status(201).json(result);
     listPacks().then((packs) => {
       for (const socket of io.sockets.sockets.values()) {
@@ -77,12 +78,7 @@ app.post('/api/packs/upload', async (req, res) => {
  * Before serving video/audio, ensures the file is transcoded to H.264/AAC (MP4) or MP3
  * so iPhone & iPad Safari can play packs encoded with AV1/VP9/Opus.
  */
-app.use('/media', (req: Request, res: Response, next: NextFunction) => {
-  if (!room.canAccessMedia(req.query.ticket, `/media${req.path}`)) { res.status(403).end(); return; }
-  next();
-});
-
-app.use('/media', async (req: Request, res: Response, next: NextFunction) => {
+const mediaTranscode = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const decoded = req.path.split('/').filter(Boolean).map(decodeURIComponent);
     if (decoded.length >= 2) {
@@ -94,7 +90,9 @@ app.use('/media', async (req: Request, res: Response, next: NextFunction) => {
         if (playable !== filePath) {
           // Redirect to the derivative so Express supplies the correct media MIME type.
           const relative = path.relative(config.cacheDir, playable).split(path.sep).map(encodeURIComponent).join('/');
-          res.redirect(307, `/media/${relative}?ticket=${encodeURIComponent(String(req.query.ticket))}`);
+          const htmlRoute = req.baseUrl.startsWith('/media-html/');
+          res.redirect(307, htmlRoute ? `${req.baseUrl}/${relative}`
+            : `/media/${relative}?ticket=${encodeURIComponent(String(req.query.ticket))}`);
           return;
         }
       }
@@ -103,21 +101,31 @@ app.use('/media', async (req: Request, res: Response, next: NextFunction) => {
     /* let express.static handle 404 / invalid paths */
   }
   next();
-});
+};
 
-app.use(
-  '/media',
-  express.static(config.cacheDir, {
+const mediaFiles = express.static(config.cacheDir, {
     fallthrough: false, dotfiles: 'deny', index: false,
-    // Pack-authored HTML/SVG must not execute in the app's origin when opened directly.
-    setHeaders: (res) => {
+    setHeaders: (res, filePath) => {
       res.setHeader('Cache-Control', 'private, no-store');
-      res.setHeader('Content-Security-Policy', 'sandbox');
+      // HTML may render in an iframe, but must not run scripts or contact other origins.
+      res.setHeader('Content-Security-Policy', /\.html?$/i.test(filePath)
+        ? "sandbox allow-same-origin; default-src 'none'; script-src 'none'; img-src 'self' data:; media-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; frame-src 'none'; connect-src 'none'; form-action 'none'; base-uri 'none'"
+        : 'sandbox');
       res.setHeader('X-Content-Type-Options', 'nosniff');
       res.setHeader('Referrer-Policy', 'no-referrer');
     },
-  }),
-);
+  });
+
+// The ticket is in the path so relative HTML images and styles keep it.
+app.use('/media-html/:ticket', (req: Request, res: Response, next: NextFunction) => {
+  if (!room.canAccessMedia(req.params.ticket, `/media${req.path}`)) { res.status(403).end(); return; }
+  next();
+}, mediaTranscode, mediaFiles);
+
+app.use('/media', (req: Request, res: Response, next: NextFunction) => {
+  if (!room.canAccessMedia(req.query.ticket, `/media${req.path}`)) { res.status(403).end(); return; }
+  next();
+}, mediaTranscode, mediaFiles);
 
 /** Static web client assets (index.html, style.css, etc.). */
 if (fs.existsSync(config.publicDir)) {

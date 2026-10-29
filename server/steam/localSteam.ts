@@ -104,7 +104,7 @@ async function getSteamworksClient(appId: number): Promise<SteamworksClient> {
   if (steamInitError) throw steamInitError;
 
   try {
-    const steamworks = await import('steamworks.js');
+    const steamworks = await import(process.env.SIGAME_STEAMWORKS_PATH ?? 'steamworks.js') as typeof import('steamworks.js');
     steamClient = steamworks.init(appId);
     return steamClient;
   } catch (err) {

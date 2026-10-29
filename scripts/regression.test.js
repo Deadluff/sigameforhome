@@ -85,6 +85,94 @@ test('connected player recovers moderation after host grace expires', (t) => {
   assert.equal(room.canModerate(player.id), false);
 });
 
+test('a new game waits for a player still within reconnect grace', (t) => {
+  const room = new Room();
+  const host = room.join('Host').participant;
+  room.attach(host.id, 'host-socket');
+  room.chooseInitialRole(host.id, 'host');
+  const player = room.join('Player').participant;
+  room.attach(player.id, 'player-socket');
+  room.setPack(loaded);
+  room.detach(player.id, 'player-socket');
+  t.after(() => {
+    room.engine.reset();
+    for (const timer of room.removalTimers.values()) clearTimeout(timer);
+  });
+
+  assert.throws(() => room.engine.start(), /connected player/);
+  assert.equal(room.engine.phase, 'lobby');
+  assert.equal(room.participants.has(player.id), true, 'the player can still reconnect');
+  room.attach(player.id, 'reconnected-socket');
+  room.engine.start();
+  assert.equal(room.engine.phase, 'board');
+  assert.equal(room.engine.activePlayers().length, 1);
+});
+
+test('expired in-game seats are released when the game returns to the lobby', (t) => {
+  const { room, host, player } = createRoom(t);
+  room.updateSettings(host.id, { maxPlayers: 2 });
+  const second = room.join('Second').participant;
+  room.attach(second.id, 'second-socket');
+  const waiting = room.join('Waiting').participant;
+  room.attach(waiting.id, 'waiting-socket');
+  assert.equal(waiting.role, 'spectator');
+
+  room.detach(player.id, 'player-socket');
+  clearTimeout(room.removalTimers.get(player.id));
+  room.expire(player.id);
+  assert.equal(room.participants.has(player.id), true, 'active games retain departed scores');
+
+  room.engine.stop();
+  assert.equal(room.participants.has(player.id), false);
+  assert.equal(waiting.role, 'player');
+});
+
+test('a new game replaces expired seats with connected waiting spectators', (t) => {
+  const { room, host, player } = createRoom(t);
+  room.updateSettings(host.id, { maxPlayers: 2 });
+  const second = room.join('Second').participant;
+  room.attach(second.id, 'second-socket');
+  const waiting = room.join('Waiting').participant;
+  room.attach(waiting.id, 'waiting-socket');
+  room.detach(player.id, 'player-socket');
+  clearTimeout(room.removalTimers.get(player.id));
+  room.expire(player.id);
+
+  room.engine.finish();
+  room.engine.start();
+  assert.equal(room.participants.has(player.id), false);
+  assert.equal(waiting.role, 'player');
+});
+
+test('a disconnected waiting spectator does not take a freed lobby player seat', (t) => {
+  const room = new Room();
+  const host = room.join('Host').participant;
+  room.attach(host.id, 'host-socket');
+  room.chooseInitialRole(host.id, 'host');
+  room.updateSettings(host.id, { maxPlayers: 2 });
+  const players = ['First', 'Second'].map((name) => {
+    const p = room.join(name).participant;
+    room.attach(p.id, name);
+    return p;
+  });
+  const offline = room.join('Offline').participant;
+  room.attach(offline.id, 'offline-socket');
+  const online = room.join('Online').participant;
+  room.attach(online.id, 'online-socket');
+  room.detach(offline.id, 'offline-socket');
+  t.after(() => {
+    room.engine.reset();
+    for (const timer of room.removalTimers.values()) clearTimeout(timer);
+  });
+
+  room.remove(players[0].id);
+  assert.equal(offline.role, 'spectator');
+  assert.equal(online.role, 'player');
+  room.remove(players[1].id);
+  room.attach(offline.id, 'offline-returned');
+  assert.equal(offline.role, 'player');
+});
+
 test('display-only TV never inherits a freed player seat', (t) => {
   const room = new Room();
   const host = room.join('Host').participant;
@@ -113,6 +201,29 @@ test('guided secret questions assign one player and use the chosen value', (t) =
   assert.equal(room.engine.buzzer.winnerId, player.id);
   room.engine.judge(false);
   assert.equal(player.score, -200);
+});
+
+test('secret assignment countdown uses its setting and stops when a recipient is chosen', (t) => {
+  const { room, host, player } = createRoom(t, 'classic');
+  room.updateSettings(host.id, { timeForGivingACat: 9 });
+  room.engine.selectQuestion(host.id, true, 0, 2);
+  assert.equal(room.engine.timer?.name, 'givingCat');
+  assert.equal(room.engine.timer?.durationMs, 9000);
+  room.engine.pause();
+  room.engine.resume();
+  assert.equal(room.engine.timer?.name, 'givingCat');
+  room.engine.configureSpecial(player.id, 200);
+  assert.equal(room.engine.phase, 'reading');
+  assert.equal(room.engine.timer?.name, 'reading');
+});
+
+test('a chosen secret value cannot overflow the recipient score', (t) => {
+  const { room, host, player } = createRoom(t, 'classic');
+  player.score = Number.MAX_SAFE_INTEGER;
+  room.engine.selectQuestion(host.id, true, 0, 2);
+  assert.throws(() => room.engine.configureSpecial(player.id, 200), /safe score/);
+  assert.equal(room.engine.phase, 'specialSetup');
+  assert.equal(player.score, Number.MAX_SAFE_INTEGER);
 });
 
 test('no-risk question never subtracts points for a wrong answer', (t) => {
@@ -262,8 +373,33 @@ test('restart replays an interrupted stake auction from the board', async (t) =>
   const restored = new Room();
   t.after(() => restored.engine.reset());
   await restoreRoom(restored, stateFile);
+  assert.equal(restored.engine.phase, 'paused');
+  restored.engine.resume();
   assert.equal(restored.engine.phase, 'board');
   assert.equal(restored.engine.isAvailable(0, 4), true);
+});
+
+test('restart keeps a paused round clock stopped until play resumes', async (t) => {
+  const { room } = createRoom(t);
+  const stateFile = path.join(root, 'paused-round-state.json');
+  room.engine.roundEndsAt = Date.now() + 30;
+  room.engine.pause();
+  await persistRoom(room, stateFile)();
+
+  const restored = new Room();
+  t.after(() => restored.engine.reset());
+  await restoreRoom(restored, stateFile);
+  assert.equal(restored.engine.phase, 'paused');
+  assert.equal(restored.engine.paused?.phase, 'board');
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.equal(restored.engine.phase, 'paused');
+  restored.engine.resume();
+  assert.equal(restored.engine.phase, 'board');
+  const deadline = Date.now() + 1000;
+  while (restored.engine.phase !== 'roundEnd' && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(restored.engine.phase, 'roundEnd');
 });
 
 test('restart replays an interrupted for-all answer session from the board', async (t) => {

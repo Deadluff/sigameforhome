@@ -74,6 +74,33 @@ test('all players submit privately; host judges fixed-price answers separately',
   assert.equal(engine.forAll, null);
 });
 
+test('undo restores for-all judging slots and hides a revealed answer', (t) => {
+  const { room, host, players: [alice, bob] } = game(t);
+  const engine = room.engine;
+  engine.openForAllAnswers();
+  engine.submitForAllAnswer(alice.id, 'First');
+  engine.submitForAllAnswer(bob.id, 'Second');
+  const presentationId = engine.current.presentationId;
+  engine.judgeForAll(alice.id, true);
+  engine.judgeForAll(bob.id, false);
+  assert.equal(engine.phase, 'reveal');
+  assert.equal(engine.current.answerShown, true);
+  assert.equal(alice.score, 100);
+  assert.equal(bob.score, -100);
+
+  engine.undoJudgment(presentationId, 2);
+  assert.equal(engine.phase, 'forAllJudge');
+  assert.equal(engine.current.answerShown, false);
+  assert.equal(bob.score, 0);
+  assert.deepEqual([...engine.forAll.judged], [alice.id]);
+  assert.equal(room.snapshotFor(bob.id).game.current.right, null);
+  engine.undoJudgment(presentationId, 1);
+  assert.equal(alice.score, 0);
+  assert.deepEqual([...engine.forAll.judged], []);
+  engine.judgeForAll(alice.id, false);
+  assert.equal(alice.score, -100);
+});
+
 test('timeout leaves blanks to judge; pause and skip keep answers hidden', (t) => {
   const { room, host, players: [alice, bob] } = game(t);
   const engine = room.engine;
@@ -131,10 +158,53 @@ test('removed player cannot block judging or reveal', (t) => {
   engine.openForAllAnswers();
   engine.submitForAllAnswer(alice.id, 'Answer');
   room.remove(bob.id);
-  engine.closeForAllAnswers();
+  assert.equal(engine.phase, 'forAllJudge');
   assert.deepEqual(Object.keys(room.snapshotFor(host.id).game.forAll.answers), [alice.id]);
   engine.judgeForAll(alice.id, true);
   assert.equal(engine.phase, 'reveal');
+});
+
+test('disconnecting the last unanswered player closes collection without exposing answers', (t) => {
+  const { room, host, players: [alice, bob] } = game(t);
+  const engine = room.engine;
+  engine.openForAllAnswers();
+  engine.submitForAllAnswer(alice.id, 'Private answer');
+  room.detach(bob.id, 'player-1');
+  assert.equal(engine.phase, 'forAllJudge');
+  assert.equal(room.snapshotFor(alice.id).game.forAll.answers, null);
+  assert.deepEqual(room.snapshotFor(host.id).game.forAll.answers,
+    { [alice.id]: 'Private answer', [bob.id]: '' });
+});
+
+test('reseating the last unanswered player closes collection', (t) => {
+  const { room, host, players: [alice, bob] } = game(t);
+  const engine = room.engine;
+  engine.openForAllAnswers();
+  engine.submitForAllAnswer(alice.id, 'Answer');
+  room.setRole(host.id, bob.id, 'spectator');
+  assert.equal(engine.phase, 'forAllJudge');
+  engine.judgeForAll(alice.id, true);
+  assert.equal(engine.phase, 'reveal');
+});
+
+test('a disconnect while paused closes for-all collection on resume', (t) => {
+  const { room, players: [alice, bob] } = game(t);
+  const engine = room.engine;
+  engine.openForAllAnswers();
+  engine.submitForAllAnswer(alice.id, 'Answer');
+  engine.pause();
+  room.detach(bob.id, 'player-1');
+  assert.equal(engine.phase, 'paused');
+  engine.resume();
+  assert.equal(engine.phase, 'forAllJudge');
+});
+
+test('opening for-all collection with no connected answerers does not run an empty timer', (t) => {
+  const { room, players: [alice, bob] } = game(t);
+  room.detach(alice.id, 'player-0');
+  room.detach(bob.id, 'player-1');
+  room.engine.openForAllAnswers();
+  assert.equal(room.engine.phase, 'forAllJudge');
 });
 
 test('reseated spectator is no longer an eligible answerer', (t) => {

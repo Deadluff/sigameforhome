@@ -55,7 +55,8 @@ if (build.error || build.status !== 0) {
   process.exit(build.status || 1);
 }
 
-const packsDir = path.join(root, 'packs');
+// Seed the same pack directory the server will read when PACKS_DIR is overridden.
+const packsDir = path.resolve(root, process.env.PACKS_DIR ?? 'packs');
 fs.mkdirSync(packsDir, { recursive: true });
 if (!fs.readdirSync(packsDir).some((name) => name.toLowerCase().endsWith('.siq'))) {
   // A fresh install should be playable before the host downloads a pack.

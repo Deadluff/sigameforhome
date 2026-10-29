@@ -157,6 +157,42 @@ const num = (v: unknown, fallback = 0): number => {
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
 };
+const MAX_PACK_PRICE = 1_000_000;
+function scoreNumber(value: unknown, label: string, minimum = 0): number {
+  const amount = Number(value);
+  // A 10 MB XML pack can hold many questions; bound each value so totals stay exact.
+  if (!Number.isSafeInteger(amount) || amount < minimum || amount > MAX_PACK_PRICE) {
+    throw new Error(`${label} must be a whole number from ${minimum} to ${MAX_PACK_PRICE}`);
+  }
+  return amount;
+}
+
+function validateQuestionNumbers(pkg: XmlNode): void {
+  for (const round of asArray(pkg.rounds?.round)) {
+    for (const theme of asArray(round.themes?.theme)) {
+      for (const question of asArray(theme.questions?.question)) {
+        scoreNumber(attr(question, 'price', '0'), 'Question price', -1);
+        for (const param of asArray(question.params?.param)) {
+          if (attr(param, 'type') === 'numberSet') {
+            parseNumberSet(param.numberSet ?? {});
+          }
+        }
+        if (['cat', 'bagcat'].includes(attr(question.type, 'name').toLowerCase())) {
+          const cost = asArray(question.type?.param).find((param) => attr(param, 'name') === 'cost');
+          parseLegacyCost(text(cost));
+        }
+      }
+    }
+  }
+}
+
+function parseNumberSet(ns: XmlNode): NumberSet {
+  const minimum = scoreNumber(attr(ns, 'minimum', '0'), 'Stake minimum');
+  const maximum = scoreNumber(attr(ns, 'maximum', '0'), 'Stake maximum');
+  const step = scoreNumber(attr(ns, 'step', '0'), 'Stake step');
+  if (maximum < minimum) throw new Error('Stake maximum must not be below minimum');
+  return { minimum, maximum, step };
+}
 
 function parseInfo(infoNode: XmlNode | undefined): Info {
   return {
@@ -232,6 +268,31 @@ function entryDiskSegments(entryName: string): string[] {
   return entryName.split('/').filter(Boolean).map((s) => sanitizeSegment(safeDecode(s)));
 }
 
+const MAX_MEDIA_ENTRY_BYTES = 256 * 1024 * 1024;
+
+function validateMediaEntries(entries: IZipEntry[]): void {
+  const paths = new Set<string>();
+  for (const entry of entries) {
+    if (entry.isDirectory) continue;
+    const segments = entryDiskSegments(entry.entryName);
+    if (segments.length < 2 || !Object.values(MEDIA_FOLDERS).includes(segments[0].toLowerCase())) continue;
+    // AdmZip expands each entry into one buffer during extraction.
+    if (entry.header.size > MAX_MEDIA_ENTRY_BYTES) throw new Error('Pack media file exceeds 256 MB when extracted');
+    // Sanitizing archive names can merge distinct question and answer files on disk.
+    const diskPath = segments.join('/').normalize('NFC').toLowerCase();
+    if (paths.has(diskPath)) throw new Error('Pack media paths collide after sanitization');
+    paths.add(diskPath);
+  }
+}
+
+function validateArchiveEntries(entries: IZipEntry[]): void {
+  const expanded = entries.reduce((sum, entry) => sum + (entry.header?.size ?? 0), 0);
+  if (entries.length > 5000 || expanded > 1024 * 1024 * 1024) {
+    throw new Error('Pack has too many files or exceeds 1 GB when extracted');
+  }
+  validateMediaEntries(entries);
+}
+
 interface MakeItemInput {
   type: ContentType;
   value: string;
@@ -275,8 +336,16 @@ const LEGACY_ATOM_TYPES: Record<string, ContentType> = {
 function parseLegacyCost(raw: unknown): NumberSet {
   const s = String(raw ?? '').trim();
   const range = s.match(/^\[\s*(\d+)\s*[;,]\s*(\d+)\s*\](?:\s*\/\s*(\d+))?$/);
-  if (range) return { minimum: num(range[1]), maximum: num(range[2]), step: num(range[3], 0) };
-  const n = num(s, 0);
+  if (range) {
+    const parsed = {
+      minimum: scoreNumber(range[1], 'Stake minimum'),
+      maximum: scoreNumber(range[2], 'Stake maximum'),
+      step: scoreNumber(range[3] ?? 0, 'Stake step'),
+    };
+    if (parsed.maximum < parsed.minimum) throw new Error('Stake maximum must not be below minimum');
+    return parsed;
+  }
+  const n = scoreNumber(s || 0, 'Stake price');
   return { minimum: n, maximum: n, step: 0 };
 }
 
@@ -381,12 +450,7 @@ function parseModernQuestion(q: XmlNode, resolver: MediaResolver) {
     if (name === 'question') content = parseContentParam(p, resolver);
     else if (name === 'answer') answerContent = parseContentParam(p, resolver);
     else if (kind === 'numberSet') {
-      const ns = p.numberSet ?? {};
-      typeParams[name] = {
-        minimum: num(attr(ns, 'minimum')),
-        maximum: num(attr(ns, 'maximum')),
-        step: num(attr(ns, 'step')),
-      } satisfies NumberSet;
+      typeParams[name] = parseNumberSet(p.numberSet ?? {});
     } else if (kind === 'content') typeParams[name] = parseContentParam(p, resolver);
     else typeParams[name] = text(p);
   }
@@ -404,7 +468,7 @@ function parseQuestion(q: XmlNode, resolver: MediaResolver): Question {
   const isModern = q.params != null || q.scenario == null;
   const parsed = isModern ? parseModernQuestion(q, resolver) : parseLegacyQuestion(q, resolver);
   return {
-    price: num(attr(q, 'price'), 0),
+    price: scoreNumber(attr(q, 'price', '0'), 'Question price', -1),
     ...parsed,
     right: asArray(q.right?.answer).map(text).filter(Boolean),
     wrong: asArray(q.wrong?.answer).map(text).filter(Boolean),
@@ -472,12 +536,16 @@ export function isSiqArchive(filePath: string): boolean {
 
 export function readPackHeader(filePath: string): PackHeader {
   const zip = new AdmZip(filePath);
+  // Surface the same archive limits in the pack list before the host tries to load it.
+  validateArchiveEntries(zip.getEntries());
   const entry = findContentEntry(zip);
   if (!entry) throw new Error('content.xml not found');
   // Listing is allowed before loading, so it needs the same XML bound as parseSiq.
   if (entry.header.size > MAX_CONTENT_XML_BYTES) throw new Error('Pack content.xml exceeds 10 MB');
   const root = xmlParser.parse(entry.getData().toString('utf8'));
-  const pkg = root.package ?? {};
+  const pkg = root.package;
+  if (!pkg) throw new Error('content.xml has no <package> root element');
+  validateQuestionNumbers(pkg);
   return {
     name: attr(pkg, 'name', path.basename(filePath, '.siq')),
     rounds: asArray(pkg.rounds?.round).length,
@@ -510,10 +578,7 @@ export async function parseSiq(
   const zip = new AdmZip(filePath);
   // Bound untrusted archive expansion before reading any entry into memory.
   const entries = zip.getEntries();
-  const expanded = entries.reduce((sum, entry) => sum + (entry.header?.size ?? 0), 0);
-  if (entries.length > 5000 || expanded > 1024 * 1024 * 1024) {
-    throw new Error('Pack has too many files or exceeds 1 GB when extracted');
-  }
+  validateArchiveEntries(entries);
   const contentEntry = findContentEntry(zip);
   if (!contentEntry) throw new Error(`"${path.basename(filePath)}" is not a valid .siq (content.xml missing)`);
   if (contentEntry.header.size > MAX_CONTENT_XML_BYTES) throw new Error('Pack content.xml exceeds 10 MB');

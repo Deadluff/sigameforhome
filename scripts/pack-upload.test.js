@@ -7,7 +7,7 @@ import { Readable } from 'node:stream';
 import { test } from 'node:test';
 import AdmZip from 'adm-zip';
 import { Room } from '../server/game/Room.ts';
-import { canUpload, saveUploadedPack, UploadError, uploadFileStem } from '../server/packs/upload.ts';
+import { canUpload, MAX_UPLOAD_BYTES, saveUploadedPack, UploadError, uploadFileStem } from '../server/packs/upload.ts';
 
 function fixture() {
   const zip = new AdmZip();
@@ -45,6 +45,40 @@ test('encoded Unicode names are safe and repeated uploads keep both files', asyn
   assert.notEqual(first.file, second.file);
   assert.match(first.file, /^Київські питання-[a-f0-9]{8}\.siq$/);
   assert.deepEqual((await fsp.readdir(dir)).sort(), [first.file, second.file].sort());
+});
+
+test('an upload revoked while streaming cannot publish a pack', async (t) => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'sigame-upload-revoked-'));
+  const room = new Room();
+  const { participant: host, token } = room.join('Host');
+  room.attach(host.id, 'host-socket');
+  room.chooseInitialRole(host.id, 'host');
+  const authorization = `Bearer ${token}`;
+  t.after(async () => {
+    for (const timer of room.removalTimers.values()) clearTimeout(timer);
+    await fsp.rm(dir, { recursive: true, force: true });
+  });
+
+  let firstChunkSent;
+  let continueUpload;
+  const firstChunk = new Promise((resolve) => { firstChunkSent = resolve; });
+  const released = new Promise((resolve) => { continueUpload = resolve; });
+  const bytes = fixture();
+  const source = Readable.from((async function* () {
+    yield bytes.subarray(0, 10);
+    firstChunkSent();
+    await released;
+    yield bytes.subarray(10);
+  })());
+
+  assert.equal(canUpload(room, authorization), true);
+  const pending = saveUploadedPack(source, 'revoked.siq', dir, MAX_UPLOAD_BYTES,
+    () => canUpload(room, authorization));
+  await firstChunk;
+  room.detach(host.id, 'host-socket');
+  continueUpload();
+  await assert.rejects(pending, (err) => err instanceof UploadError && err.status === 403);
+  assert.deepEqual(await fsp.readdir(dir), []);
 });
 
 test('invalid names and archives fail without leaving partial files', async (t) => {

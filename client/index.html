@@ -9,7 +9,8 @@
 <body>
   <main id="app">
     <section id="screen-join" class="screen card">
-      <h1>SIGame Local</h1>
+      <div class="join-heading"><h1>SI<span>Game</span></h1><span>LOCAL</span></div>
+      <p class="join-intro">A fast quiz night with your friends. Pick a name to enter the game.</p>
       <form id="join-form">
         <label for="nickname">Nickname</label>
         <input id="nickname" maxlength="24" placeholder="Your nickname" autocomplete="off" required />
@@ -19,23 +20,34 @@
     </section>
 
     <section id="screen-role" class="screen card hidden">
-      <h2>You are the first one here!</h2>
+      <div class="join-heading"><h2>Choose your seat</h2><span>LOCAL</span></div>
+      <p>You are the first one here.</p>
       <p>How do you want to play?</p>
       <div class="row">
-        <button data-role="host" class="big">🎙️ Host (Ведущий)</button>
-        <button data-role="player" class="big">🔔 Player (Игрок)</button>
+        <button data-role="host" class="big">🎙️ Host</button>
+        <button data-role="player" class="big">🔔 Player</button>
       </div>
+      <button id="btn-leave-role" type="button">Leave room</button>
     </section>
 
     <section id="screen-game" class="screen hidden">
       <header class="topbar">
+        <strong class="brand" aria-label="SIGame Local">SI<span>Game</span><small>LOCAL</small></strong>
         <span id="me"></span>
         <span id="phase" role="status" aria-live="polite"></span>
         <span id="timer"></span>
+        <button id="btn-leave" type="button">Leave room</button>
       </header>
       <div id="connection-status" role="status" aria-live="polite"></div>
 
       <div id="players" class="players"></div>
+      <section id="results" class="card hidden" aria-labelledby="results-title">
+        <h2 id="results-title">Final results</h2>
+        <p id="results-winner"></p>
+        <ol id="results-list"></ol>
+        <p id="results-hint"></p>
+        <button id="btn-rematch" type="button" class="hidden">▶ Rematch</button>
+      </section>
 
       <!-- High-visibility stage & buzzer orientier banner (reading / buzz open / answering / reveal) -->
       <div id="stage-banner" class="stage-banner hidden">
@@ -83,7 +95,7 @@
               <label class="setting-toggle">
                 <input type="checkbox" id="set-falseStart" />
                 <div>
-                  <strong>Фальшстарт (False start / Block buzz during reading)</strong>
+                  <strong>False start penalty</strong>
                   <small id="set-falseStart-desc"></small>
                 </div>
               </label>
@@ -101,6 +113,7 @@
 
               <div class="settings-grid">
                 <label><span>Game mode</span><select id="set-gameMode"><option value="classic">Guided (standard, no-risk, stake, secret, for-all, final)</option><option value="simple">Simple (special questions use normal rules)</option></select></label>
+                <label><span>Player slots</span><input type="number" id="set-maxPlayers" min="2" max="12" /></label>
                 <label>
                   <span>⏱️ Penalty block on false start (sec)</span>
                   <input type="number" id="set-timeForBlockingButton" min="0" max="10" />
@@ -142,6 +155,14 @@
                   <span>Do not subtract points for wrong answers</span>
                 </label>
                 <label class="setting-check">
+                  <input type="checkbox" id="set-partialText" />
+                  <span>Reveal question text gradually while reading</span>
+                </label>
+                <label class="setting-check">
+                  <input type="checkbox" id="set-oral" />
+                  <span>Spoken answers (turn off for private written answers)</span>
+                </label>
+                <label class="setting-check">
                   <input type="checkbox" id="set-playAllQuestionsInFinalRound" />
                   <span>Play every final theme (one question per theme)</span>
                 </label>
@@ -164,6 +185,16 @@
       <div id="board" class="board"></div>
       <div id="question" class="card question-card hidden"></div>
       <div id="host-answer" class="card hidden" aria-live="off"></div>
+      <section id="typed-answer" class="card hidden" aria-labelledby="typed-answer-title">
+        <h3 id="typed-answer-title">Written answer</h3>
+        <p id="typed-answer-status" role="status" aria-live="polite"></p>
+        <p id="typed-answer-host" class="hidden"></p>
+        <form id="typed-answer-form" class="hidden">
+          <label for="typed-answer-input">Your private answer</label>
+          <textarea id="typed-answer-input" rows="3" maxlength="350" required></textarea>
+          <button type="submit">Submit answer</button>
+        </form>
+      </section>
       <form id="special-setup" class="card hidden">
         <strong>Special question setup</strong>
         <div class="row"><label for="special-player">Answering player</label><select id="special-player" required></select>
@@ -225,6 +256,7 @@
         <button data-act="game:openBuzzer" id="btn-open-buzzer">🔓 Open buttons now</button>
         <button data-act="judge-ok" class="ok">✔ Correct</button>
         <button data-act="judge-bad" class="bad">✘ Wrong</button>
+        <button id="btn-undo-judgment" type="button" class="hidden">↶ Undo verdict</button>
         <button data-act="game:reveal">👁️ Show answer</button>
         <button data-act="game:next">Next ▶</button>
         <button data-act="game:nextRound">⏭️ Next round</button>

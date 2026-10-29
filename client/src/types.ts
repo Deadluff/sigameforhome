@@ -13,6 +13,9 @@ export interface ContentItem {
   value: string;
   url: string | null;
   missing?: boolean;
+  placement?: 'screen' | 'replic' | 'background';
+  duration?: number | null;
+  waitForFinish?: boolean;
 }
 
 export interface RoomState {
@@ -31,14 +34,18 @@ export interface RoomState {
     useApellations: boolean;
     timeForBlockingButton: number;
     readingSpeed: number;
+    partialText: boolean;
+    oral: boolean;
     timeForThinkingOnQuestion: number;
     timeForPrintingAnswer: number;
     timeForMakingStake: number;
     timeForThinkingOnSpecial: number;
     timeForFinalThinking: number;
     timeOfRound: number;
+    timeForMediaDelay: number;
     buzzSyncMode: 'server' | 'clientTimestamp';
     buzzSyncWindowMs: number;
+    maxPlayers: number;
     [key: string]: string | number | boolean;
   };
   pack: {
@@ -52,10 +59,12 @@ export interface RoomState {
     roundIndex: number;
     round: { name: string; type: string } | null;
     chooserId: string | null;
+    undoJudgment: { presentationId: string; judgmentId: number; playerId: string } | null;
     removedFinalThemes: number[];
     board: { name: string; questions: { price: number; available: boolean }[] }[];
     timer: { name: string; endsAt: number; durationMs: number } | null;
     current: {
+      presentationId: string;
       themeIndex: number;
       questionIndex: number;
       themeName: string;
@@ -68,9 +77,11 @@ export interface RoomState {
       right: string[] | null;
       answerContent: ContentItem[] | null;
       comments: string | null;
+      sources: string[] | null;
     } | null;
     buzzer: {
       winnerId: string | null;
+      typedAnswer: { text: string | null; submitted: boolean; closed: boolean } | null;
       winnerInfo: { mode: 'server' | 'clientTimestamp' | 'random'; reactionMs: number; transitMs?: number; contenders?: number } | null;
       attempted: string[];
       blockedUntil: number | null;
@@ -115,8 +126,9 @@ export interface RoomState {
 export interface PackListItem {
   file: string;
   name: string;
-  rounds?: number;
+  rounds?: number | null;
   size: number;
+  error?: string;
 }
 
 export interface Ack {
@@ -128,12 +140,15 @@ export interface Ack {
 export type JoinAck = { ok: true; token: string } | { ok: false; error: string };
 
 export type NoPayloadCommand =
-  | 'packs:list' | 'game:start' | 'game:stop' | 'game:pause' | 'game:resume'
+  | 'session:leave' | 'packs:list' | 'game:start' | 'game:stop' | 'game:pause' | 'game:resume'
   | 'game:openFinal' | 'game:closeFinal' | 'game:openBuzzer'
   | 'game:reveal' | 'game:next' | 'game:nextRound' | 'game:stakePass' | 'game:closeForAll'
   | 'game:appealClose';
 
 export interface CommandPayloads {
+  'game:undoJudgment': { presentationId: string; judgmentId: number };
+  'game:answer': { answer: string };
+  'participant:kick': { targetId: string };
   'role:choose': { role: 'host' | 'player' };
   'role:set': { targetId: string; role: 'host' | 'spectator' };
   'score:adjust': { targetId: string; delta: number };
@@ -151,6 +166,7 @@ export interface CommandPayloads {
   'game:judgeForAll': { playerId: string; correct: boolean };
   'game:appealRequest': { judgmentId: number };
   'game:appealVote': { support: boolean };
+  'game:contentFinished': { presentationId: string };
 }
 
 export type CommandEvent = NoPayloadCommand | keyof CommandPayloads;
