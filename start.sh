@@ -65,10 +65,10 @@ mkdir -p packs
 # Create demo packs if the packs folder has no .siq files yet
 if ! ls packs/*.siq >/dev/null 2>&1; then
   echo "  Creating sample packs in packs/..."
-  node scripts/make-sample-pack.js
+  npx --no-install tsx scripts/make-sample-pack.ts
 fi
 
-node server/index.js
+npx --no-install tsx server/index.ts
 echo ""
 echo "  Server stopped."
 pause_if_finder

@@ -47,7 +47,7 @@ if "%NEED_INSTALL%"=="1" (
 
 if not exist "packs" mkdir packs
 
-node server\index.js
+call npx --no-install tsx server\index.ts
 echo.
 echo  Server stopped.
 pause

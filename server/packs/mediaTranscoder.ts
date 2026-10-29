@@ -1,47 +1,35 @@
 /**
  * Apple / iOS / iPadOS media compatibility layer.
  *
- * Why videos in many SIGame Workshop packs fail on iPhone & iPad:
- *   1. Codec incompatibility: Pack compressor scripts (e.g. "crf45_speed100_norm")
- *      encode `.mp4` files with **AV1 (`av01`) video + Opus (`Opus`) audio** (or VP9/WebM)
- *      to shrink pack sizes. iOS/iPadOS Safari only supports **H.264 (`avc1`) / HEVC (`hvc1`)**
- *      video + **AAC (`mp4a`) / MP3** audio in MP4 containers (and only decodes AV1 in hardware
- *      on iPhone 15 Pro+, while still rejecting Opus-in-MP4 in `<video>` elements).
- *   2. Autoplay & inline playback restrictions: iOS Safari blocks unmuted `autoplay` unless
- *      a `<video>` element has `playsinline` (`webkit-playsinline`) and either starts muted or
- *      was unlocked during a user tap gesture.
- *
- * This module inspects media files and transparently transcodes incompatible video/audio
- * into universally supported H.264 (`yuv420p`) + AAC (`+faststart` for HTTP byte-range
- * streaming required by Safari), caching the converted files alongside the extracted pack.
+ * Inspects media files and transparently transcodes incompatible video/audio
+ * (AV1/VP9/Opus) into universally supported H.264 (`yuv420p`) + AAC (`+faststart`
+ * for HTTP byte-range streaming required by Safari).
  */
 import { execFile } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import ffmpegPath from 'ffmpeg-static';
-import { pathExists, walkFiles } from '../utils/fsx.js';
+import ffmpegStatic from 'ffmpeg-static';
+import { pathExists, walkFiles } from '../utils/fsx.ts';
 
 const execFileAsync = promisify(execFile);
+const ffmpegPath = ffmpegStatic as unknown as string | null;
 
 const VIDEO_EXTS = new Set(['.mp4', '.m4v', '.mov', '.webm', '.mkv', '.avi']);
 const AUDIO_EXTS = new Set(['.ogg', '.opus', '.weba', '.flac']);
 
 /** In-flight transcode promises keyed by absolute file path so concurrent requests share one job. */
-const activeTranscodes = new Map();
+const activeTranscodes = new Map<string, Promise<string>>();
 
 /**
  * Inspects an MP4/MOV file's header/boxes to check if it is already iOS-compatible
  * (H.264 `avc1` video and no `av01` / `vp09` / `Opus` / `vorb` tracks).
- * @param {string} filePath
- * @returns {Promise<boolean>} true if transcoding is needed for iOS/iPadOS
  */
-export async function needsIosVideoTranscode(filePath) {
+export async function needsIosVideoTranscode(filePath: string): Promise<boolean> {
   const ext = path.extname(filePath).toLowerCase();
   if (!VIDEO_EXTS.has(ext)) return false;
   if (ext !== '.mp4' && ext !== '.m4v' && ext !== '.mov') {
-    // .webm, .mkv, .avi always need transcoding for iOS Safari
     return true;
   }
 
@@ -49,7 +37,6 @@ export async function needsIosVideoTranscode(filePath) {
     const buf = await fsp.readFile(filePath);
     const latin = buf.toString('latin1');
 
-    // If our marker is already in the file metadata, it was already transcoded by us.
     if (latin.includes('sigamelocal-ios')) return false;
 
     const hasAv1 = latin.includes('av01');
@@ -58,34 +45,26 @@ export async function needsIosVideoTranscode(filePath) {
     const hasVorbis = latin.includes('vorb');
     const hasH264 = latin.includes('avc1');
 
-    if (hasAv1 || hasVp9 || hasOpus || hasVorbis || !hasH264) {
-      return true;
-    }
-    return false;
+    return hasAv1 || hasVp9 || hasOpus || hasVorbis || !hasH264;
   } catch {
     return false;
   }
 }
 
-/**
- * Checks if an audio file needs transcoding for iOS Safari (e.g. .ogg / .opus).
- * @param {string} filePath
- */
-export function needsIosAudioTranscode(filePath) {
+export function needsIosAudioTranscode(filePath: string): boolean {
   const ext = path.extname(filePath).toLowerCase();
   return AUDIO_EXTS.has(ext);
 }
 
 /**
- * Transcodes a single video file in-place to H.264 (yuv420p) + AAC with `+faststart`
+ * Transcodes a single video/audio file in-place to H.264 (yuv420p) + AAC with `+faststart`
  * so iPhone, iPad, Android, and desktop browsers can all stream it via HTTP Range requests.
- * @param {string} filePath
- * @returns {Promise<string>} path to the compatible file
  */
-export function ensureIosCompatibleMedia(filePath) {
-  if (activeTranscodes.has(filePath)) return activeTranscodes.get(filePath);
+export function ensureIosCompatibleMedia(filePath: string): Promise<string> {
+  const existing = activeTranscodes.get(filePath);
+  if (existing) return existing;
 
-  const job = (async () => {
+  const job = (async (): Promise<string> => {
     if (!ffmpegPath || !(await pathExists(filePath))) return filePath;
 
     if (await needsIosVideoTranscode(filePath)) {
@@ -107,8 +86,6 @@ export function ensureIosCompatibleMedia(filePath) {
             'libx264',
             '-preset',
             'ultrafast',
-            '- profile:v',
-            'main',
             '-pix_fmt',
             'yuv420p',
             '-crf',
@@ -124,13 +101,13 @@ export function ensureIosCompatibleMedia(filePath) {
             '-movflags',
             '+faststart',
             tmpOut,
-          ].filter((a) => a !== '- profile:v' && a !== 'main'), // keep full profile compatibility
+          ],
           { windowsHide: true, timeout: 120_000 },
         );
         await fsp.rename(tmpOut, filePath);
       } catch (err) {
         await fsp.rm(tmpOut, { force: true }).catch(() => {});
-        console.warn(`[transcode] Failed to convert video ${path.basename(filePath)}: ${err.message}`);
+        console.warn(`[transcode] Failed to convert video ${path.basename(filePath)}: ${(err as Error).message}`);
       }
       return filePath;
     }
@@ -149,7 +126,7 @@ export function ensureIosCompatibleMedia(filePath) {
         await fsp.writeFile(markerPath, '1');
       } catch (err) {
         await fsp.rm(tmpOut, { force: true }).catch(() => {});
-        console.warn(`[transcode] Failed to convert audio ${path.basename(filePath)}: ${err.message}`);
+        console.warn(`[transcode] Failed to convert audio ${path.basename(filePath)}: ${(err as Error).message}`);
       }
     }
 
@@ -163,12 +140,11 @@ export function ensureIosCompatibleMedia(filePath) {
 /**
  * Warms up all videos/audio in an extracted pack cache folder in the background
  * using a small worker pool so gameplay is never blocked.
- * @param {string} cacheDir
  */
-export async function backgroundTranscodePackMedia(cacheDir) {
+export async function backgroundTranscodePackMedia(cacheDir: string): Promise<void> {
   if (!ffmpegPath || !(await pathExists(cacheDir))) return;
   const files = await walkFiles(cacheDir);
-  const candidates = [];
+  const candidates: string[] = [];
 
   for (const f of files) {
     if ((await needsIosVideoTranscode(f)) || needsIosAudioTranscode(f)) {
@@ -181,7 +157,7 @@ export async function backgroundTranscodePackMedia(cacheDir) {
   console.log(`[media] Pre-converting ${candidates.length} media file(s) for iPhone/iPad compatibility…`);
 
   let index = 0;
-  const worker = async () => {
+  const worker = async (): Promise<void> => {
     while (index < candidates.length) {
       const file = candidates[index++];
       await ensureIosCompatibleMedia(file);

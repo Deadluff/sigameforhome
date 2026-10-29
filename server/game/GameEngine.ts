@@ -1,87 +1,165 @@
 /**
  * Game engine: the round/board/question/buzzer state machine.
- *
- * Scope of this first iteration (Step 2):
- *   ✔ rounds & board, question selection by chooser or host
- *   ✔ reading phase with SIGame-style false starts
- *   ✔ buzzer (first-wins or random-within-interval), answer judging, scoring
- *   ✔ round timer, server-side countdowns (clients only render `endsAt`)
- *   ✘ special question flows (secret/stake/noRisk/forAll) & final round – Step 6.
- *     They are already parsed and flagged in `current.type`; for now they play like simple questions.
- *
- * The engine never talks to sockets. It mutates state and calls room.changed()
- * / room.emitEvent(); the transport layer decides who receives what.
  */
-import { PHASES, ROLES } from './constants.js';
+import type { ContentItem, Package, Question, QuestionType, Round } from '../packs/siqParser.ts';
+import { PHASES, type Phase, ROLES } from './constants.ts';
+import type { Participant, Room } from './Room.ts';
+import type { GameSettings } from './settings.ts';
 
-const QUESTION_PHASES = new Set([PHASES.READING, PHASES.BUZZER_OPEN, PHASES.ANSWERING, PHASES.REVEAL]);
+const QUESTION_PHASES = new Set<Phase>([PHASES.READING, PHASES.BUZZER_OPEN, PHASES.ANSWERING, PHASES.REVEAL]);
+
+export interface ActiveTimer {
+  name: string;
+  durationMs: number;
+  endsAt: number;
+  handle: ReturnType<typeof setTimeout>;
+}
+
+export interface WinnerInfo {
+  mode: 'server' | 'clientTimestamp' | 'random';
+  reactionMs: number;
+  transitMs?: number;
+  contenders?: number;
+}
+
+export interface PendingBuzz {
+  playerId: string;
+  serverAt: number;
+  effectiveAt: number;
+  transitMs?: number;
+}
+
+export interface BuzzerState {
+  winnerId: string | null;
+  winnerInfo: WinnerInfo | null;
+  openedAt: number | null;
+  attempted: Set<string>;
+  blockedUntil: Map<string, number>;
+  pending: PendingBuzz[];
+  remainingMs: number | null;
+}
+
+export interface CurrentQuestionState {
+  themeIndex: number;
+  questionIndex: number;
+  themeName: string;
+  price: number;
+  type: QuestionType;
+  question: Question;
+  answerShown: boolean;
+}
+
+export type BuzzResult = 'accepted' | 'falseStart' | 'queued' | 'ignored';
+
+export interface GameView {
+  phase: Phase;
+  roundIndex: number;
+  round: { name: string; type: Round['type'] } | null;
+  roundEndsAt: number | null;
+  board: Array<{
+    name: string;
+    questions: Array<{ price: number; available: boolean }>;
+  }>;
+  chooserId: string | null;
+  timer: { name: string; endsAt: number; durationMs: number } | null;
+  current: {
+    themeIndex: number;
+    questionIndex: number;
+    themeName: string;
+    price: number;
+    type: QuestionType;
+    content: ContentItem[];
+    answerShown: boolean;
+    right: string[] | null;
+    wrong: string[] | null;
+    answerContent: ContentItem[] | null;
+    comments: string | null;
+    sources: string[] | null;
+  } | null;
+  buzzer: {
+    winnerId: string | null;
+    winnerInfo: WinnerInfo | null;
+    attempted: string[];
+    blockedUntil: number | null;
+    blockedPlayers: Array<{ id: string; until: number }>;
+  };
+}
 
 export class GameEngine {
-  /** @param {import('./Room.js').Room} room */
-  constructor(room) {
+  readonly room: Room;
+  phase!: Phase;
+  roundIndex!: number;
+  played!: Set<string>;
+  chooserId!: string | null;
+  current!: CurrentQuestionState | null;
+  roundEndsAt!: number | null;
+  timer: ActiveTimer | null = null;
+  buzzWindowHandle?: ReturnType<typeof setTimeout>;
+  buzzer!: BuzzerState;
+
+  constructor(room: Room) {
     this.room = room;
     this.reset();
   }
 
-  reset() {
+  reset(): void {
     this.clearTimer();
     this.phase = PHASES.LOBBY;
     this.roundIndex = -1;
-    this.played = new Set(); // "round:theme:question"
+    this.played = new Set<string>();
     this.chooserId = null;
     this.current = null;
     this.roundEndsAt = null;
     this.resetBuzzer();
   }
 
-  resetBuzzer() {
+  resetBuzzer(): void {
     clearTimeout(this.buzzWindowHandle);
     this.buzzer = {
       winnerId: null,
-      winnerInfo: null, // { mode, latencyMs } for UI feedback
-      openedAt: null, // server epoch ms when buzzers opened
-      attempted: new Set(), // players who already answered this question
-      blockedUntil: new Map(), // false-start penalties: playerId → epoch ms
-      pending: [], // presses collected inside the collection / random window
-      remainingMs: null, // thinking time left when a player buzzed (resumed after a wrong answer)
+      winnerInfo: null,
+      openedAt: null,
+      attempted: new Set<string>(),
+      blockedUntil: new Map<string, number>(),
+      pending: [],
+      remainingMs: null,
     };
   }
 
   /* ----------------------------------------------------------------- helpers */
 
-  get settings() {
+  get settings(): GameSettings {
     return this.room.settings;
   }
 
-  get pack() {
+  get pack(): Package | null {
     return this.room.loadedPack?.pack ?? null;
   }
 
-  get round() {
+  get round(): Round | null {
     return this.pack?.rounds[this.roundIndex] ?? null;
   }
 
-  activePlayers() {
+  activePlayers(): Participant[] {
     return this.room.players().filter((p) => p.connected);
   }
 
-  isAvailable(t, q) {
+  isAvailable(t: number, q: number): boolean {
     const question = this.round?.themes[t]?.questions[q];
     return !!question && question.price >= 0 && !this.played.has(`${this.roundIndex}:${t}:${q}`);
   }
 
-  roundHasQuestionsLeft() {
+  roundHasQuestionsLeft(): boolean {
     return !!this.round?.themes.some((theme, t) => theme.questions.some((_, q) => this.isAvailable(t, q)));
   }
 
-  assert(condition, message) {
+  assert(condition: unknown, message: string): asserts condition {
     if (!condition) throw new Error(message);
   }
 
   /* ------------------------------------------------------------------ timers */
 
-  /** One active countdown at a time; its `endsAt` is broadcast so clients render it locally. */
-  startTimer(name, seconds, onExpire) {
+  startTimer(name: string, seconds: number, onExpire?: () => void): void {
     this.clearTimer();
     if (!seconds || seconds <= 0) return;
     const durationMs = seconds * 1000;
@@ -94,21 +172,21 @@ export class GameEngine {
         try {
           onExpire?.();
         } catch (err) {
-          console.warn(`[engine] timer "${name}" expiry ignored: ${err.message}`);
+          console.warn(`[engine] timer "${name}" expiry ignored: ${(err as Error).message}`);
         }
         this.room.changed();
       }, durationMs),
     };
   }
 
-  clearTimer() {
+  clearTimer(): void {
     if (this.timer) clearTimeout(this.timer.handle);
     this.timer = null;
   }
 
   /* ---------------------------------------------------------------- flow */
 
-  start() {
+  start(): void {
     this.assert(this.pack, 'Load a pack first');
     this.assert(this.pack.rounds.length > 0, 'This pack has no rounds');
     this.assert(this.room.players().length > 0, 'At least one player is required');
@@ -117,11 +195,11 @@ export class GameEngine {
     this.enterRound(0);
   }
 
-  stop() {
+  stop(): void {
     this.reset();
   }
 
-  enterRound(index) {
+  enterRound(index: number): void {
     this.clearTimer();
     this.roundIndex = index;
     this.current = null;
@@ -129,7 +207,6 @@ export class GameEngine {
     this.phase = PHASES.BOARD;
     this.roundEndsAt = this.settings.timeOfRound > 0 ? Date.now() + this.settings.timeOfRound * 1000 : null;
 
-    // SIGame: random chooser in the first round, then the lowest score chooses.
     const players = this.room.players();
     if (index === 0 || !players.length) {
       this.chooserId = players.length ? players[Math.floor(Math.random() * players.length)].id : null;
@@ -139,31 +216,27 @@ export class GameEngine {
     this.startChoosingTimer();
   }
 
-  startChoosingTimer() {
-    // Informational only: a human host can always pick on behalf of the chooser.
+  startChoosingTimer(): void {
     this.startTimer('choosing', this.settings.timeForChoosingQuestion);
   }
 
-  nextRound() {
+  nextRound(): void {
     this.assert(this.pack, 'No pack loaded');
     if (this.roundIndex + 1 < this.pack.rounds.length) this.enterRound(this.roundIndex + 1);
     else this.finish();
   }
 
-  finish() {
+  finish(): void {
     this.clearTimer();
     this.current = null;
     this.phase = PHASES.GAME_OVER;
   }
 
-  /**
-   * @param {string} actorId participant requesting the selection
-   * @param {boolean} actorIsModerator host may pick for anyone
-   */
-  selectQuestion(actorId, actorIsModerator, themeIndex, questionIndex) {
+  selectQuestion(actorId: string, actorIsModerator: boolean, themeIndex: number, questionIndex: number): void {
     this.assert(this.phase === PHASES.BOARD, 'You cannot choose a question right now');
     this.assert(actorIsModerator || actorId === this.chooserId, 'It is not your turn to choose');
     this.assert(this.isAvailable(themeIndex, questionIndex), 'This question is not available');
+    this.assert(this.round, 'No active round');
 
     const theme = this.round.themes[themeIndex];
     const question = theme.questions[questionIndex];
@@ -175,7 +248,6 @@ export class GameEngine {
       questionIndex,
       themeName: theme.name,
       price: question.price,
-      // In "simple" game mode every question is played as a regular one (SIGame GameMode.Simple).
       type: this.settings.gameMode === 'simple' ? 'simple' : question.type,
       question,
       answerShown: false,
@@ -184,30 +256,25 @@ export class GameEngine {
     this.room.emitEvent({ type: 'questionSelected', themeIndex, questionIndex, price: question.price });
 
     if (!this.settings.falseStart) {
-      // Фальшстарт выключен: кнопки активны сразу при появлении вопроса,
-      // но даём время на чтение + время на размышление.
       const totalSeconds = this.estimateReadingSeconds(question) + this.settings.timeForThinkingOnQuestion;
       this.openBuzzer(totalSeconds);
     } else {
-      // Фальшстарт включён: нажатие во время чтения блокирует кнопку.
-      // Кнопки откроются автоматически после окончания чтения (или досрочно ведущим).
       this.startTimer('reading', this.estimateReadingSeconds(question), () => this.openBuzzer());
     }
   }
 
-  /** Estimates how long the question takes to present, using SIGame's ReadingSpeed. */
-  estimateReadingSeconds(question) {
+  estimateReadingSeconds(question: Question): number {
     let seconds = 0;
     for (const item of question.content) {
       if (item.type === 'text' || item.type === 'say') seconds += item.value.length / this.settings.readingSpeed;
       else if (item.duration) seconds += item.duration;
       else if (item.type === 'image') seconds += 2;
-      else if (item.type === 'audio' || item.type === 'video') seconds += 10; // unknown length; host can open early
+      else if (item.type === 'audio' || item.type === 'video') seconds += 10;
     }
     return Math.max(1, Math.ceil(seconds + this.settings.timeForMediaDelay));
   }
 
-  openBuzzer(overrideSeconds) {
+  openBuzzer(overrideSeconds?: number): void {
     this.assert(this.phase === PHASES.READING || this.phase === PHASES.ANSWERING, 'Buttons cannot be opened now');
     clearTimeout(this.buzzWindowHandle);
     this.phase = PHASES.BUZZER_OPEN;
@@ -225,34 +292,22 @@ export class GameEngine {
     this.room.emitEvent({ type: 'buzzerOpen', openedAt: this.buzzer.openedAt });
   }
 
-  /**
-   * Normalises a client-supplied press timestamp (calibrated to server epoch ms)
-   * with anti-cheat bounds so a manipulated client clock cannot claim an impossible time.
-   */
-  resolvePressTimestamp(serverNow, rawClientAt) {
+  resolvePressTimestamp(serverNow: number, rawClientAt?: unknown): number {
     const openedAt = this.buzzer.openedAt ?? serverNow;
     const num = Number(rawClientAt);
     if (!Number.isFinite(num)) return serverNow;
-    // Allow at most 2000ms of one-way network transit delay, never after serverNow + 20ms,
-    // and never earlier than when the buzzer actually opened on this question.
     const minAllowed = Math.max(openedAt, serverNow - 2000);
     const maxAllowed = serverNow + 20;
     return Math.min(maxAllowed, Math.max(minAllowed, num));
   }
 
-  /**
-   * @param {string} playerId
-   * @param {{ clientAt?: number }} [meta]
-   * @returns {{ result: 'accepted'|'falseStart'|'queued'|'ignored' }}
-   */
-  buzz(playerId, meta = {}) {
+  buzz(playerId: string, meta: { clientAt?: number } = {}): { result: BuzzResult } {
     const now = Date.now();
     const player = this.room.participants.get(playerId);
     if (!player || player.role !== ROLES.PLAYER) return { result: 'ignored' };
 
     if (this.phase === PHASES.READING) {
       if (!this.settings.falseStart) return { result: 'ignored' };
-      // SIGame false start: the button is locked for TimeForBlockingButton seconds.
       this.buzzer.blockedUntil.set(playerId, now + this.settings.timeForBlockingButton * 1000);
       this.room.emitEvent({ type: 'falseStart', playerId });
       this.room.changed();
@@ -263,7 +318,6 @@ export class GameEngine {
     if (this.buzzer.attempted.has(playerId)) return { result: 'ignored' };
     if ((this.buzzer.blockedUntil.get(playerId) ?? 0) > now) return { result: 'ignored' };
 
-    // 1. Random-within-interval mode (SIGame ButtonPressMode.RandomWithinInterval)
     if (this.settings.buttonPressMode === 'randomWithinInterval' && this.settings.buttonPressIntervalMs > 0) {
       if (!this.buzzer.pending.some((p) => p.playerId === playerId)) {
         this.buzzer.pending.push({ playerId, serverAt: now, effectiveAt: now });
@@ -274,7 +328,10 @@ export class GameEngine {
           this.buzzer.pending = [];
           if (this.phase === PHASES.BUZZER_OPEN && pool.length) {
             const chosen = pool[Math.floor(Math.random() * pool.length)];
-            this.grantAnswer(chosen.playerId, { mode: 'random', reactionMs: chosen.serverAt - (this.buzzer.openedAt ?? chosen.serverAt) });
+            this.grantAnswer(chosen.playerId, {
+              mode: 'random',
+              reactionMs: chosen.serverAt - (this.buzzer.openedAt ?? chosen.serverAt),
+            });
             this.room.changed();
           }
         }, this.settings.buttonPressIntervalMs);
@@ -282,9 +339,6 @@ export class GameEngine {
       return { result: 'queued' };
     }
 
-    // 2. Client Request Time sync mode ('clientTimestamp'):
-    //    Wait `buzzSyncWindowMs` after the first packet arrives so in-flight packets from
-    //    higher-latency mobile devices can arrive, then pick the earliest calibrated client timestamp.
     if (this.settings.buzzSyncMode === 'clientTimestamp' && this.settings.buzzSyncWindowMs > 0) {
       const effectiveAt = this.resolvePressTimestamp(now, meta?.clientAt);
       if (!this.buzzer.pending.some((p) => p.playerId === playerId)) {
@@ -315,8 +369,6 @@ export class GameEngine {
       return { result: 'queued' };
     }
 
-    // 3. Server Arrival Time sync mode ('server' — default):
-    //    First packet processed by the server wins immediately.
     this.grantAnswer(playerId, {
       mode: 'server',
       reactionMs: Math.max(0, Math.round(now - (this.buzzer.openedAt ?? now))),
@@ -325,8 +377,7 @@ export class GameEngine {
     return { result: 'accepted' };
   }
 
-  grantAnswer(playerId, winnerInfo = null) {
-    // Pause the thinking timer: remaining time is restored if the answer is wrong.
+  grantAnswer(playerId: string, winnerInfo: WinnerInfo | null = null): void {
     this.buzzer.remainingMs = this.timer ? Math.max(1000, this.timer.endsAt - Date.now()) : null;
     this.buzzer.winnerId = playerId;
     this.buzzer.winnerInfo = winnerInfo;
@@ -335,9 +386,9 @@ export class GameEngine {
     this.room.emitEvent({ type: 'buzzAccepted', playerId, winnerInfo });
   }
 
-  /** Host verdict on the current answer. */
-  judge(correct) {
+  judge(correct: boolean): void {
     this.assert(this.phase === PHASES.ANSWERING && this.buzzer.winnerId, 'Nobody is answering');
+    this.assert(this.current, 'No active question');
     const player = this.room.participants.get(this.buzzer.winnerId);
     const price = this.current.price;
 
@@ -359,16 +410,16 @@ export class GameEngine {
     else this.revealAnswer();
   }
 
-  revealAnswer() {
+  revealAnswer(): void {
     this.assert(QUESTION_PHASES.has(this.phase), 'No active question');
+    this.assert(this.current, 'No active question');
     this.clearTimer();
     clearTimeout(this.buzzWindowHandle);
     this.phase = PHASES.REVEAL;
     this.current.answerShown = true;
   }
 
-  /** Leaves the current question (or skips it) and returns to the board / ends the round. */
-  next() {
+  next(): void {
     if (this.phase === PHASES.ROUND_END) return this.nextRound();
     this.assert(QUESTION_PHASES.has(this.phase), 'Nothing to continue');
     this.clearTimer();
@@ -387,11 +438,7 @@ export class GameEngine {
 
   /* ------------------------------------------------------------------ views */
 
-  /**
-   * Role-aware projection of the state. Players never receive answers before the reveal,
-   * and nobody receives question content before it is selected.
-   */
-  getView(viewer, canModerate) {
+  getView(viewer: Participant | null, canModerate: boolean): GameView {
     const round = this.round;
     const c = this.current;
     const showAnswer = canModerate || (c?.answerShown ?? false);
@@ -399,7 +446,7 @@ export class GameEngine {
     return {
       phase: this.phase,
       roundIndex: this.roundIndex,
-      round: round && { name: round.name, type: round.type },
+      round: round ? { name: round.name, type: round.type } : null,
       roundEndsAt: this.roundEndsAt,
       board:
         round?.themes.map((theme, t) => ({
@@ -407,21 +454,23 @@ export class GameEngine {
           questions: theme.questions.map((q, i) => ({ price: q.price, available: this.isAvailable(t, i) })),
         })) ?? [],
       chooserId: this.chooserId,
-      timer: this.timer && { name: this.timer.name, endsAt: this.timer.endsAt, durationMs: this.timer.durationMs },
-      current: c && {
-        themeIndex: c.themeIndex,
-        questionIndex: c.questionIndex,
-        themeName: c.themeName,
-        price: c.price,
-        type: c.type,
-        content: c.question.content,
-        answerShown: c.answerShown,
-        right: showAnswer ? c.question.right : null,
-        wrong: canModerate ? c.question.wrong : null,
-        answerContent: showAnswer ? c.question.answerContent : null,
-        comments: showAnswer ? c.question.info.comments : null,
-        sources: showAnswer && this.settings.displaySources ? c.question.info.sources : null,
-      },
+      timer: this.timer ? { name: this.timer.name, endsAt: this.timer.endsAt, durationMs: this.timer.durationMs } : null,
+      current: c
+        ? {
+            themeIndex: c.themeIndex,
+            questionIndex: c.questionIndex,
+            themeName: c.themeName,
+            price: c.price,
+            type: c.type,
+            content: c.question.content,
+            answerShown: c.answerShown,
+            right: showAnswer ? c.question.right : null,
+            wrong: canModerate ? c.question.wrong : null,
+            answerContent: showAnswer ? c.question.answerContent : null,
+            comments: showAnswer ? c.question.info.comments : null,
+            sources: showAnswer && this.settings.displaySources ? c.question.info.sources : null,
+          }
+        : null,
       buzzer: {
         winnerId: this.buzzer.winnerId,
         winnerInfo: this.buzzer.winnerInfo,

@@ -1,38 +1,37 @@
 /**
  * Steam Workshop → local .siq pack.
- *
- * Strategy (cheapest & most reliable first):
- *  1. Ask the public Steam Web API (no API key needed) for the item details.
- *     Validate it belongs to SIGame and get its title.
- *  2. If the API exposes a direct `file_url` (legacy UGC), download it over HTTPS.
- *  3. Check all local Steam library folders (`libraryfolders.vdf`) in case the item
- *     is already subscribed/downloaded on this PC.
- *  4. Ask the running Steam desktop client via Steamworks UGC (`steamworks.js`) to
- *     download the item (`ISteamUGC::DownloadItem`). This uses the user's logged-in
- *     Steam session (which has the depot 3553500 decryption key) with zero credential
- *     prompts and full CDN speed.
- *  5. Fall back to `steamcmd` (requires `STEAM_USER` for encrypted depots).
- *  6. Locate the pack in the downloaded files and copy it into `packs/<Title>_<id>.siq`.
  */
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import AdmZip from 'adm-zip';
-import { config } from '../config.js';
-import { downloadToFile, ensureDir, sanitizeSegment, walkFiles } from '../utils/fsx.js';
-import { isSiqArchive } from '../packs/siqParser.js';
-import { downloadViaSteamClient, findInLocalSteamLibraries } from './localSteam.js';
-import { steamcmdDownloadItem } from './steamcmd.js';
+import { config } from '../config.ts';
+import { isSiqArchive } from '../packs/siqParser.ts';
+import { downloadToFile, ensureDir, sanitizeSegment, walkFiles } from '../utils/fsx.ts';
+import { downloadViaSteamClient, findInLocalSteamLibraries } from './localSteam.ts';
+import { steamcmdDownloadItem } from './steamcmd.ts';
 
-/**
- * Extracts a workshop id from a URL or a bare id.
- * Accepts: https://steamcommunity.com/sharedfiles/filedetails/?id=123
- *          https://steamcommunity.com/workshop/filedetails/?id=123&searchtext=
- *          steam://url/CommunityFilePage/123
- *          123
- * @returns {string|null}
- */
-export function parseWorkshopId(input) {
+export interface WorkshopDetails {
+  title: string;
+  fileUrl: string;
+  fileName: string;
+  fileSize: number;
+  appId: number;
+}
+
+export interface WorkshopProgress {
+  stage: string;
+  message: string;
+  percent?: number;
+}
+
+export interface WorkshopDownloadResult {
+  id: string;
+  title: string;
+  file: string;
+}
+
+export function parseWorkshopId(input: unknown): string | null {
   const s = String(input ?? '').trim();
   if (/^\d{6,20}$/.test(s)) return s;
   try {
@@ -46,16 +45,24 @@ export function parseWorkshopId(input) {
   return m ? m[1] : null;
 }
 
-/**
- * Calls ISteamRemoteStorage/GetPublishedFileDetails (public, no key).
- * @returns {Promise<{ title: string, fileUrl: string, fileName: string, fileSize: number, appId: number }>}
- */
-export async function getWorkshopDetails(id) {
+export async function getWorkshopDetails(id: string): Promise<WorkshopDetails> {
   const body = new URLSearchParams({ itemcount: '1', 'publishedfileids[0]': id });
   const res = await fetch(config.steam.publishedFileDetailsUrl, { method: 'POST', body });
   if (!res.ok) throw new Error(`Steam API returned HTTP ${res.status}`);
 
-  const details = (await res.json())?.response?.publishedfiledetails?.[0];
+  const json = (await res.json()) as {
+    response?: {
+      publishedfiledetails?: Array<{
+        result?: number;
+        title?: string;
+        file_url?: string;
+        filename?: string;
+        file_size?: number | string;
+        consumer_app_id?: number | string;
+      }>;
+    };
+  };
+  const details = json?.response?.publishedfiledetails?.[0];
   if (!details || details.result !== 1) {
     throw new Error('Workshop item not found, private, or removed');
   }
@@ -68,21 +75,17 @@ export async function getWorkshopDetails(id) {
   };
 }
 
-/** Finds (or builds) a .siq inside a downloaded workshop folder. Returns the source path. */
-async function locatePack(folder, workDir) {
+async function locatePack(folder: string, workDir: string): Promise<string> {
   const files = await walkFiles(folder);
 
-  // 1. Real .siq files – prefer the largest one if several.
   const siqs = files.filter((f) => f.toLowerCase().endsWith('.siq'));
   if (siqs.length) {
     const sized = await Promise.all(siqs.map(async (f) => ({ f, size: (await fsp.stat(f)).size })));
     return sized.sort((a, b) => b.size - a.size)[0].f;
   }
 
-  // 2. Any zip-like file that actually is a pack.
   for (const f of files) if (isSiqArchive(f)) return f;
 
-  // 3. Unpacked pack: a folder with content.xml → zip it.
   const contentXml = files.find((f) => path.basename(f).toLowerCase() === 'content.xml');
   if (contentXml) {
     const zip = new AdmZip();
@@ -94,35 +97,33 @@ async function locatePack(folder, workDir) {
   throw new Error('No SIGame pack (.siq / content.xml) found in the workshop item');
 }
 
-/**
- * Full pipeline. Only one job per workshop id runs at a time.
- * @param {string} linkOrId
- * @param {(p: { stage: string, message: string, percent?: number }) => void} [onProgress]
- * @returns {Promise<{ id: string, title: string, file: string }>} `file` = name inside the packs folder
- */
-const activeJobs = new Map();
+const activeJobs = new Map<string, Promise<WorkshopDownloadResult>>();
 
-export function downloadWorkshopPack(linkOrId, onProgress = () => {}) {
+export function downloadWorkshopPack(
+  linkOrId: string,
+  onProgress: (p: WorkshopProgress) => void = () => {},
+): Promise<WorkshopDownloadResult> {
   const id = parseWorkshopId(linkOrId);
   if (!id) return Promise.reject(new Error('Could not find a Workshop item id in that link'));
-  if (activeJobs.has(id)) return activeJobs.get(id);
+  const existing = activeJobs.get(id);
+  if (existing) return existing;
 
   const job = runJob(id, onProgress).finally(() => activeJobs.delete(id));
   activeJobs.set(id, job);
   return job;
 }
 
-async function runJob(id, onProgress) {
+async function runJob(id: string, onProgress: (p: WorkshopProgress) => void): Promise<WorkshopDownloadResult> {
   const appId = config.steam.sigameAppId;
   const workDir = await fsp.mkdtemp(path.join(os.tmpdir(), `sigame-ws-${id}-`));
 
   try {
     onProgress({ stage: 'details', message: `Looking up workshop item ${id}…` });
-    let details;
+    let details: WorkshopDetails;
     try {
       details = await getWorkshopDetails(id);
     } catch (err) {
-      onProgress({ stage: 'details', message: `Steam API lookup failed (${err.message}); continuing…` });
+      onProgress({ stage: 'details', message: `Steam API lookup failed (${(err as Error).message}); continuing…` });
       details = { title: `workshop_${id}`, fileUrl: '', fileName: '', fileSize: 0, appId: 0 };
     }
 
@@ -131,9 +132,8 @@ async function runJob(id, onProgress) {
     }
     onProgress({ stage: 'details', message: `Found: "${details.title}"` });
 
-    let sourceFolder = null;
+    let sourceFolder: string | null = null;
 
-    // 1. Direct HTTP download if Steam exposes file_url (legacy UGC).
     if (details.fileUrl) {
       const name = sanitizeSegment(path.basename(details.fileName) || `${id}.siq`);
       const target = path.join(workDir, 'direct', name);
@@ -149,7 +149,6 @@ async function runJob(id, onProgress) {
       sourceFolder = path.dirname(target);
     }
 
-    // 2. Check local Steam library folders (instant if already subscribed/downloaded).
     if (!sourceFolder) {
       const cached = await findInLocalSteamLibraries(appId, id);
       if (cached) {
@@ -158,7 +157,6 @@ async function runJob(id, onProgress) {
       }
     }
 
-    // 3. Download via the running Steam desktop client (Steamworks ISteamUGC).
     if (!sourceFolder) {
       try {
         sourceFolder = await downloadViaSteamClient(appId, id, (p) =>
@@ -167,12 +165,11 @@ async function runJob(id, onProgress) {
       } catch (steamErr) {
         onProgress({
           stage: 'steam',
-          message: `Steam client download unavailable (${steamErr.message}); falling back to steamcmd…`,
+          message: `Steam client download unavailable (${(steamErr as Error).message}); falling back to steamcmd…`,
         });
       }
     }
 
-    // 4. Fallback: steamcmd.
     if (!sourceFolder) {
       onProgress({
         stage: 'steamcmd',

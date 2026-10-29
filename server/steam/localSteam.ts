@@ -1,11 +1,5 @@
 /**
  * Local Steam integration for Windows/Desktop:
- *
- * Why anonymous steamcmd fails for SIGame (App ID 3553500):
- *   Steam encrypts SIGame's Workshop depot (3553500) and denies the decryption
- *   key to anonymous accounts (`Missing decryption key` in workshop_log.txt).
- *
- * Instead, this module uses two zero-login methods when Steam is on the host PC:
  *   1. Local Steam Library scanner: reads `libraryfolders.vdf` across all drives
  *      and checks if `<library>/steamapps/workshop/content/3553500/<itemId>` is
  *      already downloaded on disk.
@@ -16,25 +10,26 @@
 import { execFileSync } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { pathExists } from '../utils/fsx.js';
+import { pathExists } from '../utils/fsx.ts';
 
 /* EItemState bitmask flags from Steamworks ISteamUGC */
 const ITEM_STATE = {
   NONE: 0,
   SUBSCRIBED: 1,
-  LEGACY_item: 2,
+  LEGACY_ITEM: 2,
   INSTALLED: 4,
   NEEDS_UPDATE: 8,
   DOWNLOADING: 16,
   DOWNLOAD_PENDING: 32,
-};
+} as const;
 
-/**
- * Discovers the local Steam installation path on Windows/Linux/macOS.
- * @returns {Promise<string|null>}
- */
-export async function findSteamInstallPath() {
-  const candidates = [];
+export interface SteamClientProgress {
+  message: string;
+  percent?: number;
+}
+
+export async function findSteamInstallPath(): Promise<string | null> {
+  const candidates: string[] = [];
 
   if (process.platform === 'win32') {
     for (const regKey of ['HKCU\\Software\\Valve\\Steam', 'HKLM\\SOFTWARE\\WOW6432Node\\Valve\\Steam']) {
@@ -66,15 +61,11 @@ export async function findSteamInstallPath() {
   return null;
 }
 
-/**
- * Parses `libraryfolders.vdf` to find all Steam library roots across all drives.
- * @returns {Promise<string[]>}
- */
-export async function findSteamLibraryFolders() {
+export async function findSteamLibraryFolders(): Promise<string[]> {
   const steamRoot = await findSteamInstallPath();
   if (!steamRoot) return [];
 
-  const libs = new Set([steamRoot]);
+  const libs = new Set<string>([steamRoot]);
   const vdfPath = path.join(steamRoot, 'steamapps', 'libraryfolders.vdf');
 
   if (await pathExists(vdfPath)) {
@@ -87,13 +78,7 @@ export async function findSteamLibraryFolders() {
   return [...libs];
 }
 
-/**
- * Checks if a Workshop item is already downloaded in any local Steam library.
- * @param {number} appId
- * @param {string} itemId
- * @returns {Promise<string|null>} folder path if found and non-empty
- */
-export async function findInLocalSteamLibraries(appId, itemId) {
+export async function findInLocalSteamLibraries(appId: number, itemId: string): Promise<string | null> {
   const libraries = await findSteamLibraryFolders();
   for (const lib of libraries) {
     const candidate = path.join(lib, 'steamapps', 'workshop', 'content', String(appId), String(itemId));
@@ -109,14 +94,12 @@ export async function findInLocalSteamLibraries(appId, itemId) {
 /* Steamworks.js client singleton                                            */
 /* ------------------------------------------------------------------------- */
 
-let steamClient = null;
-let steamInitError = null;
+type SteamworksClient = ReturnType<typeof import('steamworks.js').init>;
 
-/**
- * Lazily initializes the Steamworks SDK against the running Steam desktop client.
- * @param {number} appId
- */
-async function getSteamworksClient(appId) {
+let steamClient: SteamworksClient | null = null;
+let steamInitError: Error | null = null;
+
+async function getSteamworksClient(appId: number): Promise<SteamworksClient> {
   if (steamClient) return steamClient;
   if (steamInitError) throw steamInitError;
 
@@ -125,25 +108,21 @@ async function getSteamworksClient(appId) {
     steamClient = steamworks.init(appId);
     return steamClient;
   } catch (err) {
-    steamInitError = err;
-    // Allow retry later in case the user starts Steam after starting the server.
+    steamInitError = err as Error;
     setTimeout(() => {
       steamInitError = null;
     }, 5_000).unref();
     throw new Error(
-      `Could not connect to the local Steam client (${err.message}). Make sure the Steam desktop app is running and logged in.`,
+      `Could not connect to the local Steam client (${(err as Error).message}). Make sure the Steam desktop app is running and logged in.`,
     );
   }
 }
 
-/**
- * Downloads (or locates) a Workshop item via the running Steam desktop client.
- * @param {number} appId
- * @param {string} itemId
- * @param {(p: { message: string, percent?: number }) => void} [onProgress]
- * @returns {Promise<string>} absolute path to the downloaded workshop item folder
- */
-export async function downloadViaSteamClient(appId, itemId, onProgress = () => {}) {
+export async function downloadViaSteamClient(
+  appId: number,
+  itemId: string,
+  onProgress: (p: SteamClientProgress) => void = () => {},
+): Promise<string> {
   const client = await getSteamworksClient(appId);
   const idBig = BigInt(itemId);
 
@@ -199,7 +178,6 @@ export async function downloadViaSteamClient(appId, itemId, onProgress = () => {
       }
     }
 
-    // If Steam transitioned out of downloading without installing, it failed (e.g. game not in library).
     if (sawDownloadFlag && !(state & ITEM_STATE.INSTALLED)) {
       throw new Error(
         'Steam stopped the download before completion. Ensure SIGame (free) is added to your Steam account library.',

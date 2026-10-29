@@ -1,31 +1,21 @@
 /**
  * Minimal steamcmd wrapper (fallback when the Steam desktop client is not running).
- *
- * Note on SIGame (App ID 3553500):
- *   Valve encrypts depot 3553500 and denies decryption keys to `login anonymous`
- *   (`Missing decryption key` in workshop_log.txt). Therefore, steamcmd can only
- *   download SIGame packs when logged into a Steam account that has SIGame (free)
- *   in its library (`STEAM_USER` / `STEAM_PASS` env vars or cached credentials).
  */
 import { spawn } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import AdmZip from 'adm-zip';
-import { config } from '../config.js';
-import { downloadToFile, ensureDir, pathExists } from '../utils/fsx.js';
+import { config } from '../config.ts';
+import { downloadToFile, ensureDir, pathExists } from '../utils/fsx.ts';
 
 const IS_WINDOWS = process.platform === 'win32';
 const STEAMCMD_DIR = path.join(config.toolsDir, 'steamcmd');
 const STEAMCMD_EXE = path.join(STEAMCMD_DIR, IS_WINDOWS ? 'steamcmd.exe' : 'steamcmd.sh');
 
-let bootstrapPromise = null;
+let bootstrapPromise: Promise<string> | null = null;
 
-/**
- * Makes sure steamcmd exists locally, downloading it if needed.
- * Concurrent callers share the same bootstrap promise.
- */
-export function ensureSteamcmd(onLog = () => {}) {
-  bootstrapPromise ??= (async () => {
+export function ensureSteamcmd(onLog: (line: string) => void = () => {}): Promise<string> {
+  bootstrapPromise ??= (async (): Promise<string> => {
     if (await pathExists(STEAMCMD_EXE)) return STEAMCMD_EXE;
     if (!IS_WINDOWS) {
       throw new Error('Automatic steamcmd install is only supported on Windows. Install steamcmd and place it in tools/steamcmd.');
@@ -38,14 +28,18 @@ export function ensureSteamcmd(onLog = () => {}) {
     onLog('steamcmd installed. The first run will self-update, this can take a minute.');
     return STEAMCMD_EXE;
   })().catch((err) => {
-    bootstrapPromise = null; // allow retry
+    bootstrapPromise = null;
     throw err;
   });
   return bootstrapPromise;
 }
 
-/** Runs steamcmd with the given +commands, streaming output lines to onLog. */
-function runSteamcmd(exe, args, onLog) {
+interface SteamcmdRunResult {
+  code: number | null;
+  output: string;
+}
+
+function runSteamcmd(exe: string, args: string[], onLog: (line: string) => void): Promise<SteamcmdRunResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(exe, args, { cwd: STEAMCMD_DIR, windowsHide: true });
     let output = '';
@@ -54,7 +48,7 @@ function runSteamcmd(exe, args, onLog) {
       reject(new Error('steamcmd timed out'));
     }, config.steam.steamcmdTimeoutMs);
 
-    const onData = (buf) => {
+    const onData = (buf: Buffer) => {
       const chunk = buf.toString('utf8');
       output += chunk;
       for (const line of chunk.split(/\r?\n/)) if (line.trim()) onLog(line.trim());
@@ -72,11 +66,7 @@ function runSteamcmd(exe, args, onLog) {
   });
 }
 
-/**
- * Inspects `tools/steamcmd/logs/workshop_log.txt` for the specific underlying failure reason
- * when steamcmd only prints the generic `failed (Failure)` message on stdout.
- */
-async function readWorkshopLogError(itemId) {
+async function readWorkshopLogError(itemId: string): Promise<string | null> {
   const logPath = path.join(STEAMCMD_DIR, 'logs', 'workshop_log.txt');
   try {
     const text = await fsp.readFile(logPath, 'utf8');
@@ -94,21 +84,17 @@ async function readWorkshopLogError(itemId) {
   return null;
 }
 
-/**
- * Downloads a workshop item via steamcmd.
- * @param {number} appId
- * @param {string} itemId
- * @param {(line: string) => void} onLog
- * @returns {Promise<string>} absolute path of the folder containing the item files
- */
-export async function steamcmdDownloadItem(appId, itemId, onLog = () => {}) {
+export async function steamcmdDownloadItem(
+  appId: number,
+  itemId: string,
+  onLog: (line: string) => void = () => {},
+): Promise<string> {
   const exe = await ensureSteamcmd(onLog);
   const loginArgs = config.steam.user
     ? ['+login', config.steam.user, ...(config.steam.pass ? [config.steam.pass] : [])]
     : ['+login', 'anonymous'];
   const args = [...loginArgs, '+workshop_download_item', String(appId), String(itemId), 'validate', '+quit'];
 
-  // steamcmd frequently exits right after self-updating on the first run, so retry once.
   for (let attempt = 1; attempt <= 2; attempt++) {
     const { code, output } = await runSteamcmd(exe, args, onLog);
 
@@ -129,7 +115,6 @@ export async function steamcmdDownloadItem(appId, itemId, onLog = () => {}) {
       throw new Error(`steamcmd: ${reason}.${hint}`);
     }
 
-    // Fallback: the folder may exist even if the success line was not captured.
     for (const candidate of [
       path.join(STEAMCMD_DIR, 'steamapps', 'workshop', 'content', String(appId), String(itemId)),
       path.join(STEAMCMD_DIR, 'steamapps', 'content', String(appId), String(itemId)),

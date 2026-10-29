@@ -3,7 +3,7 @@
  *   npm run inspect-pack -- packs/MyPack.siq [--json]
  */
 import path from 'node:path';
-import { parseSiq } from '../server/packs/siqParser.js';
+import { parseSiq } from '../server/packs/siqParser.ts';
 
 const [file, flag] = process.argv.slice(2);
 if (!file) {
