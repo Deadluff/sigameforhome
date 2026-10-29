@@ -78,6 +78,12 @@ async function readWorkshopLogError(itemId: string): Promise<string | null> {
         `or set STEAM_USER / STEAM_PASS environment variables.`
       );
     }
+    if (!config.steam.user && /Failed downloading \d+ manifests \(No connection\)/i.test(lines)) {
+      return (
+        `Steam blocked anonymous steamcmd from downloading the Workshop manifest for item ${itemId} (SIGame depot 3553500 requires a logged-in Steam account). ` +
+        `Make sure the Steam desktop app is open and signed into an account with SIGame (free) in its library, or set STEAM_USER / STEAM_PASS.`
+      );
+    }
   } catch {
     /* ignore missing log */
   }
