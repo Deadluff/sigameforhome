@@ -1,0 +1,30 @@
+/* Join and seat selection. */
+.entry { margin: auto; width: min(100%, 460px); }
+.entry-card { display: flex; flex-direction: column; gap: 18px; padding: 32px 28px; background: var(--set); border: 1px solid var(--rule); border-radius: var(--r-table); }
+.lamp-strip { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; padding: 4px; border-radius: var(--r-panel); background: var(--board-spent); }
+.lamp-strip span {
+  display: grid; place-items: center; height: 52px; border-radius: var(--r-cell);
+  background: var(--board); color: var(--lamp); font: 600 var(--t-s) var(--font-display);
+}
+.lamp-strip .lit { background: var(--lamp); color: #1d1400; }
+.entry-brand { font: 700 var(--t-3xl)/1 var(--font-display); letter-spacing: -.02em; }
+.entry-brand small { font: 600 var(--t-s) var(--font-ui); color: var(--mist); letter-spacing: 0; }
+.entry-title { font-size: var(--t-xl); }
+.entry-intro { color: var(--mist); font-size: var(--t-m); max-width: 36ch; }
+.entry-form { display: grid; gap: 8px; }
+.entry-form button { margin-top: 6px; min-height: 52px; font-size: var(--t-m); }
+
+.role-choice { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.role-tile {
+  flex-direction: column; align-items: flex-start; justify-content: flex-start; gap: 6px;
+  min-height: 132px; padding: 18px; text-align: left; border-radius: var(--r-panel);
+}
+.role-tile strong { font: 700 var(--t-l) var(--font-display); color: var(--lamp); }
+.role-tile span { font-weight: 600; color: var(--mist); line-height: 1.4; }
+#btn-leave-role { align-self: flex-start; }
+
+@media (max-width: 420px) {
+  .entry-card { padding: 24px 18px; }
+  .role-choice { grid-template-columns: 1fr; }
+  .role-tile { min-height: 0; }
+}

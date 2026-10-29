@@ -1,7 +1,8 @@
 import { io, type Socket } from 'socket.io-client';
 import { ContentPresenter } from './contentPresenter';
+import { avatar, formatScore, questionTypeLabel, replicFor, roleLabels, sayReplic, toast, type ReplicTone } from './ui';
 import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentItem,
-  JoinAck, NoPayloadCommand, RoomState, ServerToClientEvents } from './types';
+  GameEvent, JoinAck, NoPayloadCommand, PackListItem, RoomState, ServerToClientEvents } from './types';
 
 /* Client UI with clear reading/buzzer orientiers & pre-game falseStart setting. */
 (() => {
@@ -141,7 +142,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
           actionUncertain = true;
           $('#connection-status').textContent = uncertainActionMessage;
         } else if (!result.ok) {
-          alert(result.error ?? 'Request failed');
+          toast(result.error ?? 'Request failed');
         } else if (actionUncertain) {
           actionUncertain = false;
           $('#connection-status').textContent = '';
@@ -218,7 +219,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     localStorage.removeItem(TOKEN_KEY);
     actionUncertain = false;
     $('#connection-status').textContent = '';
-    alert('You were removed by the host');
+    toast('The host removed you from the room.');
     show('screen-join');
   });
 
@@ -244,7 +245,31 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     render();
   });
 
+  // A short line over the podium shows what just happened to whom, like the show's speech bubbles.
+  function replicOf(evt: GameEvent): [string, string, ReplicTone] | null {
+    if (!('playerId' in evt) || !evt.playerId) return null;
+    switch (evt.type) {
+      case 'buzzAccepted': return [evt.playerId, 'Buzzed!', 'plain'];
+      case 'falseStart': return [evt.playerId, 'Too early', 'stop'];
+      case 'answerJudged': {
+        const delta = evt.delta ?? 0;
+        if (evt.correct) return [evt.playerId, delta ? `+${formatScore(delta)}` : 'Correct', 'go'];
+        return [evt.playerId, delta ? formatScore(delta) : 'Wrong', 'stop'];
+      }
+      case 'stakeBid': return [evt.playerId, evt.allIn ? `All in: ${formatScore(evt.amount)}` : `Bid ${formatScore(evt.amount)}`, 'lamp'];
+      case 'stakePass': return [evt.playerId, 'Pass', 'plain'];
+      case 'stakeWon': return [evt.playerId, `Takes it for ${formatScore(evt.amount)}`, 'lamp'];
+      case 'giftAwarded': return [evt.playerId, `Gift +${formatScore(evt.price)}`, 'go'];
+      default: return null;
+    }
+  }
+
   socket.on('game:event', (evt) => {
+    const replic = replicOf(evt);
+    if (replic) {
+      sayReplic(replic[0], replic[1], replic[2], () => { if (hasActivePlayer(state)) renderPlayers(); });
+      if (hasActivePlayer(state)) renderPlayers();
+    }
     if (evt.type === 'buzzerOpen') {
       playTone(660, 220, 'triangle', 880);
     } else if (evt.type === 'buzzAccepted') {
@@ -264,9 +289,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     if (you.role === 'pending') return show('screen-role');
     show('screen-game');
     $('#screen-game').dataset.phase = game.phase;
+    renderTopbar();
     if (tvMode) {
-      $('#me').textContent = 'TV view';
-      $('#phase').textContent = game.round ? game.round.name : game.phase.replace(/([A-Z])/g, ' $1');
       renderPlayers();
       renderResults();
       renderBoard();
@@ -279,12 +303,6 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       updateOrientiers();
       return;
     }
-
-    $('#me').textContent = `${you.name} · ${you.role}${you.isOwner ? ' · owner' : ''}`;
-    $('#phase').textContent = game.phase === 'gameOver'
-      ? 'Game over'
-      : game.round ? `${game.round.name} · ${game.phase.replace(/([A-Z])/g, ' $1')}`
-        : game.phase.replace(/([A-Z])/g, ' $1');
 
     renderPlayers();
     renderResults();
@@ -300,6 +318,24 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     renderFinal();
     renderHostControls();
     updateOrientiers();
+  }
+
+  // Top bar answers "where are we" (round, step) and "who am I"; live timing lives in the status panel.
+  function renderTopbar() {
+    const { you, game, pack } = activeState();
+    const phase = $('#phase');
+    phase.replaceChildren();
+    if (game.phase === 'lobby') phase.textContent = pack ? pack.name : 'Lobby';
+    else if (game.phase === 'gameOver') phase.textContent = 'Game over';
+    else if (game.round) {
+      phase.append(Object.assign(document.createElement('b'), { textContent: game.round.name }));
+      if (pack?.rounds.length) phase.append(` · ${game.roundIndex + 1} of ${pack.rounds.length}`);
+    }
+    const me = $('#me');
+    me.replaceChildren();
+    if (tvMode) me.textContent = 'TV view';
+    else me.append(avatar(you.id, you.name), you.name,
+      Object.assign(document.createElement('span'), { className: 'role', textContent: roleLabels[you.role] ?? you.role }));
   }
 
   function renderHostControls() {
@@ -326,7 +362,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
         const finalReveal = game.phase === 'reveal' && game.round?.type === 'final';
         const moreFinalThemes = game.board.some((theme) => theme.questions[0]?.available);
         button.textContent = finalReveal && state.settings.playAllQuestionsInFinalRound
-          ? moreFinalThemes ? 'Next final theme ▶' : 'Finish game ▶' : 'Next ▶';
+          ? moreFinalThemes ? 'Next final theme' : 'Finish game'
+          : game.phase === 'specialSetup' ? 'Skip question' : 'Next';
       }
       if (action === 'game:prevRound') {
         button.disabled = game.phase === 'lobby' || (game.roundIndex <= 0 && game.phase !== 'gameOver');
@@ -337,10 +374,15 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     }
 
     const openBtn = button('#btn-open-buzzer');
-    openBtn.classList.toggle('hidden', game.current?.type === 'forAll');
+    openBtn.classList.toggle('hidden', game.phase !== 'reading' || game.current?.type === 'forAll');
     openBtn.disabled = game.phase !== 'reading' || game.current?.type === 'forAll';
-    openBtn.textContent = game.phase === 'reading'
-      ? '🔓 Open buzzer now' : '🟢 Buzzer open';
+    openBtn.textContent = 'Open buzzer now';
+    // Keep unavailable phase actions out of the primary control strip.
+    for (const control of $('#host-controls').querySelectorAll<HTMLButtonElement>(':scope > button[data-act]')) {
+      control.classList.toggle('hidden', control.disabled ||
+        (control.dataset.act === 'game:resume' && game.phase !== 'paused') ||
+        (control.dataset.act === 'game:pause' && game.phase === 'paused'));
+    }
   }
 
   button('#btn-undo-judgment').onclick = () => {
@@ -421,6 +463,14 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     if (!host) return;
     button('#btn-open-final').disabled = !wagering || participants.some((p) => p.role === 'player' && p.connected && !final.wagered.includes(p.id));
     button('#btn-close-final').disabled = game.phase !== 'finalQuestion';
+    // Disabled steps are hidden, so a status line tells the host what the final is waiting for.
+    const finalists = participants.filter((p) => p.role === 'player' && p.connected);
+    const wageredCount = finalists.filter((p) => final.wagered.includes(p.id)).length;
+    $('#final-host-status').textContent = wagering
+      ? `${wageredCount} of ${finalists.length} wagers saved.${wageredCount < finalists.length ? ' The question opens when everyone has wagered.' : ''}`
+      : game.phase === 'finalQuestion' ? 'Players are preparing answers. End answer time when they are ready.'
+        : 'Choose a player, then mark their answer.';
+    $('#final-judge-row').classList.toggle('hidden', game.phase !== 'finalJudge');
     const playerSelect = select('#final-player');
     playerSelect.replaceChildren();
     for (const p of participants.filter((p) => p.role === 'player' && !final.judged.includes(p.id))) {
@@ -661,6 +711,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       }
       list.append(row);
     }
+    // Verdicts already show on the podiums; the panel appears only when someone can act on it.
+    if (!active && !list.querySelector('button')) $('#appeals').classList.add('hidden');
   }
 
   button('#appeal-support').onclick = () => send('game:appealVote', { support: true });
@@ -677,13 +729,16 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
     const winners = ranking.filter((p) => p.score === ranking[0]?.score);
     $('#results-winner').textContent = winners.length > 1
-      ? `Tie: ${winners.map((p) => p.name).join(', ')} · ${winners[0].score} pts`
-      : winners.length ? `Winner: ${winners[0].name} · ${winners[0].score} pts` : 'No player scores.';
+      ? `Shared win: ${winners.map((p) => p.name).join(', ')}`
+      : winners.length ? `${winners[0].name} wins` : 'No player scores.';
     const list = $('#results-list');
     list.replaceChildren();
     for (const player of ranking) {
       const item = document.createElement('li');
-      item.textContent = `${player.name} — ${player.score} pts`;
+      item.classList.toggle('winner', winners.includes(player));
+      item.append(avatar(player.id, player.name),
+        Object.assign(document.createElement('span'), { className: 'name', textContent: player.name }),
+        Object.assign(document.createElement('span'), { className: 'pts', textContent: formatScore(player.score) }));
       list.append(item);
     }
 
@@ -708,16 +763,33 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     const now = nowServer();
     const blockedMap = new Map((game.buzzer?.blockedPlayers ?? []).map((b) => [b.id, b.until]));
     const attemptedSet = new Set(game.buzzer?.attempted ?? []);
+    const seats = $('#players');
+    const hostSeat = $('#host-seat');
+    // The host sits in the host column, like the show's presenter, not on the scoreboard.
+    const hostInColumn = game.phase !== 'gameOver';
 
-    $('#players').innerHTML = '';
+    // Snapshots rebuild seats; preserve open menus and a half-typed score change while scores change.
+    const containers = [seats, hostSeat];
+    const openMenus = new Set(containers.flatMap((box) =>
+      Array.from(box.querySelectorAll<HTMLDetailsElement>('details[open]')).map((menu) => menu.dataset.playerId)));
+    const drafts = new Map(containers.flatMap((box) =>
+      Array.from(box.querySelectorAll<HTMLInputElement>('.score-form input')).map((field) =>
+        [field.dataset.playerId ?? '', field.value] as const)));
+    const focusedDraft = document.activeElement instanceof HTMLInputElement &&
+      document.activeElement.closest('.score-form') ? document.activeElement.dataset.playerId : undefined;
+    seats.replaceChildren();
+    hostSeat.replaceChildren();
+
     for (const p of participants) {
       // TV connections are display devices, not contestants on the scoreboard.
       if (p.displayOnly && game.phase !== 'lobby') continue;
       const el = document.createElement('div');
       el.className = 'player';
       el.classList.add(`role-${p.role}`);
+      if (p.id === you.id) el.classList.add('you');
       if (!p.connected) el.classList.add('off');
-      if (p.id === game.chooserId && game.phase === 'board') el.classList.add('chooser');
+      const isChooser = p.id === game.chooserId && (game.phase === 'board' || game.phase === 'finalThemes');
+      if (isChooser) el.classList.add('chooser');
 
       const isAnswering = p.id === game.buzzer.winnerId && game.phase === 'answering';
       const blockedUntil = blockedMap.get(p.id) ?? 0;
@@ -726,75 +798,107 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
 
       if (isAnswering) el.classList.add('answering');
       else if (isBlocked) el.classList.add('blocked');
+      else if (hasTried) el.classList.add('tried');
 
-      const name = document.createElement('b');
-      name.textContent = p.name;
-      const score = document.createElement('small');
-      score.textContent = p.role === 'player' ? `${p.score} pts` : p.role;
+      const name = Object.assign(document.createElement('b'), { textContent: p.name, title: p.name });
+      el.append(avatar(p.id, p.name), name);
+      if (p.role === 'player') {
+        el.append(Object.assign(document.createElement('div'), {
+          className: `score${p.score < 0 ? ' negative' : ''}`, textContent: formatScore(p.score),
+        }));
+      } else {
+        el.append(Object.assign(document.createElement('span'), { className: 'role-label', textContent: roleLabels[p.role] ?? p.role }));
+      }
       const slot = document.createElement('div');
       slot.className = 'badge-slot';
-      el.append(name, score, slot);
-      if (isAnswering) {
-        slot.innerHTML = `<span class="badge answering-badge">${state.settings.oral ? '🎤 Answering' : '✍️ Writing'}</span>`;
-      } else if (isBlocked) {
-        const secs = Math.max(1, Math.ceil((blockedUntil - now) / 1000));
-        slot.innerHTML = `<span class="badge blocked-badge">🚫 False start (${secs}s)</span>`;
-      } else if (hasTried) {
-        slot.innerHTML = `<span class="badge tried-badge">✘ Answered</span>`;
-      }
+      const badge = (className: string, text: string) =>
+        slot.append(Object.assign(document.createElement('span'), { className: `badge ${className}`, textContent: text }));
+      if (!p.connected) badge('off-badge', 'Offline');
+      else if (isAnswering) badge('answering-badge', state.settings.oral ? 'Answering' : 'Writing');
+      else if (isBlocked) badge('blocked-badge', `Blocked ${Math.max(1, Math.ceil((blockedUntil - now) / 1000))}s`);
+      else if (hasTried) badge('tried-badge', 'Already answered');
+      else if (isChooser) badge('chooser-badge', game.phase === 'finalThemes' ? 'Removes a theme' : 'Picks next');
+      el.append(slot);
+      const replic = replicFor(p.id);
+      if (replic) el.append(replic);
 
+      const actions = document.createElement('details');
+      actions.className = 'player-menu';
+      actions.dataset.playerId = p.id;
+      actions.open = openMenus.has(p.id);
+      const summary = document.createElement('summary');
+      summary.textContent = '⋮';
+      summary.setAttribute('aria-label', `Manage ${p.name}`);
+      // Menu items live in a popover panel so opening one never reshapes the podium row.
+      const panel = Object.assign(document.createElement('div'), { className: 'player-menu-panel' });
+      actions.append(summary, panel);
       if (you.canModerate && p.role === 'player') {
         const row = document.createElement('div');
         row.className = 'row';
-        const plus = Object.assign(document.createElement('button'), { textContent: '+100' });
-        const minus = Object.assign(document.createElement('button'), { textContent: '−100' });
+        const plus = Object.assign(document.createElement('button'), { type: 'button', textContent: '+100' });
+        const minus = Object.assign(document.createElement('button'), { type: 'button', textContent: '−100' });
         plus.onclick = () => send('score:adjust', { targetId: p.id, delta: 100 });
         minus.onclick = () => send('score:adjust', { targetId: p.id, delta: -100 });
         plus.setAttribute('aria-label', `Add 100 points to ${p.name}`);
         minus.setAttribute('aria-label', `Subtract 100 points from ${p.name}`);
-        const custom = Object.assign(document.createElement('button'), { textContent: 'Adjust…' });
-        custom.setAttribute('aria-label', `Adjust ${p.name}'s score by a custom amount`);
-        custom.onclick = () => {
-          const raw = prompt(`Score change for ${p.name} (for example, -250 or 350):`);
-          if (raw === null) return;
-          const delta = Number(raw.trim());
-          if (!raw.trim() || !Number.isSafeInteger(delta)) {
-            alert('Enter a whole-number score change.');
+        row.append(plus, minus);
+        // An inline field replaces the old prompt() so the host never loses sight of the board.
+        const form = Object.assign(document.createElement('form'), { className: 'score-form' });
+        const field = Object.assign(document.createElement('input'), {
+          type: 'number', step: '1', placeholder: '±250', value: drafts.get(p.id) ?? '',
+        });
+        field.dataset.playerId = p.id;
+        field.setAttribute('aria-label', `Custom score change for ${p.name}`);
+        const apply = Object.assign(document.createElement('button'), { type: 'submit', textContent: 'Apply' });
+        form.append(field, apply);
+        form.onsubmit = async (event) => {
+          event.preventDefault();
+          const delta = Number(field.value.trim());
+          if (!field.value.trim() || !Number.isSafeInteger(delta) || delta === 0) {
+            toast('Enter a whole-number score change, for example -250 or 350.');
             return;
           }
-          send('score:adjust', { targetId: p.id, delta });
+          if ((await send('score:adjust', { targetId: p.id, delta })).ok) field.value = '';
         };
-        row.append(plus, minus, custom);
-        el.append(row);
+        panel.append(row, form);
+        if (focusedDraft === p.id) queueMicrotask(() => field.focus());
       }
       if (you.canModerate && p.id !== you.id) {
-        const kick = Object.assign(document.createElement('button'), { textContent: 'Remove' });
+        const kick = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Remove from room' });
         kick.className = 'bad';
         kick.setAttribute('aria-label', `Remove ${p.name} from the room`);
         kick.onclick = () => {
           if (confirm(`Remove ${p.name} from the room?`)) send('participant:kick', { targetId: p.id });
         };
-        el.append(kick);
+        panel.append(kick);
       }
       const vacantHostSeat = !participants.some((member) => member.role === 'host');
       const canAppoint = state.game.phase === 'lobby'
         ? p.role === 'player' || p.role === 'spectator'
         : p.role === 'spectator';
       if (you.canModerate && vacantHostSeat && p.connected && !p.displayOnly && p.id !== you.id && canAppoint) {
-        const appoint = Object.assign(document.createElement('button'), { textContent: 'Make host' });
+        const appoint = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Make host' });
         appoint.setAttribute('aria-label', `Make ${p.name} host`);
         appoint.onclick = () => send('role:set', { targetId: p.id, role: 'host' });
-        el.append(appoint);
+        panel.append(appoint);
       }
       if (you.canModerate && p.role === 'host' && !p.connected) {
-        const release = Object.assign(document.createElement('button'), { textContent: 'Release host seat' });
+        const release = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Release host seat' });
         release.setAttribute('aria-label', `Release ${p.name} from the host seat`);
         release.onclick = () => send('role:set', { targetId: p.id, role: 'spectator' });
-        el.append(release);
+        panel.append(release);
       }
-      $('#players').append(el);
+      if (panel.children.length) el.append(actions);
+      (hostInColumn && p.role === 'host' ? hostSeat : seats).append(el);
     }
   }
+
+  // Popover menus close when the user clicks elsewhere, like any menu.
+  document.addEventListener('click', (event) => {
+    for (const menu of document.querySelectorAll<HTMLDetailsElement>('.player-menu[open], .game-menu[open]')) {
+      if (!menu.contains(event.target as Node)) menu.open = false;
+    }
+  });
 
   /* ---------------- lobby settings & packs ---------------- */
 
@@ -804,23 +908,70 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     'timeForFinalThinking', 'timeOfRound',
   ] as const;
   let packsLoaded = false;
+  let knownPacks: PackListItem[] = [];
+  let renderedPackName: string | null | undefined;
   async function refreshPacks() {
     const res = await send('packs:list');
     if (!res.ok) return;
-    $('#pack-list').innerHTML = '';
-    for (const p of res.packs ?? []) {
+    knownPacks = res.packs ?? [];
+    renderPackList();
+  }
+
+  // Pack rows show the loaded pack as current, so the host can see what will play at a glance.
+  function renderPackList() {
+    const loaded = state?.pack?.name ?? null;
+    renderedPackName = loaded;
+    const list = $('#pack-list');
+    list.replaceChildren();
+    if (!knownPacks.length) {
+      list.append(Object.assign(document.createElement('li'), {
+        className: 'hint', textContent: 'No packs yet. Add a .siq file below or put one in the packs folder.',
+      }));
+      return;
+    }
+    for (const p of knownPacks) {
       const li = document.createElement('li');
-      const btn = Object.assign(document.createElement('button'), { textContent: 'Load' });
-      btn.disabled = !!p.error;
+      const current = !p.error && p.name === loaded;
+      li.classList.toggle('current', current);
+      const meta = Object.assign(document.createElement('div'), { className: 'pack-meta' });
+      const rounds = p.rounds == null ? 'Rounds unknown' : `${p.rounds} round${p.rounds === 1 ? '' : 's'}`;
+      meta.append(Object.assign(document.createElement('strong'), { textContent: p.name }),
+        Object.assign(document.createElement('span'), { textContent: `${rounds} · ${(p.size / 1e6).toFixed(1)} MB` }));
+      if (p.error) meta.append(Object.assign(document.createElement('span'), { className: 'error', textContent: p.error }));
+      const btn = Object.assign(document.createElement('button'), {
+        type: 'button', className: 'small', textContent: current ? 'Loaded' : 'Load',
+      });
+      btn.disabled = !!p.error || current;
       btn.setAttribute('aria-label', p.error ? `${p.name} unavailable: ${p.error}` : `Load ${p.name}`);
       btn.onclick = () => send('packs:load', { file: p.file });
-      li.append(btn, ` ${p.name} (${p.rounds ?? '?'} rounds, ${(p.size / 1e6).toFixed(1)} MB)`);
-      if (p.error) li.append(Object.assign(document.createElement('span'), {
-        className: 'error', textContent: ` — ${p.error}`,
-      }));
-      $('#pack-list').append(li);
+      li.append(meta, btn);
+      list.append(li);
     }
   }
+
+  // The server knows its LAN address; the browser only knows how it reached the host.
+  let inviteLoaded = false;
+  async function loadInvite() {
+    inviteLoaded = true;
+    let url = location.origin;
+    try {
+      const info = await (await fetch('/api/info')).json() as { urls?: string[] };
+      if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') url = info.urls?.[0] ?? url;
+    } catch { /* The current origin still works for devices that reached this page. */ }
+    $('#invite-url').textContent = url;
+    ($('#tv-link') as HTMLAnchorElement).href = `${url}/?tv`;
+  }
+  button('#btn-copy-invite').onclick = async () => {
+    const url = $('#invite-url').textContent ?? '';
+    try {
+      await navigator.clipboard.writeText(url);
+      toast('Link copied.', 'info');
+    } catch {
+      // Clipboard needs a secure context; selecting the text lets the host copy it by hand.
+      getSelection()?.selectAllChildren($('#invite-url'));
+      toast('Press Ctrl+C or Cmd+C to copy the selected link.', 'info');
+    }
+  };
   $('#btn-refresh-packs').addEventListener('click', refreshPacks);
 
   $('#pack-upload-form').addEventListener('submit', async (event) => {
@@ -902,28 +1053,48 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       packsLoaded = true;
       refreshPacks();
     }
-    $('#pack-current').textContent = state.pack
-      ? `✅ Loaded: ${state.pack.name} — ${state.pack.stats.questions} questions (${state.pack.rounds.length} rounds)`
-      : '⚠️ No pack loaded yet — choose or download one below';
-    const ready = state.pack && state.participants.some((p) => p.role === 'host' && p.connected) &&
-      state.participants.some((p) => p.role === 'player' && p.connected);
+    if (renderedPackName !== (state.pack?.name ?? null)) renderPackList();
+    const current = $('#pack-current');
+    current.classList.toggle('empty', !state.pack);
+    current.replaceChildren();
+    if (state.pack) {
+      const rounds = state.pack.rounds.length;
+      current.append(Object.assign(document.createElement('strong'), { textContent: state.pack.name }),
+        Object.assign(document.createElement('span'), {
+          textContent: `${state.pack.stats.questions} questions · ${rounds} round${rounds === 1 ? '' : 's'}`,
+        }));
+    } else current.textContent = 'No pack loaded. Pick one from the list.';
+
+    // A checklist says exactly what is missing instead of one vague disabled button.
+    const hasHost = state.participants.some((p) => p.role === 'host' && p.connected);
+    const playerCount = state.participants.filter((p) => p.role === 'player' && p.connected).length;
+    const checks: [boolean, string][] = [
+      [!!state.pack, state.pack ? 'Pack loaded' : 'Load a pack'],
+      [hasHost, hasHost ? 'Host connected' : 'Appoint a connected host'],
+      [playerCount > 0, playerCount ? `${playerCount} player${playerCount === 1 ? '' : 's'} ready` : 'Wait for a player'],
+    ];
+    const checklist = $('#start-checklist');
+    checklist.replaceChildren(...checks.map(([done, text]) =>
+      Object.assign(document.createElement('li'), { className: done ? 'done' : '', textContent: text })));
+    const ready = checks.every(([done]) => done);
     button('#btn-start').disabled = !ready;
-    $('#start-hint').textContent = ready ? '' : 'Load a pack, connect a player, and appoint a connected host.';
+    $('#start-hint').textContent = !hasHost
+      ? 'Open a participant’s Manage menu and choose Make host.' : '';
 
     // Sync settings inputs
     const s = state.settings;
     if (document.activeElement !== select('#set-gameMode')) select('#set-gameMode').value = s.gameMode;
     if (document.activeElement !== input('#set-falseStart')) input('#set-falseStart').checked = s.falseStart;
     $('#set-falseStart-desc').textContent = s.falseStart
-      ? `On: Early presses block the buzzer for ${s.timeForBlockingButton}s.`
-      : 'Off: Players can buzz while the question is shown.';
+      ? `Pressing before the signal blocks the button for ${s.timeForBlockingButton} s.`
+      : 'Players can buzz while the question is still being read.';
 
     if (document.activeElement !== select('#set-buzzSyncMode')) {
       select('#set-buzzSyncMode').value = s.buzzSyncMode;
     }
     $('#set-buzzSyncMode-desc').textContent = s.buzzSyncMode === 'clientTimestamp'
-      ? `Collect presses for ${s.buzzSyncWindowMs}ms and compare calibrated device times.`
-      : 'The first press received by the server wins.';
+      ? `Presses within ${s.buzzSyncWindowMs} ms are compared by device time. Fairer on mixed Wi‑Fi.`
+      : 'Simplest. A slower connection can lose a close press.';
 
     for (const key of numberSettingKeys) {
       const field = input(`#set-${key}`);
@@ -984,25 +1155,43 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     const { game, you } = state;
     const board = $('#board');
     board.innerHTML = '';
+    const lobby = game.phase === 'lobby';
+    $('#lobby-table').classList.toggle('hidden', !lobby);
+    if (lobby && !inviteLoaded) void loadInvite();
+    board.classList.toggle('final-themes', game.phase === 'finalThemes');
     if (game.phase === 'finalThemes') {
-      board.style.gridTemplateColumns = 'repeat(auto-fit, minmax(180px, 1fr))';
+      board.style.gridTemplateColumns = 'repeat(auto-fit, minmax(200px, 1fr))';
       const canRemove = you.canModerate || you.id === game.chooserId;
       game.board.forEach((theme, index) => {
         if (game.removedFinalThemes.includes(index) || !theme.questions[0]?.available) return;
         const el = document.createElement(canRemove ? 'button' : 'div');
         el.className = 'theme';
-        el.textContent = `${theme.name}${canRemove ? ' · Remove' : ''}`;
+        el.textContent = theme.name;
         if (canRemove) {
           el.setAttribute('type', 'button');
+          el.setAttribute('aria-label', `Remove theme ${theme.name}`);
+          el.append(Object.assign(document.createElement('small'), { textContent: 'Remove' }));
           el.onclick = () => send('game:removeFinalTheme', { themeIndex: index });
         }
         board.append(el);
       });
       return;
     }
-    if (game.phase !== 'board') return;
+    if (game.phase !== 'board') {
+      // Between questions the table shows where the game stands instead of disappearing.
+      if (game.current || !game.round) return;
+      board.style.gridTemplateColumns = '1fr';
+      const card = Object.assign(document.createElement('div'), { className: 'table-title' });
+      const caption = game.phase === 'roundEnd' ? 'Round complete'
+        : game.phase === 'finalWager' ? 'Final wagers' : game.phase === 'paused' ? 'Paused' : '';
+      card.append(Object.assign(document.createElement('strong'), { textContent: game.round.name }));
+      if (caption) card.append(Object.assign(document.createElement('span'), { textContent: caption }));
+      board.append(card);
+      return;
+    }
     const cols = Math.max(...game.board.map((t) => t.questions.length), 1);
-    board.style.gridTemplateColumns = `minmax(120px, 2fr) repeat(${cols}, 1fr)`;
+    // minmax(0, …) lets four-digit prices shrink on phones instead of pushing the board off-screen.
+    board.style.gridTemplateColumns = `minmax(0, 1.8fr) repeat(${cols}, minmax(0, 1fr))`;
     const canPick = you.canModerate || you.id === game.chooserId;
     game.board.forEach((theme, t) => {
       board.append(Object.assign(document.createElement('div'), { className: 'theme', textContent: theme.name }));
@@ -1027,7 +1216,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     wrap.className = 'media-wrap';
 
     const el = document.createElement(type);
-    el.controls = true;
+    // Pack media starts with the question; show a tap button only if autoplay is blocked.
     el.preload = 'auto';
     el.autoplay = autoStart && state?.game.phase !== 'paused' &&
       state?.game.phase !== 'answering' && !previous?.paused;
@@ -1183,8 +1372,12 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     const slot = questionContentRoot.querySelector<HTMLElement>(`.content-${placement}`);
     if (!slot) return;
     if (placement === 'screen') {
-      slot.querySelectorAll<HTMLMediaElement>('audio, video').forEach((media) => media.pause());
-      slot.replaceChildren();
+      // Nonblocking media can keep playing while the pack shows its following text.
+      const media = slot.querySelector<HTMLMediaElement>('audio, video');
+      if (!media || media.ended || media.error || (item.type !== 'text' && item.type !== 'say')) {
+        slot.querySelectorAll<HTMLMediaElement>('audio, video').forEach((clip) => clip.pause());
+        slot.replaceChildren();
+      }
     }
     const wrapper = document.createElement('div');
     wrapper.dataset.contentIndex = String(index);
@@ -1216,7 +1409,10 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     const hostAnswer = $('#host-answer');
     const preview = state.you.role === 'host' && !c?.answerShown ? c?.right : null;
     hostAnswer.classList.toggle('hidden', !preview);
-    if (preview) hostAnswer.textContent = `Host answer: ${preview.join(' / ')}`;
+    if (preview) {
+      hostAnswer.replaceChildren(Object.assign(document.createElement('span'), { textContent: 'Answer, only you see it' }),
+        Object.assign(document.createElement('strong'), { textContent: preview.join(' / ') }));
+    }
     box.classList.toggle('hidden', !c);
 
     // Update glowing border frame around question card to match stage
@@ -1262,11 +1458,14 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     box.innerHTML = '';
     box.dataset.questionId = questionId;
     const recipient = state.participants.find((p) => p.id === c.assignedId)?.name ?? 'Player';
-    box.append(Object.assign(document.createElement('h3'), { textContent: c.type === 'secretNoQuestion'
-      ? game.phase === 'specialSetup' ? '🎁 Gift · Host is choosing a recipient'
-        : `🎁 ${recipient} receives ${c.price} points`
+    const heading = Object.assign(document.createElement('h3'), { textContent: c.type === 'secretNoQuestion'
+      ? game.phase === 'specialSetup' ? 'Gift: the host is choosing who gets it'
+        : `Gift: ${recipient} receives ${formatScore(c.price)}`
       : game.round?.type === 'final' ? `Final · ${c.themeName}`
-        : `${c.themeName} · ${c.price}${c.type !== 'simple' ? ` · ${c.type}` : ''}` }));
+        : `${c.themeName} · ${formatScore(c.price)}` });
+    const typeLabel = c.type === 'secretNoQuestion' || game.round?.type === 'final' ? '' : questionTypeLabel(c.type);
+    if (typeLabel) heading.append(Object.assign(document.createElement('span'), { className: 'q-type', textContent: typeLabel }));
+    box.append(heading);
     if (presenting) {
       questionContentRoot = document.createElement('div');
       questionContentRoot.className = 'question-content';
@@ -1351,125 +1550,108 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
 
   /* ---------------- stage banner & buzzer orientiers ---------------- */
 
+  type StageTone = 'reading' | 'open' | 'answering' | 'reveal' | 'idle';
+  function setStage(tone: StageTone, title: string, subtitle: string) {
+    const banner = $('#stage-banner');
+    banner.classList.remove('state-reading', 'state-open', 'state-answering', 'state-reveal', 'state-idle');
+    banner.classList.add(`state-${tone}`);
+    $('#stage-title').textContent = title;
+    $('#stage-subtitle').textContent = subtitle;
+  }
+
   function updateOrientiers() {
     if (!state?.you) return;
     const { game, you, participants, settings } = state;
     const now = nowServer();
     const banner = $('#stage-banner');
     const buzzerBtn = $('#buzzer');
+    const nameOf = (id: string | null | undefined) => participants.find((p) => p.id === id)?.name ?? 'A player';
 
-    // 1. Stage Banner (shown during reading, buzzerOpen, answering, reveal)
-    const activeStages = new Set(['stakeAuction', 'reading', 'buzzerOpen', 'answering', 'forAllAnswering', 'forAllJudge', 'reveal', 'appealVote', 'finalQuestion', 'finalJudge', 'paused']);
-    if (!activeStages.has(game.phase)) {
-      banner.classList.add('hidden');
-    } else {
-      banner.classList.remove('hidden', 'state-reading', 'state-open', 'state-answering', 'state-reveal');
-
+    // 1. Status panel: the host's "voice". It is visible from the lobby on so the layout never jumps.
+    const inPlay = game.phase !== 'gameOver';
+    banner.classList.toggle('hidden', !inPlay);
+    if (inPlay) {
       const t = game.timer;
       const remMs = t ? Math.max(0, t.endsAt - now) : 0;
-      const remSec = t ? (remMs / 1000).toFixed(1) + 's' : '';
       const pct = t && t.durationMs > 0 ? Math.max(0, Math.min(100, (remMs / t.durationMs) * 100)) : 0;
-
-      $('#stage-countdown').textContent = remSec;
+      $('#stage-countdown').textContent = t ? String(Math.ceil(remMs / 1000)) : '';
       $('#stage-progress-fill').style.width = `${pct}%`;
+      const chooser = game.chooserId === you.id ? 'You' : nameOf(game.chooserId);
+      const canPick = you.canModerate || game.chooserId === you.id;
 
-      if (game.phase === 'paused') {
-        banner.classList.add('state-reading');
-        $('#stage-icon').textContent = '⏸';
-        $('#stage-title').textContent = 'Game paused';
-        $('#stage-subtitle').textContent = 'Waiting for the host to resume.';
+      if (game.phase === 'lobby') {
+        const host = participants.find((p) => p.role === 'host');
+        const players = participants.filter((p) => p.role === 'player' && p.connected).length;
+        setStage('idle', 'Waiting to start', you.canManage
+          ? 'Load a pack and check the settings below, then press Start game.'
+          : `${players} player${players === 1 ? '' : 's'} in. ${host ? `${host.name} starts the game` : 'A host starts the game'} when everyone is here.`);
+      } else if (game.phase === 'paused') {
+        setStage('reading', 'Game paused', you.canModerate ? 'Press Resume to continue.' : 'Waiting for the host to resume.');
+      } else if (game.phase === 'board') {
+        setStage('idle', game.chooserId === you.id ? 'Your pick' : `${chooser} picks next`,
+          canPick ? 'Choose a theme and a price on the board.' : 'Waiting for a question to be chosen.');
+      } else if (game.phase === 'finalThemes') {
+        setStage('idle', 'Final round', canPick ? 'Remove themes until one is left.' : `${chooser} removes a theme.`);
+      } else if (game.phase === 'specialSetup') {
+        setStage('reading', game.current?.type === 'secretNoQuestion' ? 'A gift question' : 'Special question',
+          you.canModerate ? 'Choose who answers and the value below.' : 'The host is setting up this question.');
+      } else if (game.phase === 'roundEnd') {
+        setStage('idle', 'Round complete', you.canModerate ? 'Press Next to continue.' : 'The next round starts soon.');
+      } else if (game.phase === 'finalWager') {
+        setStage('reading', 'Place your final wager', you.role === 'player'
+          ? 'Your wager is private until the answers are judged.' : 'Players are placing private wagers.');
       } else if (game.phase === 'stakeAuction') {
-        banner.classList.add('state-reading');
-        $('#stage-icon').textContent = '🔨';
-        $('#stage-title').textContent = 'Stake auction';
-        $('#stage-subtitle').textContent = 'Players bid in turn for the right to answer.';
+        setStage('reading', 'Question auction', 'Players bid in turn for the right to answer.');
       } else if (game.phase === 'forAllAnswering') {
-        banner.classList.add('state-reading');
-        $('#stage-icon').textContent = '✍️';
-        $('#stage-title').textContent = 'Everyone answers';
-        $('#stage-subtitle').textContent = 'Submit your answer privately before time runs out.';
+        setStage('reading', 'Everyone answers', 'Submit a private answer before time runs out.');
       } else if (game.phase === 'forAllJudge') {
-        banner.classList.add('state-answering');
-        $('#stage-icon').textContent = '⚖️';
-        $('#stage-title').textContent = 'Judging all answers';
-        $('#stage-subtitle').textContent = 'The host is reviewing submitted answers.';
+        setStage('answering', 'Checking answers', 'The host is judging every answer.');
       } else if (game.phase === 'appealVote') {
-        banner.classList.add('state-answering');
-        $('#stage-icon').textContent = '⚖️';
-        $('#stage-title').textContent = 'Appeal vote';
-        $('#stage-subtitle').textContent = 'Eligible players are reviewing the verdict.';
+        setStage('answering', 'Appeal vote', 'Eligible players are reviewing the verdict.');
       } else if (game.phase === 'reading') {
-        banner.classList.add('state-reading');
-        $('#stage-icon').textContent = '📖';
-        $('#stage-title').textContent = 'Reading question';
-        $('#stage-subtitle').textContent = game.current?.type === 'forAll'
-          ? 'Read the question. Private answers open after reading.'
+        setStage('reading', 'Listen to the question', game.current?.type === 'forAll'
+          ? 'Private answers open after reading.'
           : !settings.falseStart ? 'You can buzz while the question plays.'
-            : `Wait for the signal. Early buzz blocks you for ${settings.timeForBlockingButton}s.`;
+            : `Wait for the green signal. An early press blocks you for ${settings.timeForBlockingButton} s.`);
       } else if (game.phase === 'buzzerOpen') {
-        banner.classList.add('state-open');
-        $('#stage-icon').textContent = '🟢';
-        $('#stage-title').textContent = 'Buzz now!';
-        $('#stage-subtitle').textContent = !settings.falseStart
-          ? 'You can buzz while the question is being read.'
-          : 'Press the buzzer or Space to answer.';
+        setStage('open', 'Buzz now', you.role === 'player' ? 'Tap the button or press Space.' : 'Players can press their buttons.');
       } else if (game.phase === 'answering') {
-        banner.classList.add('state-answering');
-        const winner = participants.find((p) => p.id === game.buzzer.winnerId);
+        const winnerId = game.buzzer.winnerId;
         const info = game.buzzer.winnerInfo;
-        const timingNote = info?.reactionMs != null
-          ? ` · ⏱️ ${info.reactionMs}ms (${info.mode === 'clientTimestamp' ? 'device press' : 'server time'})`
-          : '';
-        $('#stage-icon').textContent = settings.oral ? '🎤' : '✍️';
-        $('#stage-title').textContent = `${settings.oral ? 'ANSWERING' : 'WRITTEN ANSWER'}: ${winner ? winner.name : 'Player'}${timingNote}`;
+        const reaction = info?.reactionMs != null ? ` Reaction ${info.reactionMs} ms.` : '';
+        const title = winnerId === you.id ? 'Your answer' : `${nameOf(winnerId)} answers`;
         if (!settings.oral) {
           const typed = game.buzzer.typedAnswer;
-          $('#stage-subtitle').textContent = typed?.submitted
-            ? 'Answer submitted. Waiting for the host verdict.'
-            : typed?.closed ? 'Answer time ended. Waiting for the host verdict.'
-              : you.id === game.buzzer.winnerId ? 'Type your private answer before time runs out.'
-                : 'Waiting for the player to submit a private answer.';
+          setStage('answering', title, typed?.submitted
+            ? you.canModerate ? 'Answer submitted. Choose Correct or Wrong.' : 'Answer submitted. Waiting for the verdict.'
+            : typed?.closed ? 'Time is up. Waiting for the verdict.'
+              : winnerId === you.id ? 'Type your answer before time runs out.' : 'Waiting for a written answer.');
         } else if (!t || remMs <= 0) {
           // The host still judges after the answer clock ends; make that handoff explicit.
-          $('#stage-countdown').textContent = 'Time';
-          $('#stage-subtitle').textContent = you.canModerate
-            ? 'Answer time ended. Choose Correct or Wrong.'
-            : 'Answer time ended — waiting for the host verdict.';
+          $('#stage-countdown').textContent = '0';
+          setStage('answering', title, you.canModerate ? 'Time is up. Choose Correct or Wrong.' : 'Time is up. Waiting for the verdict.');
         } else {
-          $('#stage-subtitle').textContent = you.canModerate
-            ? 'Choose Correct or Wrong.'
-            : 'Listen to the answer.';
+          setStage('answering', title, (you.canModerate ? 'Listen, then choose Correct or Wrong.'
+            : winnerId === you.id ? 'Say your answer out loud.' : 'Listen to the answer.') + reaction);
         }
       } else if (game.phase === 'finalQuestion') {
-        banner.classList.add('state-reading');
-        $('#stage-icon').textContent = '🏆';
-        $('#stage-title').textContent = 'Final question';
-        $('#stage-subtitle').textContent = 'Prepare your answer before time runs out.';
+        setStage('reading', 'Final question', 'Prepare your answer before time runs out.');
       } else if (game.phase === 'finalJudge') {
-        banner.classList.add('state-answering');
-        $('#stage-icon').textContent = '⚖️';
-        $('#stage-title').textContent = 'Final judging';
-        $('#stage-subtitle').textContent = 'The host is checking every answer.';
+        setStage('answering', 'Final judging', 'The host is checking every answer.');
       } else if (game.phase === 'reveal') {
         if (game.current?.answerShown) {
-          banner.classList.add('state-reveal');
-          $('#stage-icon').textContent = '✅';
-          $('#stage-title').textContent = `CORRECT ANSWER: ${(game.current?.right ?? []).join(' / ')}`;
-          $('#stage-subtitle').textContent = t ? 'Auto-advancing to board…' : 'Waiting for the next question.';
-          if (!t) {
-            $('#stage-countdown').textContent = '';
-            $('#stage-progress-fill').style.width = '100%';
-          }
+          const right = (game.current?.right ?? []).join(' / ');
+          setStage('reveal', right ? `Answer: ${right}` : 'Answer shown',
+            t ? 'Back to the board in a moment.' : you.canModerate ? 'Press Next to continue.' : 'Waiting for the host.');
+          if (!t) $('#stage-progress-fill').style.width = '100%';
         } else {
-          banner.classList.add('state-reading');
-          $('#stage-icon').textContent = '❌';
-          $('#stage-title').textContent = 'Answer not revealed';
-          $('#stage-subtitle').textContent = you.canModerate
-            ? 'Choose Next to return to the board, or Show answer to reveal it.'
-            : 'Waiting for the host.';
+          setStage('idle', 'No one got it', you.canModerate
+            ? 'Show the answer, or press Next to return to the board.' : 'Waiting for the host.');
           $('#stage-countdown').textContent = '';
           $('#stage-progress-fill').style.width = '0%';
         }
+      } else {
+        setStage('idle', game.round?.name ?? 'Game in progress', '');
       }
     }
 
@@ -1486,41 +1668,26 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     const blockedUntil = game.buzzer?.blockedUntil ?? 0;
     const isBlocked = blockedUntil > now;
     const alreadyTried = (game.buzzer?.attempted ?? []).includes(you.id);
+    const setBuzzer = (tone: string, main: string, sub: string) => {
+      buzzerBtn.classList.add(tone);
+      $('#buzzer-main').textContent = main;
+      $('#buzzer-sub').textContent = sub;
+    };
 
     if (isBlocked) {
-      const remBlock = ((blockedUntil - now) / 1000).toFixed(1);
-      buzzerBtn.classList.add('buzz-blocked');
-      $('#buzzer-main').textContent = `🚫 Blocked ${remBlock}s`;
-      $('#buzzer-sub').textContent = 'You pressed before the signal.';
+      setBuzzer('buzz-blocked', `Blocked ${((blockedUntil - now) / 1000).toFixed(1)} s`, 'You pressed before the signal.');
     } else if (alreadyTried && (game.phase === 'buzzerOpen' || game.phase === 'answering')) {
-      buzzerBtn.classList.add('buzz-idle');
-      $('#buzzer-main').textContent = '✘ Already answered';
-      $('#buzzer-sub').textContent = 'Waiting for other players.';
+      setBuzzer('buzz-idle', 'You already answered', 'Waiting for the others.');
     } else if (game.phase === 'reading') {
-      buzzerBtn.classList.add(settings.falseStart ? 'buzz-reading' : 'buzz-open');
-      $('#buzzer-main').textContent = settings.falseStart ? '✋ Wait for signal' : '🟢 Buzz now!';
-      $('#buzzer-sub').textContent = settings.falseStart
-        ? `Early press blocks you for ${settings.timeForBlockingButton}s.`
-        : 'Press now to answer.';
+      if (settings.falseStart) setBuzzer('buzz-reading', 'Wait for green', `An early press blocks you for ${settings.timeForBlockingButton} s.`);
+      else setBuzzer('buzz-open', 'Buzz', 'Press now to answer.');
     } else if (game.phase === 'buzzerOpen') {
-      buzzerBtn.classList.add('buzz-open');
-      $('#buzzer-main').textContent = '🟢 Buzz now!';
-      $('#buzzer-sub').textContent = 'Tap or press Space.';
+      setBuzzer('buzz-open', 'Buzz', 'Tap here or press Space.');
     } else if (game.phase === 'answering') {
-      if (game.buzzer.winnerId === you.id) {
-        buzzerBtn.classList.add('buzz-you-answering');
-        $('#buzzer-main').textContent = '🎤 Your answer';
-        $('#buzzer-sub').textContent = 'Tell the host your answer.';
-      } else {
-        const winner = participants.find((p) => p.id === game.buzzer.winnerId);
-        buzzerBtn.classList.add('buzz-idle');
-        $('#buzzer-main').textContent = `⏳ ${winner ? winner.name : 'Player'} answering`;
-        $('#buzzer-sub').textContent = 'Get ready if they are wrong.';
-      }
+      if (game.buzzer.winnerId === you.id) setBuzzer('buzz-you-answering', 'Your answer', 'Say it out loud to the host.');
+      else setBuzzer('buzz-idle', `${nameOf(game.buzzer.winnerId)} answers`, 'Get ready in case they are wrong.');
     } else {
-      buzzerBtn.classList.add('buzz-idle');
-      $('#buzzer-main').textContent = '⏸ Waiting for question';
-      $('#buzzer-sub').textContent = 'Buzzer opens after selection.';
+      setBuzzer('buzz-idle', 'Waiting for a question', 'The button opens after a question is chosen.');
     }
   }
 
@@ -1528,10 +1695,6 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
 
   setInterval(() => {
     if (!state?.game) return;
-    const t = state.game.timer;
-    $('#timer').textContent = t
-      ? `${t.name} ${Math.max(0, Math.ceil((t.endsAt - nowServer()) / 1000))}s`
-      : '';
     updateOrientiers();
   }, 100);
 

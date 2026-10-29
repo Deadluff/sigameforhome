@@ -1,0 +1,37 @@
+/*
+ * Studio palette: a TV quiz set. Ultramarine panels, amber "lamp" digits on the board and score
+ * windows, and three signal colours that match the question frame the show uses (read / buzz / answer).
+ */
+:root {
+  color-scheme: dark;
+
+  --studio: #0f1656;        /* page background */
+  --set: #18227a;           /* panels */
+  --set-raised: #222e94;    /* controls on panels */
+  --set-sunk: #0b1147;      /* inset windows: score, inputs */
+  --board: #1f30a8;         /* live board cell */
+  --board-lit: #3249d9;     /* hovered board cell */
+  --board-spent: #131c66;   /* played cell and table bed */
+
+  --lamp: #ffc24b;          /* prices, scores, primary actions */
+  --lamp-soft: #ffe2a1;
+  --go: #3be38e;            /* buzzer open, correct */
+  --talk: #5ccbff;          /* someone is answering */
+  --stop: #ff5c6f;          /* wrong, blocked, destructive */
+
+  --paper: #f2f4ff;
+  --mist: #a7b1ea;
+  --rule: rgba(167, 177, 234, .22);
+
+  --font-display: 'Unbounded Variable', 'Arial Black', system-ui, sans-serif;
+  --font-ui: 'Manrope Variable', 'Segoe UI', system-ui, sans-serif;
+
+  /* Type scale (~1.25): 13 / 15 / 17 / 21 / 27 / 34 / 44 */
+  --t-xs: 13px; --t-s: 15px; --t-m: 17px; --t-l: 21px; --t-xl: 27px; --t-2xl: 34px; --t-3xl: 44px;
+
+  /* Radius follows hierarchy: the table is the largest object, cells the smallest. */
+  --r-table: 18px; --r-panel: 14px; --r-control: 10px; --r-cell: 6px;
+
+  --gap: 12px;
+  --signal: transparent;    /* current frame colour, set per phase on the table */
+}

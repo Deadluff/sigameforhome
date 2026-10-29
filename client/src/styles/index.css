@@ -1,0 +1,13 @@
+/* Fonts are bundled so a LAN game without internet still renders the intended type (Cyrillic included). */
+@import '@fontsource-variable/unbounded/wght.css';
+@import '@fontsource-variable/manrope/wght.css';
+
+@import './tokens.css';
+@import './base.css';
+@import './entry.css';
+@import './layout.css';
+@import './lobby.css';
+@import './table.css';
+@import './podiums.css';
+@import './dock.css';
+@import './tv.css';

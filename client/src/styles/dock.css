@@ -1,0 +1,96 @@
+/* Status line (the host's "voice"), contextual panels, host toolbar, and the player buzzer. */
+.stage-status-slot { flex: 1; display: flex; min-width: 0; }
+.stage-banner {
+  --tone: var(--mist);
+  display: flex; flex-direction: column; justify-content: space-between; gap: 14px; flex: 1; min-width: 0;
+  padding: 16px; border-radius: var(--r-panel); background: var(--set); border-top: 4px solid var(--tone);
+}
+.stage-banner.state-reading { --tone: var(--lamp); }
+.stage-banner.state-open { --tone: var(--go); }
+.stage-banner.state-answering { --tone: var(--talk); }
+.stage-banner.state-reveal { --tone: var(--go); }
+.stage-banner.state-idle { --tone: var(--mist); }
+.stage-banner-header { display: flex; flex-direction: column; gap: 10px; }
+.stage-title { font-size: var(--t-l); font-weight: 800; line-height: 1.25; overflow-wrap: anywhere; }
+.stage-subtitle { color: var(--mist); font-weight: 600; }
+.stage-countdown { align-self: flex-start; color: var(--tone); font: 700 var(--t-2xl)/1 var(--font-display); font-variant-numeric: tabular-nums; }
+.stage-countdown:empty { display: none; }
+.stage-progress-track { height: 6px; border-radius: 999px; background: var(--set-sunk); overflow: hidden; }
+.stage-progress-fill { height: 100%; width: 0; border-radius: inherit; background: var(--tone); transition: width .1s linear; }
+
+/* Contextual panels */
+.dock .card { display: grid; gap: 12px; }
+.dock .card h3 { font-size: var(--t-m); }
+.dock .card form { display: grid; gap: 8px; }
+.dock .card form.row { display: flex; }
+#stake-auction, #final-wager { border-top: 4px solid var(--lamp); }
+#stake-auction-status { font-size: var(--t-l); font-weight: 800; }
+#stake-bid-form .field { flex: 1 1 160px; }
+#final-wager { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
+#final-wager .field { flex: 1 1 200px; }
+#final-host { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+#final-host-status { flex: 1 1 260px; font-weight: 700; }
+#final-host .row { flex: 1; justify-content: flex-end; align-items: center; }
+#final-host select { width: auto; min-width: 180px; }
+#final-host button:disabled { display: none; }
+#special-setup .row .field { flex: 1 1 180px; }
+.submitted { padding: 12px 14px; border-radius: var(--r-control); background: var(--set-sunk); font-size: var(--t-m); font-weight: 700; white-space: pre-wrap; overflow-wrap: anywhere; }
+#for-all-host { display: grid; gap: 10px; }
+#for-all-close { justify-self: start; }
+.for-all-response { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px 10px; padding: 12px 0; border-top: 1px solid var(--rule); }
+.for-all-response strong { grid-column: 1 / -1; color: var(--mist); font-size: var(--t-xs); }
+.for-all-response p { font-size: var(--t-m); font-weight: 700; white-space: pre-wrap; overflow-wrap: anywhere; }
+.for-all-response > span { color: var(--mist); font-weight: 700; }
+.appeal-judgment { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 0; border-top: 1px solid var(--rule); }
+.appeal-judgment span { min-width: 0; overflow-wrap: anywhere; font-weight: 700; }
+#appeal-close { justify-self: start; }
+
+/* Host toolbar: verdicts and progression first, pause and menu pushed right. */
+#host-controls {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px;
+  border-radius: var(--r-panel); background: var(--set); border: 1px solid var(--rule);
+}
+#host-controls > button[data-act="judge-ok"], #host-controls > button[data-act="judge-bad"] { min-width: 132px; min-height: 52px; font-size: var(--t-m); }
+.controls-spacer { flex: 1; }
+.game-menu { position: relative; }
+.game-menu summary { display: inline-flex; align-items: center; min-height: 44px; padding: 10px 16px; border-radius: var(--r-control); border: 1px solid var(--rule); list-style: none; }
+.game-menu summary::-webkit-details-marker { display: none; }
+.game-menu summary::after { content: ""; margin-left: 8px; border: 5px solid transparent; border-bottom-color: currentColor; transform: translateY(-3px); }
+.game-menu-panel { position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 6; display: grid; gap: 6px; min-width: 200px; padding: 8px; border-radius: var(--r-panel); background: var(--set-raised); border: 1px solid var(--rule); }
+
+/* Buzzer: the one control a player needs. Colour mirrors the table frame. */
+.buzzer {
+  flex-direction: column; gap: 4px; width: 100%; min-height: 104px; border-radius: 22px;
+  border: 0; user-select: none; -webkit-user-select: none; touch-action: manipulation;
+}
+#buzzer-main { font: 700 var(--t-xl)/1.1 var(--font-display); }
+#buzzer-sub { font-size: var(--t-s); font-weight: 700; opacity: .85; }
+.buzzer:active:not(.buzz-blocked) { transform: scale(.985); }
+.buzzer.buzz-reading { background: #3a2c08; color: var(--lamp); box-shadow: inset 0 0 0 3px var(--lamp); }
+.buzzer.buzz-open { background: var(--go); color: #062915; }
+.buzzer.buzz-open:not(:disabled):hover { background: #5af0a3; }
+.buzzer.buzz-blocked { background: repeating-linear-gradient(45deg, #4a1424 0 14px, #5d1a2d 14px 28px); color: #ffc2cb; box-shadow: inset 0 0 0 3px var(--stop); cursor: not-allowed; }
+.buzzer.buzz-you-answering { background: var(--talk); color: #04263a; }
+.buzzer.buzz-idle { background: var(--set); color: var(--mist); }
+
+@media (max-width: 860px) {
+  .stage-banner { flex-direction: row; align-items: center; gap: 12px; padding: 12px 14px; flex-wrap: wrap; }
+  .stage-banner-header { flex-direction: row; align-items: center; flex: 1; min-width: 0; }
+  .stage-text { flex: 1; min-width: 0; }
+  .stage-title { font-size: var(--t-m); }
+  .stage-countdown { font-size: var(--t-l); align-self: center; }
+  .stage-progress-track { flex-basis: 100%; height: 4px; }
+}
+@media (max-width: 600px) {
+  .stage-subtitle { font-size: var(--t-xs); }
+  #host-controls { padding: 8px; gap: 6px; }
+  #host-controls > button { flex: 1 1 auto; }
+  #host-controls > button[data-act="judge-ok"], #host-controls > button[data-act="judge-bad"] { min-width: 0; flex: 1 1 40%; }
+  .controls-spacer { display: none; }
+  .buzzer { min-height: 96px; }
+  #buzzer-main { font-size: var(--t-l); }
+  #stake-bid-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  #stake-bid-form .field { grid-column: 1 / -1; }
+  .for-all-response { grid-template-columns: 1fr 1fr; }
+  .for-all-response p { grid-column: 1 / -1; }
+}
