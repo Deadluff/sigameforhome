@@ -17,6 +17,7 @@ import { canUpload, MAX_UPLOAD_BYTES, saveUploadedPack, UploadError } from './pa
 import { registerSocketHandlers } from './socket/handlers.ts';
 import { ensureDir, safeJoin } from './utils/fsx.ts';
 import { getLanAddresses } from './utils/network.ts';
+import { qrSvg } from './utils/qrSvg.ts';
 
 await Promise.all([ensureDir(config.packsDir), ensureDir(config.cacheDir)]);
 
@@ -42,6 +43,15 @@ app.get('/api/info', (_req: Request, res: Response) => {
     port: config.port,
     urls: getLanAddresses().map((a) => `http://${a.address}:${config.port}`),
   });
+});
+
+// The lobby shows this so phones can join by camera instead of typing the LAN address.
+app.get('/api/invite.svg', (req: Request, res: Response) => {
+  const fallback = getLanAddresses().map((a) => `http://${a.address}:${config.port}`)[0] ?? `http://localhost:${config.port}`;
+  const requested = typeof req.query.url === 'string' ? req.query.url : '';
+  // Only encode this server's own http(s) address, never an arbitrary caller-supplied link.
+  const url = /^https?:\/\/[^/\s]+\/?(\?tv)?$/.test(requested) && requested.length <= 200 ? requested : fallback;
+  res.type('image/svg+xml').set('Cache-Control', 'no-store').send(qrSvg(url));
 });
 
 app.get('/api/packs', async (_req: Request, res: Response, next: NextFunction) => {

@@ -260,10 +260,10 @@ test('final wagers stay private and scoring follows each wager', (t) => {
   const { room, host, player } = createRoom(t, 'classic');
   room.adjustScore(host.id, player.id, 500);
   room.engine.enterRound(2);
-  room.engine.selectQuestion(host.id, true, 0, 0);
+  // A single final theme skips the board and opens wagers directly.
   assert.equal(room.engine.phase, 'finalWager');
   assert.deepEqual(room.snapshotFor(player.id).game.current.content, []);
-  assert.throws(() => room.engine.openFinal(), /every connected player/);
+  assert.throws(() => room.engine.openFinal(), /every finalist/);
 
   room.engine.setFinalWager(player.id, 300);
   assert.equal(room.snapshotFor(player.id).game.final.yourWager, 300);
@@ -420,7 +420,7 @@ test('restart replays an interrupted for-all answer session from the board', asy
   assert.equal(restored.engine.isAvailable(0, 0), true);
 });
 
-test('wrong answers do not reveal the answer to players, while correct answers schedule auto-next', (t) => {
+test('when everyone is wrong the answer is shown and the board returns on its own', (t) => {
   const { room, host, player, spectator } = createRoom(t);
   room.engine.selectQuestion(host.id, true, 0, 0);
   room.engine.openBuzzer();
@@ -428,10 +428,10 @@ test('wrong answers do not reveal the answer to players, while correct answers s
   room.engine.judge(false);
 
   assert.equal(room.engine.phase, 'reveal');
-  assert.equal(room.engine.current.answerShown, false);
-  assert.equal(room.snapshotFor(player.id).game.current.right, null);
-  assert.equal(room.snapshotFor(spectator.id).game.current.right, null);
-  assert.ok(room.snapshotFor(host.id).game.current.right?.length);
+  assert.equal(room.engine.current.answerShown, true);
+  assert.ok(room.snapshotFor(player.id).game.current.right?.length);
+  assert.ok(room.snapshotFor(spectator.id).game.current.right?.length);
+  assert.equal(room.engine.timer?.name, 'reveal');
 
   room.engine.next();
   room.engine.selectQuestion(host.id, true, 0, 1);

@@ -229,6 +229,8 @@ export function registerSocketHandlers(io: Server, room: Room): void {
       room.engine.judgeForAll(playerId, requireBoolean(correct)));
     on<{ amount: number }>('game:finalWager', 'member', ({ amount }, pid) =>
       room.engine.setFinalWager(pid, Number(amount)));
+    on<{ answer: string }>('game:finalAnswer', 'member', ({ answer }, pid) =>
+      room.engine.submitFinalAnswer(pid, answer));
     on('game:openFinal', 'moderator', () => room.engine.openFinal());
     on('game:closeFinal', 'moderator', () => room.engine.closeFinal());
     on<{ playerId: string; correct: boolean }>('game:judgeFinal', 'moderator', ({ playerId, correct }) =>

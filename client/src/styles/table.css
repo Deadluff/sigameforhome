@@ -3,31 +3,44 @@
  * Its frame is the show's signal — amber while reading, green when buttons open, blue while someone answers.
  */
 #game-stage {
-  position: relative; display: grid; min-height: clamp(300px, 54dvh, 660px); padding: 6px;
+  position: relative; display: grid; grid-template-rows: minmax(0, 1fr); min-height: clamp(300px, 54dvh, 660px); padding: 6px;
   border-radius: var(--r-table); background: var(--board-spent);
   box-shadow: 0 0 0 3px var(--signal), 0 0 32px -6px var(--signal);
   transition: box-shadow .25s;
+  /* Nothing on the table may paint over the podiums below it. */
+  overflow: hidden;
 }
 #game-stage:has(#board:empty):has(#question.hidden):has(#lobby-table.hidden) { display: none; }
 #screen-game[data-phase="lobby"] #game-stage { min-height: 0; }
-#game-stage > * { grid-area: 1 / 1; min-width: 0; }
+#game-stage > * { grid-area: 1 / 1; min-width: 0; min-height: 0; }
 #game-stage:has(.frame-reading) { --signal: var(--lamp); }
 #game-stage:has(.frame-open) { --signal: var(--go); }
 #game-stage:has(.frame-answering) { --signal: var(--talk); }
+/* Outside the one-screen desktop layout the card still needs a fixed height, because it never scrolls. */
+#game-stage:has(> #question:not(.hidden)) { height: clamp(320px, 66dvh, 760px); }
 
-/* Board */
-.board { display: grid; gap: 4px; align-content: stretch; }
+/* Board: rows share the table height and the price font follows the cell, not the window. */
+.board {
+  --cols: 5; --rows: 6; --phone-cols: 5;
+  display: grid; gap: 4px; container-type: size;
+  grid-template-columns: minmax(0, 1.8fr) repeat(var(--cols), minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+}
 .board:empty { display: none; }
-.board .theme, .board .cell { min-height: 64px; border-radius: var(--r-cell); }
+.board .theme, .board .cell { min-height: 0; min-width: 0; border-radius: var(--r-cell); overflow: hidden; }
 .board .theme {
-  display: flex; align-items: center; padding: 10px 16px; background: var(--set);
-  font-size: clamp(14px, 1.3vw, 19px); font-weight: 800; line-height: 1.25; overflow-wrap: anywhere;
+  display: flex; align-items: center; padding: 6px clamp(6px, 1cqw, 16px); background: var(--set);
+  font-size: clamp(11px, min(calc(100cqw * .2 / (var(--cols) + 1.8)), calc(100cqh * .24 / var(--rows))), 19px);
+  font-weight: 800; line-height: 1.2;
+  /* Break between syllables, never between letters of a word that fits. */
+  overflow-wrap: break-word; hyphens: auto;
 }
 .board .cell {
-  display: grid; place-items: center; padding: 6px 4px; border: 0; background: var(--board);
-  color: var(--lamp); font: 600 clamp(18px, 2.2vw, 32px)/1 var(--font-display); font-variant-numeric: tabular-nums;
+  display: grid; place-items: center; padding: 2px; border: 0; background: var(--board);
+  color: var(--lamp); font: 600 clamp(10px, min(calc(100cqw * .27 / (var(--cols) + 1.8)), calc(100cqh * .42 / var(--rows))), 34px)/1 var(--font-display);
+  font-variant-numeric: tabular-nums; letter-spacing: -.02em;
 }
-.board button.cell { width: 100%; min-width: 44px; cursor: pointer; }
+.board button.cell { width: 100%; cursor: pointer; }
 .board button.cell:not(:disabled):hover { background: var(--board-lit); color: var(--lamp-soft); }
 .board button.cell:focus-visible { outline: 3px solid var(--paper); outline-offset: -3px; }
 .board .cell.used { background: transparent; color: transparent; }
@@ -42,68 +55,149 @@
 .lobby-table .invite > span { color: var(--mist); font-weight: 700; font-size: var(--t-xs); }
 .lobby-table .invite .row { justify-content: center; align-items: center; }
 #invite-url { padding: 10px 14px; border-radius: var(--r-control); background: var(--set-sunk); color: var(--lamp); font: 600 var(--t-m) var(--font-display); overflow-wrap: anywhere; user-select: all; }
+/* White quiet zone around the code is part of the SVG, so phone cameras lock on quickly. */
+.invite-qr { width: clamp(120px, 16vw, 200px); height: auto; aspect-ratio: 1; border-radius: var(--r-control); image-rendering: pixelated; }
 
 .table-title { display: grid; place-content: center; gap: 10px; padding: 24px; text-align: center; border-radius: calc(var(--r-table) - 4px); background: var(--board); }
 .table-title strong { font: 700 clamp(28px, 4vw, 56px)/1.1 var(--font-display); color: var(--lamp); overflow-wrap: anywhere; }
 .table-title span { color: var(--mist); font-size: var(--t-l); font-weight: 700; }
 
 /* Final theme removal uses large tiles instead of a price grid. */
-.board.final-themes { align-content: center; }
-.board.final-themes .theme { justify-content: center; text-align: center; min-height: 110px; flex-direction: column; gap: 6px; font-size: var(--t-l); }
+.board.final-themes { align-content: stretch; }
+.board.final-themes .theme { justify-content: center; text-align: center; flex-direction: column; gap: 6px; font-size: clamp(15px, 1.8vw, 24px); }
 .board.final-themes button.theme { border: 0; color: var(--paper); }
 .board.final-themes button.theme:hover { background: var(--board-lit); }
 .board.final-themes .theme small { color: var(--stop); font-size: var(--t-xs); font-weight: 800; }
 
-/* Question */
+/*
+ * Question card: fixed rows that never scroll. Meta line, pinned prompt, media that takes
+ * every spare pixel, then options, actions and the host's private strip.
+ */
 #question {
-  display: flex; flex-direction: column; align-items: center; gap: 18px;
-  padding: 28px clamp(16px, 4vw, 56px); border-radius: calc(var(--r-table) - 4px);
-  background: var(--board); text-align: center; overflow-wrap: anywhere;
+  display: flex; flex-direction: column; gap: 8px; height: 100%; min-height: 0; overflow: hidden;
+  padding: 10px clamp(10px, 1.6vw, 20px); border-radius: calc(var(--r-table) - 4px);
+  background: var(--board); text-align: center;
 }
-/* Auto margins centre short content but let tall content scroll from its top, unlike justify-content. */
-#question > :first-child { margin-top: auto; }
-#question > :last-child { margin-bottom: auto; }
-#question h3 { color: var(--lamp); font-size: var(--t-m); font-weight: 800; }
-#question h3 .q-type { display: inline-block; margin-left: 8px; padding: 2px 10px; border-radius: 999px; background: var(--set-sunk); color: var(--paper); font-size: var(--t-xs); vertical-align: 2px; }
-.question-content, #question > div:not(.answer) { width: 100%; font-size: clamp(22px, 2.8vw, 42px); font-weight: 700; line-height: 1.3; text-wrap: balance; }
+#question > * { flex: none; min-width: 0; }
+#question .q-meta { color: var(--lamp); font-size: var(--t-s); font-weight: 800; line-height: 1.3; }
+#question .q-meta .q-type { display: inline-block; margin-left: 8px; padding: 1px 10px; border-radius: 999px; background: var(--set-sunk); color: var(--paper); font-size: var(--t-xs); vertical-align: 1px; }
 #question p { margin: 0; }
-/* Pack images fill the table like the show's screen; contain keeps the whole picture visible. */
-#question img { display: block; width: 100%; height: min(46dvh, 520px); margin: 8px auto; object-fit: contain; }
-#question video { display: block; max-width: 100%; max-height: 46dvh; margin: 8px auto; border-radius: var(--r-control); }
-#question audio { display: block; width: 100%; max-width: 480px; margin: 8px auto; }
-.question-html { width: 100%; height: min(46dvh, 480px); border: 0; border-radius: var(--r-control); background: #fff; }
-.media-wrap { text-align: center; }
-.content-replic { font-style: italic; color: var(--mist); }
+
+/* The prompt is the headline of the screen: big, pinned at the top, shrunk by script only if it must. */
+.q-prompt {
+  display: block; max-height: 34%; overflow: hidden;
+  font-size: clamp(20px, 3vw, 48px); font-weight: 800; line-height: 1.18; text-wrap: balance; overflow-wrap: anywhere;
+}
+.q-prompt:empty { display: none; }
+/* With nothing to show, the words are the whole screen. */
+.q-prompt > * + * { margin-top: .25em; }
+#question:not(.has-media) .q-prompt {
+  flex: 1 1 auto; display: flex; flex-direction: column; justify-content: center; max-height: none;
+  font-size: clamp(24px, 4.2vw, 68px);
+}
+.q-prompt > * { flex: none; }
+.q-note { color: var(--mist); font-size: var(--t-s); font-weight: 600; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+.q-media {
+  position: relative; flex: 1 1 0 !important; min-height: 0; container-type: size;
+  display: grid; place-items: center; border-radius: var(--r-control); overflow: hidden; isolation: isolate;
+}
+.q-media:empty { display: none; }
+/* A blurred copy of the picture fills the letterbox, so the bars read as part of the image. */
+.q-media::before {
+  content: ""; position: absolute; inset: -6%; z-index: -1;
+  background: var(--backdrop, none) center / cover no-repeat; filter: blur(24px) brightness(.45) saturate(1.2);
+}
+/* Absolute fill gives clips a definite box; percent heights in an auto grid row would not resolve. */
+.q-media > .slot-item { position: absolute; inset: 0; display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); place-items: center; }
+.q-media > .slot-item > p { font-size: var(--t-m); color: var(--mist); }
+.fit {
+  --ar: 1.6;
+  position: relative; width: min(100cqw, calc(100cqh * var(--ar))); height: min(100cqh, calc(100cqw / var(--ar)));
+}
+.fit img { display: block; width: 100%; height: 100%; object-fit: contain; user-select: none; -webkit-user-select: none; }
+.q-media .media-wrap { position: relative; width: 100%; height: 100%; display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); place-items: center; }
+.q-media video { display: block; width: 100%; height: 100%; object-fit: contain; }
+.q-media .media-status { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); }
+.question-html { width: 100%; height: 100%; border: 0; border-radius: var(--r-control); background: #fff; }
+/* Background sound plays unseen; the audio cue stands in for it. */
+.q-background { display: none; }
 .media-status { margin-top: 8px; }
 .media-tap-btn { background: var(--lamp); color: #1d1400; border-color: transparent; font-weight: 800; }
 
-.answer {
-  width: 100%; max-width: 760px; padding: 16px 20px; border-radius: var(--r-panel);
-  background: var(--set-sunk); border-top: 3px solid var(--go); font-size: var(--t-m); text-align: center;
-}
-.answer b { display: block; font-size: clamp(20px, 2.2vw, 30px); color: var(--go); }
-#question .answer p { margin-top: 8px; color: var(--mist); font-size: var(--t-s); }
+.audio-cue { flex-direction: column; gap: 14px; min-height: 0; background: transparent; border: 0; color: var(--mist); font-size: var(--t-m); }
+.audio-cue:not(:disabled):hover { background: transparent; color: var(--paper); }
+.audio-cue .bars { display: flex; align-items: flex-end; gap: 8px; height: clamp(48px, 22cqh, 140px); }
+.audio-cue .bars i { width: clamp(10px, 1.8cqw, 22px); height: 30%; border-radius: 3px; background: var(--lamp); }
+.audio-cue.playing .bars i { animation: level .9s ease-in-out infinite alternate; }
+.audio-cue.playing .bars i:nth-child(2) { animation-delay: -.3s; }
+.audio-cue.playing .bars i:nth-child(3) { animation-delay: -.6s; }
+.audio-cue.playing .bars i:nth-child(4) { animation-delay: -.15s; }
+.audio-cue.playing .bars i:nth-child(5) { animation-delay: -.45s; }
+@keyframes level { from { height: 20%; } to { height: 100%; } }
 
-/* Private answer for the host only; pinned to the table edge so it never pushes content. */
-#host-answer {
-  align-self: end; justify-self: center; z-index: 1; margin: 10px; padding: 8px 14px;
-  display: flex; align-items: baseline; gap: 10px; border-radius: var(--r-control);
-  background: var(--set-sunk); border: 1px dashed var(--go); font-weight: 700;
+/* Picture answers: tap target, attempt pins and the answer ring. */
+.fit.pickable { cursor: crosshair; touch-action: manipulation; }
+.fit.pickable::after { content: ""; position: absolute; inset: 0; border-radius: 4px; box-shadow: inset 0 0 0 3px var(--talk); pointer-events: none; }
+.pin {
+  position: absolute; z-index: 2; display: grid; place-items: center; width: 26px; height: 26px; transform: translate(-50%, -50%);
+  border-radius: 50%; border: 2px solid var(--paper); box-shadow: 0 2px 8px rgba(0, 0, 0, .6);
+  font: 700 12px/1 var(--font-display); color: #06102e; pointer-events: none;
 }
-#host-answer span { color: var(--mist); font-size: var(--t-xs); }
-#host-answer strong { color: var(--go); }
-#game-stage:has(#host-answer:not(.hidden)) #question { padding-bottom: 72px; }
+.pin.go { background: var(--go); }
+.pin.stop { background: var(--stop); }
+.pin.pending { background: var(--talk); width: 22px; height: 22px; }
+.target-ring {
+  position: absolute; z-index: 1; min-width: 18px; aspect-ratio: 1; transform: translate(-50%, -50%);
+  border: 3px solid var(--go); border-radius: 50%; pointer-events: none;
+  box-shadow: 0 0 0 3px rgba(4, 10, 40, .7), 0 0 28px var(--go);
+}
+.target-ring.preview { border-style: dashed; opacity: .6; box-shadow: 0 0 0 2px rgba(4, 10, 40, .6); }
+
+/* Option tiles: the letter comes from the pack, so it carries real meaning. */
+.q-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); gap: 8px; }
+.option {
+  display: flex; align-items: center; justify-content: flex-start; gap: 12px; min-height: 48px; padding: 8px 14px;
+  border-radius: var(--r-control); background: var(--set-sunk); border: 2px solid var(--rule); color: var(--paper);
+  font: 700 var(--t-m)/1.25 var(--font-ui); text-align: left;
+}
+.option b { color: var(--lamp); font: 700 var(--t-m)/1 var(--font-display); }
+.option img { max-height: 44px; border-radius: 4px; }
+button.option:not(:disabled):hover { background: var(--set-raised); border-color: var(--talk); }
+.option.right { background: #0d4a35; border-color: var(--go); }
+.option.right b { color: var(--go); }
+.option.wrong { border-color: var(--stop); color: var(--mist); text-decoration: line-through; }
+.q-actions { display: flex; justify-content: center; }
+
+/* Reveal: the answer replaces the prompt in the same place, in the "correct" colour. */
+#question.showing-answer { box-shadow: inset 0 0 0 3px var(--go); }
+.showing-answer .answer-title { color: var(--go); font-family: var(--font-display); font-weight: 700; }
+.showing-answer .q-prompt p:not(.answer-title) { color: var(--paper); font-size: .7em; }
+
+/* The host's private line sits in its own row, never on top of the picture. */
+.q-host {
+  display: flex; flex-wrap: wrap; justify-content: center; align-items: baseline; gap: 2px 12px;
+  padding: 6px 12px; border-radius: var(--r-control); background: var(--set-sunk); border: 1px dashed var(--go);
+  font-size: var(--t-s); font-weight: 700;
+}
+.q-host span { color: var(--mist); font-size: var(--t-xs); }
+.q-host strong { color: var(--go); overflow-wrap: anywhere; }
+.q-host em { color: var(--paper); font-style: normal; font-weight: 600; overflow-wrap: anywhere; }
 
 @media (max-width: 600px) {
   #game-stage { min-height: 36dvh; padding: 4px; border-radius: var(--r-panel); }
-  /* Leave room for podiums and the buzzer on a phone screen. */
-  #question img { height: 28dvh; }
-  .board { gap: 3px; }
-  .board .theme, .board .cell { min-height: 52px; }
-  .board .theme { padding: 6px 8px; font-size: 12px; }
-  .board .cell { font-size: clamp(11px, 3.4vw, 16px); min-width: 0; padding: 4px 1px; }
-  .board button.cell { min-width: 0; }
-  #question { padding: 18px 14px; gap: 12px; }
-  #question h3 { font-size: var(--t-s); }
-  .question-content, #question > div:not(.answer) { font-size: 22px; }
+  #game-stage:has(> #question:not(.hidden)) { height: clamp(300px, 60dvh, 560px); }
+  /* A wager or answer form on a phone must stay in view next to the question. */
+  #screen-game:has(.dock > .card:not(.hidden)) #game-stage:has(> #question:not(.hidden)) { height: clamp(240px, 44dvh, 420px); }
+  /* Phones stack each theme over its prices, so four-digit values keep a readable size. */
+  .board { container-type: inline-size; grid-template-columns: repeat(var(--phone-cols), minmax(0, 1fr)); grid-auto-rows: auto; gap: 3px; }
+  .board .theme { grid-column: 1 / -1; padding: 4px 8px; font-size: 13px; white-space: nowrap; text-overflow: ellipsis; display: block; text-align: left; }
+  .board .cell { min-height: 38px; font-size: clamp(12px, calc(100cqw * .045), 17px); }
+  .board.final-themes { grid-auto-rows: auto; }
+  .board.final-themes .theme { grid-column: auto; min-height: 56px; display: flex; white-space: normal; text-align: center; font-size: var(--t-s); }
+  #question { padding: 8px; gap: 6px; }
+  #question .q-meta { font-size: var(--t-xs); }
+  .q-prompt { font-size: clamp(17px, 5.2vw, 26px); }
+  #question:not(.has-media) .q-prompt { font-size: clamp(20px, 6.4vw, 32px); }
+  .option { min-height: 44px; font-size: var(--t-s); }
 }

@@ -1,6 +1,8 @@
 import { io, type Socket } from 'socket.io-client';
 import { ContentPresenter } from './contentPresenter';
 import { avatar, formatScore, questionTypeLabel, replicFor, roleLabels, sayReplic, toast, type ReplicTone } from './ui';
+import { audioCue, drawPins, drawRing, fitText, imageFrame, makePickable, optionText, optionTiles, parsePoint,
+  setBackdrop, type Pin } from './stageParts';
 import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentItem,
   GameEvent, JoinAck, NoPayloadCommand, PackListItem, RoomState, ServerToClientEvents } from './types';
 
@@ -249,7 +251,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   function replicOf(evt: GameEvent): [string, string, ReplicTone] | null {
     if (!('playerId' in evt) || !evt.playerId) return null;
     switch (evt.type) {
-      case 'buzzAccepted': return [evt.playerId, 'Buzzed!', 'plain'];
+      // An assigned player never pressed a button, so "Buzzed!" would be wrong.
+      case 'buzzAccepted': return [evt.playerId, evt.assigned ? 'Answering' : 'Buzzed!', 'plain'];
       case 'falseStart': return [evt.playerId, 'Too early', 'stop'];
       case 'answerJudged': {
         const delta = evt.delta ?? 0;
@@ -331,6 +334,15 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       phase.append(Object.assign(document.createElement('b'), { textContent: game.round.name }));
       if (pack?.rounds.length) phase.append(` · ${game.roundIndex + 1} of ${pack.rounds.length}`);
     }
+    // Round arrows replace the old menu items: one tap, right next to the round name.
+    const roundNav = you.canModerate && !tvMode && game.phase !== 'lobby' && !!pack;
+    const prev = button('#btn-prev-round');
+    const next = button('#btn-next-round');
+    prev.classList.toggle('hidden', !roundNav);
+    next.classList.toggle('hidden', !roundNav);
+    prev.disabled = game.roundIndex <= 0 && game.phase !== 'gameOver';
+    next.disabled = game.phase === 'gameOver';
+    next.setAttribute('aria-label', pack && game.roundIndex >= pack.rounds.length - 1 ? 'Finish the game' : 'Next round');
     const me = $('#me');
     me.replaceChildren();
     if (tvMode) me.textContent = 'TV view';
@@ -352,8 +364,10 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
         button.disabled = game.phase === 'gameOver';
       }
       if (action === 'game:resume') button.classList.toggle('hidden', game.phase !== 'paused');
+      // Tapped answers judge themselves; written ones wait for the text or its deadline.
+      const tapAnswer = (game.current?.answerType ?? 'text') !== 'text';
       if (action === 'judge-ok' || action === 'judge-bad') button.disabled = game.phase !== 'answering' ||
-        (!state.settings.oral && !game.buzzer.typedAnswer?.submitted && !game.buzzer.typedAnswer?.closed);
+        ((!state.settings.oral || tapAnswer) && !game.buzzer.typedAnswer?.submitted && !game.buzzer.typedAnswer?.closed);
       if (action === 'game:reveal') button.disabled = game.current?.type === 'forAll' ||
         !(['reading', 'buzzerOpen', 'answering'].includes(game.phase) ||
           (game.phase === 'reveal' && !game.current?.answerShown));
@@ -364,12 +378,6 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
         button.textContent = finalReveal && state.settings.playAllQuestionsInFinalRound
           ? moreFinalThemes ? 'Next final theme' : 'Finish game'
           : game.phase === 'specialSetup' ? 'Skip question' : 'Next';
-      }
-      if (action === 'game:prevRound') {
-        button.disabled = game.phase === 'lobby' || (game.roundIndex <= 0 && game.phase !== 'gameOver');
-      }
-      if (action === 'game:nextRound') {
-        button.disabled = game.phase === 'lobby' || game.phase === 'gameOver';
       }
     }
 
@@ -447,47 +455,60 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     const state = activeState();
     const { game, you, participants } = state;
     const final = game.final;
+    const finalist = !!final && final.eligibleIds.includes(you.id);
     const wagering = game.phase === 'finalWager';
-    const player = you.role === 'player';
-    $('#final-wager').classList.toggle('hidden', !wagering || !player || !final);
+    $('#final-wager').classList.toggle('hidden', !wagering || !finalist);
     $('#final-host').classList.toggle('hidden', !final);
-    if (!final) return;
-    if (wagering && player) {
-      const me = participants.find((p) => p.id === you.id);
-      input('#final-amount').max = String(Math.max(0, me?.score ?? 0));
+    if (!final) {
+      $('#final-answer').classList.add('hidden');
+      return;
+    }
+    if (wagering && finalist) {
+      const score = Math.max(0, participants.find((p) => p.id === you.id)?.score ?? 0);
+      input('#final-amount').max = String(score);
+      $('#final-amount-label').textContent = `Your final wager, 0 to ${formatScore(score)}`;
       $('#final-wager-status').textContent = final.wagered.includes(you.id)
-        ? `Saved: ${final.yourWager}` : '';
+        ? `Saved: ${formatScore(final.yourWager ?? 0)}` : '';
+    }
+    // Finalists write their answer so the host judges what was actually said.
+    const answering = game.phase === 'finalQuestion' && finalist && !final.judged.includes(you.id);
+    $('#final-answer').classList.toggle('hidden', !answering);
+    if (answering) {
+      const field = textarea('#final-answer-input');
+      if (final.yourAnswer && document.activeElement !== field && !field.value) field.value = final.yourAnswer;
+      $('#final-answer-status').textContent = final.yourAnswer ? 'Saved. You can change it until time is up.' : '';
     }
     const host = you.canModerate && ['finalWager', 'finalQuestion', 'finalJudge'].includes(game.phase);
     $('#final-host').classList.toggle('hidden', !host);
     if (!host) return;
-    button('#btn-open-final').disabled = !wagering || participants.some((p) => p.role === 'player' && p.connected && !final.wagered.includes(p.id));
-    button('#btn-close-final').disabled = game.phase !== 'finalQuestion';
-    // Disabled steps are hidden, so a status line tells the host what the final is waiting for.
-    const finalists = participants.filter((p) => p.role === 'player' && p.connected);
-    const wageredCount = finalists.filter((p) => final.wagered.includes(p.id)).length;
-    $('#final-host-status').textContent = wagering
-      ? `${wageredCount} of ${finalists.length} wagers saved.${wageredCount < finalists.length ? ' The question opens when everyone has wagered.' : ''}`
-      : game.phase === 'finalQuestion' ? 'Players are preparing answers. End answer time when they are ready.'
-        : 'Choose a player, then mark their answer.';
-    $('#final-judge-row').classList.toggle('hidden', game.phase !== 'finalJudge');
-    const playerSelect = select('#final-player');
-    playerSelect.replaceChildren();
-    for (const p of participants.filter((p) => p.role === 'player' && !final.judged.includes(p.id))) {
-      playerSelect.add(new Option(`${p.name}${final.wagers ? ` · ${final.wagers[p.id]}` : ''}`, p.id));
-    }
-    button('#btn-final-correct').disabled = game.phase !== 'finalJudge' || !playerSelect.value;
-    button('#btn-final-wrong').disabled = game.phase !== 'finalJudge' || !playerSelect.value;
+    const finalists = participants.filter((p) => final.eligibleIds.includes(p.id));
+    const waiting = finalists.filter((p) => p.connected && !final.wagered.includes(p.id));
+    button('#btn-open-final').classList.toggle('hidden', !wagering);
+    button('#btn-open-final').disabled = waiting.length > 0;
+    button('#btn-close-final').classList.toggle('hidden', game.phase !== 'finalQuestion');
+    const answered = finalists.filter((p) => final.answeredIds.includes(p.id)).length;
+    $('#final-host-status').textContent = !finalists.length ? 'Nobody has a positive score, so nobody plays the final.'
+      : wagering ? `${finalists.length - waiting.length} of ${finalists.length} wagers saved`
+        : game.phase === 'finalQuestion' ? `${answered} of ${finalists.length} answers in`
+          : 'Judge each answer on the podiums';
   }
 
   $('#final-wager').addEventListener('submit', (event) => {
     event.preventDefault();
     send('game:finalWager', { amount: Number(input('#final-amount').value) });
   });
+  button('#final-all-in').onclick = () => {
+    const field = input('#final-amount');
+    field.value = field.max;
+    send('game:finalWager', { amount: Number(field.max) });
+  };
+  $('#final-answer').addEventListener('submit', (event) => {
+    event.preventDefault();
+    const answer = textarea('#final-answer-input').value.trim();
+    if (answer) send('game:finalAnswer', { answer });
+  });
   $('#btn-open-final').onclick = () => send('game:openFinal');
   $('#btn-close-final').onclick = () => send('game:closeFinal');
-  button('#btn-final-correct').onclick = () => send('game:judgeFinal', { playerId: select('#final-player').value, correct: true });
-  button('#btn-final-wrong').onclick = () => send('game:judgeFinal', { playerId: select('#final-player').value, correct: false });
 
   function renderSpecialSetup() {
     const state = activeState();
@@ -496,15 +517,16 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     const current = state.game.current;
     if (!visible || !current) return;
     const gift = current.type === 'secretNoQuestion';
-    $('#special-setup strong').textContent = gift ? 'Gift: choose who receives the points' : 'Special question setup';
+    $('#special-setup-title').textContent = gift ? 'Gift' : 'Special question';
     $('#special-setup button[type="submit"]').textContent = gift ? 'Award points' : 'Show question';
     const playerSelect = select('#special-player');
     const previous = playerSelect.value;
     playerSelect.replaceChildren();
-    for (const player of state.participants.filter((p) => p.role === 'player' && p.connected)) {
-      playerSelect.add(new Option(player.name, player.id));
-    }
-    if (state.participants.some((p) => p.id === previous && p.connected)) playerSelect.value = previous;
+    // A secret marked "except current" may not go back to the player who opened it.
+    const excluded = current.type.startsWith('secret') && current.selectionMode === 'exceptCurrent' ? state.game.chooserId : null;
+    const eligible = state.participants.filter((p) => p.role === 'player' && p.connected && p.id !== excluded);
+    for (const player of eligible) playerSelect.add(new Option(player.name, player.id));
+    if (eligible.some((p) => p.id === previous)) playerSelect.value = previous;
     const range = current.priceRange;
     const priceInput = input('#special-price');
     priceInput.min = String(gift ? current.price : range?.minimum ?? current.price);
@@ -816,9 +838,15 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       if (!p.connected) badge('off-badge', 'Offline');
       else if (isAnswering) badge('answering-badge', state.settings.oral ? 'Answering' : 'Writing');
       else if (isBlocked) badge('blocked-badge', `Blocked ${Math.max(1, Math.ceil((blockedUntil - now) / 1000))}s`);
-      else if (hasTried) badge('tried-badge', 'Already answered');
-      else if (isChooser) badge('chooser-badge', game.phase === 'finalThemes' ? 'Removes a theme' : 'Picks next');
+      else if (hasTried) badge('tried-badge', 'Answered');
+      else if (isChooser) badge('chooser-badge', game.phase === 'finalThemes' ? 'Removes' : 'Picks');
       el.append(slot);
+      // Final answers are judged on each podium, next to the answer and wager they belong to.
+      const final = game.final;
+      if (you.canModerate && game.phase === 'finalJudge' && final?.eligibleIds.includes(p.id)) {
+        el.classList.add('judging');
+        el.append(finalVerdict(p.id, p.name, final));
+      }
       const replic = replicFor(p.id);
       if (replic) el.append(replic);
 
@@ -893,9 +921,32 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     }
   }
 
+  function finalVerdict(playerId: string, name: string, final: NonNullable<RoomState['game']['final']>): HTMLElement {
+    const box = Object.assign(document.createElement('div'), { className: 'podium-verdict' });
+    const answer = final.answers?.[playerId];
+    box.append(Object.assign(document.createElement('p'), {
+      className: answer ? 'final-text' : 'final-text empty', textContent: answer || 'No written answer', title: answer ?? '',
+    }));
+    const wager = final.wagers?.[playerId];
+    if (wager != null) box.append(Object.assign(document.createElement('small'), { textContent: `Wager ${formatScore(wager)}` }));
+    if (final.judged.includes(playerId)) return box;
+    const row = Object.assign(document.createElement('div'), { className: 'verdict-buttons' });
+    const verdict = (correct: boolean) => {
+      const b = Object.assign(document.createElement('button'), {
+        type: 'button', className: correct ? 'ok' : 'bad', textContent: correct ? '✓' : '✗',
+      });
+      b.setAttribute('aria-label', `${correct ? 'Correct' : 'Wrong'}: ${name}`);
+      b.onclick = () => send('game:judgeFinal', { playerId, correct });
+      return b;
+    };
+    row.append(verdict(true), verdict(false));
+    box.append(row);
+    return box;
+  }
+
   // Popover menus close when the user clicks elsewhere, like any menu.
   document.addEventListener('click', (event) => {
-    for (const menu of document.querySelectorAll<HTMLDetailsElement>('.player-menu[open], .game-menu[open]')) {
+    for (const menu of document.querySelectorAll<HTMLDetailsElement>('.player-menu[open]')) {
       if (!menu.contains(event.target as Node)) menu.open = false;
     }
   });
@@ -960,6 +1011,10 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     } catch { /* The current origin still works for devices that reached this page. */ }
     $('#invite-url').textContent = url;
     ($('#tv-link') as HTMLAnchorElement).href = `${url}/?tv`;
+    // Phones join by pointing the camera at the screen instead of typing the address.
+    const qr = $('#invite-qr') as HTMLImageElement;
+    qr.src = `/api/invite.svg?url=${encodeURIComponent(url)}`;
+    qr.classList.remove('hidden');
   }
   button('#btn-copy-invite').onclick = async () => {
     const url = $('#invite-url').textContent ?? '';
@@ -1190,11 +1245,17 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       return;
     }
     const cols = Math.max(...game.board.map((t) => t.questions.length), 1);
-    // minmax(0, …) lets four-digit prices shrink on phones instead of pushing the board off-screen.
-    board.style.gridTemplateColumns = `minmax(0, 1.8fr) repeat(${cols}, minmax(0, 1fr))`;
+    // Columns and rows come from CSS so the price font can follow the cell size, not the window.
+    board.style.gridTemplateColumns = '';
+    board.style.setProperty('--cols', String(cols));
+    board.style.setProperty('--rows', String(game.board.length));
+    board.style.setProperty('--phone-cols', String(Math.min(cols, 5)));
     const canPick = you.canModerate || you.id === game.chooserId;
     game.board.forEach((theme, t) => {
-      board.append(Object.assign(document.createElement('div'), { className: 'theme', textContent: theme.name }));
+      const title = Object.assign(document.createElement('div'), { className: 'theme', textContent: theme.name, title: theme.name });
+      // Hyphenation needs the text's language; packs here are mostly Russian or English.
+      title.lang = /[А-Яа-яЁё]/.test(theme.name) ? 'ru' : 'en';
+      board.append(title);
       for (let q = 0; q < cols; q++) {
         const cell = theme.questions[q];
         const el = document.createElement(cell?.available && canPick ? 'button' : 'div');
@@ -1314,7 +1375,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
 
   function contentElement(it: ContentItem,
     previous?: { paused: boolean; currentTime: number }, autoStart = true): HTMLElement {
-    if (it.type === 'image' && it.url) return Object.assign(document.createElement('img'), { src: it.url });
+    // Pictures sit in a ratio-keeping frame so pins and the answer ring land on the right pixel.
+    if (it.type === 'image' && it.url) return imageFrame(it.url);
     if ((it.type === 'audio' || it.type === 'video') && it.url) {
       return createMediaPlayer(it.type, it.url, previous, autoStart);
     }
@@ -1334,23 +1396,73 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     });
   }
 
-  function contentHtml(items: ContentItem[] | null,
-    previousMedia: { paused: boolean; currentTime: number }[] = [], autoStart = true) {
-    const div = document.createElement('div');
-    for (const it of items ?? []) {
-      const previous = it.type === 'audio' || it.type === 'video' ? previousMedia.shift() : undefined;
-      div.append(contentElement(it, previous, autoStart));
-    }
-    return div;
-  }
-
   let renderedQuestionKey: string | null = null;
   let questionPresenter: ContentPresenter<ContentItem> | null = null;
   let presenterId: string | null = null;
   let presenterFinishedId: string | null = null;
   let presenterAckingId: string | null = null;
-  let questionContentRoot: HTMLElement | null = null;
   let previousContentMedia = new Map<number, { paused: boolean; currentTime: number }>();
+  // A tapped but unsent picture answer survives re-renders until the player submits it.
+  let pendingPick: { presentationId: string; x: number; y: number } | null = null;
+
+  /*
+   * The question card has fixed rows and never scrolls: a small meta line, the pinned prompt,
+   * the media row that takes all spare height, then options, actions and the host strip.
+   * Text items always go to the prompt, so it never disappears while pictures change.
+   */
+  interface StageSlots { box: HTMLElement; prompt: HTMLElement; media: HTMLElement; background: HTMLElement }
+  let stageSlots: StageSlots | null = null;
+  // Point questions draw pins on the picture; the presenter may place that picture later.
+  let decorateStage: (() => void) | null = null;
+  // The card keeps its size, but a window resize changes it, so the prompt is refitted then.
+  new ResizeObserver(() => { if (stageSlots) fitText(stageSlots.prompt); }).observe($('#question'));
+  const ANSWER_INDEX = 1000; // Keeps answer media apart from question media in the restore map.
+
+  const isTextItem = (item: ContentItem) => (item.type === 'text' || item.type === 'say') && !item.missing;
+  const slotFor = (item: ContentItem): 'prompt' | 'media' | 'background' =>
+    isTextItem(item) ? 'prompt'
+      : item.type === 'audio' || item.placement === 'background' ? 'background' : 'media';
+
+  function buildStage(box: HTMLElement): StageSlots {
+    const make = (className: string) => Object.assign(document.createElement('div'), { className });
+    const slots = { box, prompt: make('q-prompt'), media: make('q-media'), background: make('q-background') };
+    box.append(slots.prompt, slots.media, slots.background);
+    return slots;
+  }
+
+  function placeContent(slots: StageSlots, item: ContentItem, index: number, autoStart: boolean): HTMLElement {
+    const target = slotFor(item);
+    const slot = slots[target];
+    if (target === 'media') {
+      // Each picture or clip replaces the previous one, as the pack's script intends.
+      slot.querySelectorAll<HTMLMediaElement>('audio, video').forEach((clip) => clip.pause());
+      slot.replaceChildren();
+      setBackdrop(slot, item.type === 'image' ? item.url : null);
+    }
+    const wrapper = Object.assign(document.createElement('div'), { className: 'slot-item' });
+    wrapper.dataset.contentIndex = String(index);
+    const previous = previousContentMedia.get(index);
+    previousContentMedia.delete(index);
+    // A non-blocking background track may still be playing when its ticket rotates.
+    const resumeBackground = target === 'background' && previous?.paused === false;
+    const element = contentElement(item, previous, autoStart || resumeBackground);
+    wrapper.append(element);
+    slot.append(wrapper);
+    syncStageShape(slots);
+    if (target === 'media') decorateStage?.();
+    return element;
+  }
+
+  function syncStageShape(slots: StageSlots) {
+    const sound = () => [...slots.background.querySelectorAll<HTMLMediaElement>('audio, video')];
+    // Audio has nothing to look at, so an empty media row shows that sound is playing.
+    if (!slots.media.querySelector('.slot-item') && sound().length && !slots.media.querySelector('.audio-cue')) {
+      slots.media.append(audioCue(sound));
+    }
+    slots.box.classList.toggle('has-media', slots.media.childElementCount > 0);
+    slots.box.classList.toggle('has-prompt', slots.prompt.childElementCount > 0);
+    requestAnimationFrame(() => fitText(slots.prompt));
+  }
 
   function acknowledgePresentedContent() {
     if (!state?.you?.canModerate || state.game.phase !== 'reading' || !socket.connected) return;
@@ -1367,33 +1479,15 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
 
   function renderOrderedContent(item: ContentItem, index: number, active: boolean,
     _replay: boolean, done: () => void) {
-    if (!questionContentRoot) return;
-    const placement = item.placement ?? (item.type === 'audio' ? 'background' : 'screen');
-    const slot = questionContentRoot.querySelector<HTMLElement>(`.content-${placement}`);
-    if (!slot) return;
-    if (placement === 'screen') {
-      // Nonblocking media can keep playing while the pack shows its following text.
-      const media = slot.querySelector<HTMLMediaElement>('audio, video');
-      if (!media || media.ended || media.error || (item.type !== 'text' && item.type !== 'say')) {
-        slot.querySelectorAll<HTMLMediaElement>('audio, video').forEach((clip) => clip.pause());
-        slot.replaceChildren();
-      }
-    }
-    const wrapper = document.createElement('div');
-    wrapper.dataset.contentIndex = String(index);
-    const previous = previousContentMedia.get(index);
-    previousContentMedia.delete(index);
-    // A non-blocking background track may still be playing when its ticket rotates.
-    const resumeBackground = placement === 'background' && previous?.paused === false;
-    const element = contentElement(item, previous, active || resumeBackground);
-    wrapper.append(element);
-    slot.append(wrapper);
-    if (active && (item.type === 'text' || item.type === 'say') && !item.missing) {
+    if (!stageSlots) return;
+    const slots = stageSlots;
+    const element = placeContent(slots, item, index, active);
+    if (active && isTextItem(item)) {
       // The presenter controls timing; updating one text node avoids restarting this item.
-      return (visibleText: string) => { element.textContent = visibleText; };
+      return (visibleText: string) => { element.textContent = visibleText; fitText(slots.prompt); };
     }
     if (active && (item.type === 'audio' || item.type === 'video') && item.waitForFinish) {
-      const media = wrapper.querySelector<HTMLMediaElement>('audio, video');
+      const media = element.querySelector<HTMLMediaElement>('audio, video');
       if (media) {
         media.addEventListener('ended', done, { once: true });
         media.addEventListener('error', done, { once: true });
@@ -1401,18 +1495,78 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     }
   }
 
+  /** After reading, the card shows the final state of the script: every text and the last picture. */
+  function renderStaticContent(slots: StageSlots, items: ContentItem[]) {
+    items.forEach((item, index) => {
+      if (slotFor(item) === 'media' && items.slice(index + 1).some((later) => slotFor(later) === 'media')) return;
+      placeContent(slots, item, index, false);
+    });
+  }
+
+  type CurrentQuestion = NonNullable<RoomState['game']['current']>;
+
+  function answerTitle(c: CurrentQuestion): string {
+    const right = c.right ?? [];
+    if (c.answerType === 'select') return right.map((label) => optionText(c.answerOptions, label)).join(' / ');
+    if (c.answerType === 'point') return '';
+    return right.join(' / ');
+  }
+
+  /** At reveal the answer takes the question's place instead of piling up under it. */
+  function renderAnswerStage(slots: StageSlots, c: CurrentQuestion) {
+    slots.box.classList.add('showing-answer');
+    const answerItems = c.answerContent ?? [];
+    const title = answerTitle(c);
+    if (title) slots.prompt.append(Object.assign(document.createElement('p'), { className: 'answer-title', textContent: title }));
+    const answerTexts = answerItems.filter(isTextItem);
+    answerTexts.forEach((item) => slots.prompt.append(Object.assign(document.createElement('p'), { textContent: item.value })));
+    // A picture answer is marked on the question's own picture.
+    if (c.answerType === 'point' || !title && !answerTexts.length) {
+      c.content.filter(isTextItem).forEach((item) => slots.prompt.append(
+        Object.assign(document.createElement('p'), { textContent: item.value })));
+    }
+    const answerMedia = answerItems.filter((item) => !isTextItem(item));
+    if (c.answerType !== 'point' && answerMedia.length) {
+      answerMedia.forEach((item, index) => {
+        if (slotFor(item) === 'media' && answerMedia.slice(index + 1).some((later) => slotFor(later) === 'media')) return;
+        placeContent(slots, item, ANSWER_INDEX + index, true);
+      });
+    } else {
+      renderStaticContent({ ...slots, prompt: document.createElement('div') }, c.content);
+    }
+    const note = [c.comments, c.sources?.length ? `Sources: ${c.sources.join(', ')}` : ''].filter(Boolean).join(' ');
+    if (note) slots.prompt.after(Object.assign(document.createElement('p'), { className: 'q-note', textContent: note, title: note }));
+    syncStageShape(slots);
+  }
+
+  /** Pins for every picture attempt, the target ring at reveal, and the tap target for the answerer. */
+  function decoratePointQuestion(slots: StageSlots, c: CurrentQuestion, pickable: boolean) {
+    const frame = slots.media.querySelector<HTMLElement>('.fit');
+    if (!frame) return;
+    const nameOf = (id: string) => activeState().participants.find((p) => p.id === id)?.name ?? '?';
+    const pins: Pin[] = c.picks.flatMap((pick) => {
+      const point = parsePoint(pick.value);
+      return point ? [{ ...point, label: nameOf(pick.playerId).slice(0, 1).toUpperCase(), tone: pick.correct ? 'go' : 'stop' } as Pin] : [];
+    });
+    const target = parsePoint(c.right?.[0]);
+    // The host sees a faint ring early, to know where to look while players search.
+    if (target && c.answerDeviation) drawRing(frame, target, c.answerDeviation, !c.answerShown);
+    if (pickable) {
+      if (pendingPick?.presentationId === c.presentationId) pins.push({ x: pendingPick.x, y: pendingPick.y, label: '', tone: 'pending' });
+      makePickable(frame, (point) => {
+        pendingPick = { presentationId: c.presentationId, ...point };
+        renderedQuestionKey = null;
+        renderQuestion();
+      });
+    }
+    drawPins(frame, pins);
+  }
+
   function renderQuestion() {
     const state = activeState();
-    const { game } = state;
+    const { game, you } = state;
     const c = game.current;
     const box = $('#question');
-    const hostAnswer = $('#host-answer');
-    const preview = state.you.role === 'host' && !c?.answerShown ? c?.right : null;
-    hostAnswer.classList.toggle('hidden', !preview);
-    if (preview) {
-      hostAnswer.replaceChildren(Object.assign(document.createElement('span'), { textContent: 'Answer, only you see it' }),
-        Object.assign(document.createElement('strong'), { textContent: preview.join(' / ') }));
-    }
     box.classList.toggle('hidden', !c);
 
     // Update glowing border frame around question card to match stage
@@ -1427,6 +1581,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       presenterId = null;
       presenterFinishedId = null;
       renderedQuestionKey = null;
+      stageSlots = null;
+      decorateStage = null;
       delete box.dataset.questionId;
       return;
     }
@@ -1436,8 +1592,13 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       !(game.phase === 'paused' && hiddenPhases.includes(game.pausedPhase ?? ''));
     const presenting = contentVisible && !c.answerShown &&
       (game.phase === 'reading' || (game.phase === 'paused' && game.pausedPhase === 'reading'));
+    const typed = game.buzzer.typedAnswer;
+    // Only the answerer, while their answer clock runs, may tap the picture or an option.
+    const canTap = game.phase === 'answering' && game.buzzer.winnerId === you.id && !!typed &&
+      !typed.submitted && !typed.closed && c.answerType !== 'text';
     // Stake bids and gift setup can change the heading without changing the question index.
-    const key = `${c.presentationId}:${contentVisible}:${presenting}:${c.price}:${c.assignedId}:${c.answerShown}`;
+    const key = [c.presentationId, contentVisible, presenting, c.price, c.assignedId, c.answerShown,
+      canTap, c.picks.length].join(':');
     if (key === renderedQuestionKey) {
       acknowledgePresentedContent();
       return;
@@ -1445,20 +1606,21 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     renderedQuestionKey = key;
 
     const questionId = c.presentationId;
-    const previousMedia = box.dataset.questionId === questionId
-      ? [...box.querySelectorAll<HTMLMediaElement>('audio, video')].map((item) =>
-        ({ paused: item.paused, currentTime: item.currentTime })) : [];
     previousContentMedia = new Map(box.dataset.questionId === questionId
       ? [...box.querySelectorAll<HTMLElement>('[data-content-index]')].flatMap((item) => {
         const media = item.querySelector<HTMLMediaElement>('audio, video');
         return media ? [[Number(item.dataset.contentIndex),
           { paused: media.paused, currentTime: media.currentTime }] as const] : [];
       }) : []);
+    if (pendingPick && pendingPick.presentationId !== questionId) pendingPick = null;
     box.querySelectorAll<HTMLMediaElement>('audio, video').forEach((media) => media.pause());
-    box.innerHTML = '';
+    box.replaceChildren();
+    box.className = box.className.replace(/\b(has-media|has-prompt|showing-answer)\b/g, '').trim();
     box.dataset.questionId = questionId;
+    box.dataset.answerType = c.answerType;
+
     const recipient = state.participants.find((p) => p.id === c.assignedId)?.name ?? 'Player';
-    const heading = Object.assign(document.createElement('h3'), { textContent: c.type === 'secretNoQuestion'
+    const heading = Object.assign(document.createElement('h3'), { className: 'q-meta', textContent: c.type === 'secretNoQuestion'
       ? game.phase === 'specialSetup' ? 'Gift: the host is choosing who gets it'
         : `Gift: ${recipient} receives ${formatScore(c.price)}`
       : game.round?.type === 'final' ? `Final · ${c.themeName}`
@@ -1466,15 +1628,11 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     const typeLabel = c.type === 'secretNoQuestion' || game.round?.type === 'final' ? '' : questionTypeLabel(c.type);
     if (typeLabel) heading.append(Object.assign(document.createElement('span'), { className: 'q-type', textContent: typeLabel }));
     box.append(heading);
+    const slots = buildStage(box);
+    stageSlots = slots;
+    decorateStage = contentVisible && c.answerType === 'point' ? () => decoratePointQuestion(slots, c, canTap) : null;
+
     if (presenting) {
-      questionContentRoot = document.createElement('div');
-      questionContentRoot.className = 'question-content';
-      for (const placement of ['screen', 'replic', 'background']) {
-        questionContentRoot.append(Object.assign(document.createElement('div'), {
-          className: `content-${placement}`,
-        }));
-      }
-      box.append(questionContentRoot);
       if (presenterId !== c.presentationId || !questionPresenter) {
         questionPresenter?.dispose();
         presenterId = c.presentationId;
@@ -1491,19 +1649,40 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     } else {
       questionPresenter?.dispose();
       questionPresenter = null;
-      questionContentRoot = null;
-      if (contentVisible) box.append(contentHtml(c.content, previousMedia, false));
+      if (c.answerShown && c.right) renderAnswerStage(slots, c);
+      else if (contentVisible) renderStaticContent(slots, c.content);
     }
-    if (c.right && c.answerShown) {
-      const ans = document.createElement('div');
-      ans.className = 'answer';
-      ans.append(Object.assign(document.createElement('b'), { textContent: `Answer: ${c.right.join(' / ')}` }));
-      if (c.answerContent?.length) ans.append(contentHtml(c.answerContent, previousMedia));
-      if (c.comments) ans.append(Object.assign(document.createElement('p'), { textContent: c.comments }));
-      if (c.sources?.length) ans.append(Object.assign(document.createElement('p'), {
-        textContent: `Sources: ${c.sources.join(' · ')}`,
-      }));
-      box.append(ans);
+
+    decorateStage?.();
+    if (contentVisible && c.answerType === 'select' && c.answerOptions.length) {
+      const wrongPicks = new Set(c.picks.filter((pick) => !pick.correct).map((pick) => pick.value));
+      const right = new Set((c.answerShown ? c.right ?? [] : []).map((label) => label.toUpperCase()));
+      box.append(optionTiles(c.answerOptions.map((option) => ({
+        ...option,
+        state: right.has(option.label.toUpperCase()) ? 'right' : wrongPicks.has(option.label) ? 'wrong' : 'idle',
+      })), canTap ? (label) => send('game:answer', { answer: label }) : null));
+    }
+    if (canTap && c.answerType === 'point') {
+      const actions = Object.assign(document.createElement('div'), { className: 'q-actions' });
+      const pick = pendingPick?.presentationId === questionId ? pendingPick : null;
+      const submit = Object.assign(document.createElement('button'), {
+        type: 'button', className: 'primary', disabled: !pick,
+        textContent: pick ? 'Submit this spot' : 'Tap the picture first',
+      });
+      submit.onclick = async () => {
+        if (pick && (await send('game:answer', { answer: `${pick.x},${pick.y}` })).ok) pendingPick = null;
+      };
+      actions.append(submit);
+      box.append(actions);
+    }
+    // The host's private strip is its own row, so it never covers the picture.
+    if (you.role === 'host' && c.right && !c.answerShown) {
+      const strip = Object.assign(document.createElement('div'), { className: 'q-host' });
+      const keyText = c.answerType === 'point' ? 'Marked on the picture' : answerTitle(c);
+      strip.append(Object.assign(document.createElement('span'), { textContent: 'Only you see this' }),
+        Object.assign(document.createElement('strong'), { textContent: keyText }));
+      if (c.showmanComments) strip.append(Object.assign(document.createElement('em'), { textContent: c.showmanComments }));
+      box.append(strip);
     }
     acknowledgePresentedContent();
   }
@@ -1515,7 +1694,9 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       (game.phase === 'paused' && game.pausedPhase === 'answering');
     const typed = game.buzzer.typedAnswer;
     const winner = you.id === game.buzzer.winnerId;
-    const visible = !tvMode && !settings.oral && answering && !!typed && (winner || you.canModerate);
+    // Options and picture clicks are answered on the stage itself, not in a text box.
+    const visible = !tvMode && !settings.oral && answering && !!typed && (winner || you.canModerate) &&
+      (game.current?.answerType ?? 'text') === 'text';
     $('#typed-answer').classList.toggle('hidden', !visible);
     if (!visible || !typed) return;
 
@@ -1550,6 +1731,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
 
   /* ---------------- stage banner & buzzer orientiers ---------------- */
 
+  // Tablets and phones have no Space bar to suggest.
+  const touchOnly = matchMedia('(pointer: coarse)').matches && !matchMedia('(any-pointer: fine)').matches;
   type StageTone = 'reading' | 'open' | 'answering' | 'reveal' | 'idle';
   function setStage(tone: StageTone, title: string, subtitle: string) {
     const banner = $('#stage-banner');
@@ -1614,13 +1797,18 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
           : !settings.falseStart ? 'You can buzz while the question plays.'
             : `Wait for the green signal. An early press blocks you for ${settings.timeForBlockingButton} s.`);
       } else if (game.phase === 'buzzerOpen') {
-        setStage('open', 'Buzz now', you.role === 'player' ? 'Tap the button or press Space.' : 'Players can press their buttons.');
+        setStage('open', 'Buzz now', you.role === 'player' ? (touchOnly ? 'Tap the button.' : 'Tap the button or press Space.') : 'Players can press their buttons.');
       } else if (game.phase === 'answering') {
         const winnerId = game.buzzer.winnerId;
         const info = game.buzzer.winnerInfo;
         const reaction = info?.reactionMs != null ? ` Reaction ${info.reactionMs} ms.` : '';
         const title = winnerId === you.id ? 'Your answer' : `${nameOf(winnerId)} answers`;
-        if (!settings.oral) {
+        const tapType = game.current?.answerType ?? 'text';
+        if (tapType !== 'text') {
+          const how = tapType === 'point' ? 'Tap the picture where it is, then submit.' : 'Tap one of the options.';
+          setStage('answering', title, winnerId === you.id ? how
+            : `${tapType === 'point' ? 'Picture' : 'Option'} answer. It is checked automatically.`);
+        } else if (!settings.oral) {
           const typed = game.buzzer.typedAnswer;
           setStage('answering', title, typed?.submitted
             ? you.canModerate ? 'Answer submitted. Choose Correct or Wrong.' : 'Answer submitted. Waiting for the verdict.'
@@ -1682,9 +1870,10 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       if (settings.falseStart) setBuzzer('buzz-reading', 'Wait for green', `An early press blocks you for ${settings.timeForBlockingButton} s.`);
       else setBuzzer('buzz-open', 'Buzz', 'Press now to answer.');
     } else if (game.phase === 'buzzerOpen') {
-      setBuzzer('buzz-open', 'Buzz', 'Tap here or press Space.');
+      setBuzzer('buzz-open', 'Buzz', touchOnly ? 'Tap here.' : 'Tap here or press Space.');
     } else if (game.phase === 'answering') {
-      if (game.buzzer.winnerId === you.id) setBuzzer('buzz-you-answering', 'Your answer', 'Say it out loud to the host.');
+      if (game.buzzer.winnerId === you.id) setBuzzer('buzz-you-answering', 'Your answer',
+        (game.current?.answerType ?? 'text') === 'text' ? 'Say it out loud to the host.' : 'Tap your answer on the stage.');
       else setBuzzer('buzz-idle', `${nameOf(game.buzzer.winnerId)} answers`, 'Get ready in case they are wrong.');
     } else {
       setBuzzer('buzz-idle', 'Waiting for a question', 'The button opens after a question is chosen.');

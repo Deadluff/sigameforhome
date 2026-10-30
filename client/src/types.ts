@@ -78,6 +78,12 @@ export interface RoomState {
       answerContent: ContentItem[] | null;
       comments: string | null;
       sources: string[] | null;
+      answerType: 'text' | 'select' | 'point';
+      answerOptions: { label: string; content: ContentItem[] }[];
+      answerDeviation: number | null;
+      showmanComments: string | null;
+      selectionMode: string | null;
+      picks: { playerId: string; value: string; correct: boolean }[];
     } | null;
     buzzer: {
       winnerId: string | null;
@@ -108,6 +114,10 @@ export interface RoomState {
       yourWager: number | null;
       wagers: Record<string, number> | null;
       judged: string[];
+      eligibleIds: string[];
+      answeredIds: string[];
+      yourAnswer: string | null;
+      answers: Record<string, string> | null;
     } | null;
     appeals: {
       judgments: { id: number; playerId: string; correct: boolean; delta: number; appealed: boolean; voided: boolean }[];
@@ -159,6 +169,7 @@ export interface CommandPayloads {
   'game:removeFinalTheme': { themeIndex: number };
   'game:configureSpecial': { playerId: string; price: number };
   'game:finalWager': { amount: number };
+  'game:finalAnswer': { answer: string };
   'game:judgeFinal': { playerId: string; correct: boolean };
   'game:judge': { correct: boolean };
   'game:stakeBid': { amount: number; allIn: boolean };
@@ -174,7 +185,8 @@ export type CommandEvent = NoPayloadCommand | keyof CommandPayloads;
 // Player-specific fields mirror GameEngine.emitEvent payloads; the client uses them for podium replics.
 export type GameEvent =
   | { type: 'answerJudged'; correct: boolean; playerId?: string | null; delta?: number }
-  | { type: 'buzzAccepted' | 'falseStart' | 'stakePass'; playerId: string }
+  | { type: 'buzzAccepted'; playerId: string; assigned?: boolean }
+  | { type: 'falseStart' | 'stakePass'; playerId: string }
   | { type: 'stakeBid'; playerId: string; amount: number; allIn: boolean }
   | { type: 'stakeWon'; playerId: string; amount: number }
   | { type: 'giftAwarded'; playerId: string; price: number }

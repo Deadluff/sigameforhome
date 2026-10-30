@@ -45,7 +45,12 @@
     <section id="screen-game" class="screen hidden">
       <header class="topbar">
         <strong class="brand" aria-label="SIGame Local">SIGame</strong>
-        <span id="phase" class="topbar-round" role="status" aria-live="polite"></span>
+        <!-- The host steps between rounds right where the round is named. -->
+        <span class="round-nav">
+          <button data-act="game:prevRound" id="btn-prev-round" type="button" class="quiet round-arrow hidden" aria-label="Previous round">‹</button>
+          <span id="phase" class="topbar-round" role="status" aria-live="polite"></span>
+          <button data-act="game:nextRound" id="btn-next-round" type="button" class="quiet round-arrow hidden" aria-label="Next round">›</button>
+        </span>
         <span id="me" class="me-chip"></span>
         <button id="btn-leave" type="button" class="quiet">Leave</button>
       </header>
@@ -187,11 +192,11 @@
                 <button id="btn-copy-invite" type="button">Copy link</button>
                 <a id="tv-link" class="button-link" href="/?tv" target="_blank" rel="noopener">TV view</a>
               </div>
+              <img id="invite-qr" class="invite-qr hidden" alt="QR code that opens the join link" width="168" height="168" />
             </div>
           </div>
           <div id="board" class="board"></div>
           <div id="question" class="question-card hidden"></div>
-          <div id="host-answer" class="hidden" aria-live="off"></div>
         </div>
       </div>
 
@@ -206,14 +211,6 @@
             <button type="submit" class="primary">Submit answer</button>
           </form>
         </section>
-        <form id="special-setup" class="card hidden">
-          <strong>Special question setup</strong>
-          <div class="row">
-            <label class="field"><span>Answering player</span><select id="special-player" required></select></label>
-            <label class="field"><span>Value</span><input id="special-price" type="number" required /></label>
-            <button type="submit" class="primary">Show question</button>
-          </div>
-        </form>
         <section id="stake-auction" class="card hidden" aria-labelledby="stake-auction-title">
           <h3 id="stake-auction-title">Question auction</h3>
           <p id="stake-auction-status" role="status" aria-live="polite"></p>
@@ -249,20 +246,17 @@
           <button id="appeal-close" type="button" class="hidden">Close vote</button>
         </section>
         <form id="final-wager" class="card hidden">
-          <label class="field"><span>Your final wager</span><input id="final-amount" type="number" min="0" required /></label>
+          <label class="field"><span id="final-amount-label">Your final wager</span><input id="final-amount" type="number" inputmode="numeric" min="0" required /></label>
           <button type="submit" class="primary">Save wager</button>
+          <button id="final-all-in" type="button">All in</button>
           <span id="final-wager-status" class="hint"></span>
         </form>
-        <div id="final-host" class="card hidden">
-          <p id="final-host-status" role="status"></p>
-          <button id="btn-open-final" type="button" class="primary">Show final question</button>
-          <button id="btn-close-final" type="button">End answer time</button>
-          <div id="final-judge-row" class="row">
-            <label class="sr-only" for="final-player">Player to judge</label><select id="final-player"></select>
-            <button id="btn-final-correct" type="button" class="ok">Correct</button>
-            <button id="btn-final-wrong" type="button" class="bad">Wrong</button>
-          </div>
-        </div>
+        <form id="final-answer" class="card hidden">
+          <label for="final-answer-input">Your final answer</label>
+          <textarea id="final-answer-input" rows="2" maxlength="350" required></textarea>
+          <button type="submit" class="primary">Submit answer</button>
+          <span id="final-answer-status" class="hint" role="status"></span>
+        </form>
 
         <div id="host-controls" class="hidden" role="toolbar" aria-label="Host controls">
           <button data-act="judge-ok" type="button" class="ok">Correct</button>
@@ -271,16 +265,22 @@
           <button data-act="game:reveal" type="button">Show answer</button>
           <button data-act="game:next" type="button" class="primary">Next</button>
           <button id="btn-undo-judgment" type="button" class="quiet hidden">Undo verdict</button>
+          <!-- Step-specific host controls share this one bar instead of stacking extra panels. -->
+          <form id="special-setup" class="bar-group hidden">
+            <strong id="special-setup-title">Special question</strong>
+            <label class="field"><span>Answering player</span><select id="special-player" required></select></label>
+            <label class="field"><span>Value</span><input id="special-price" type="number" inputmode="numeric" required /></label>
+            <button type="submit" class="primary">Show question</button>
+          </form>
+          <div id="final-host" class="bar-group hidden">
+            <span id="final-host-status" role="status"></span>
+            <button id="btn-open-final" type="button" class="primary">Show final question</button>
+            <button id="btn-close-final" type="button">End answer time</button>
+          </div>
           <span class="controls-spacer"></span>
           <button data-act="game:pause" id="btn-pause" type="button" class="quiet">Pause</button>
           <button data-act="game:resume" id="btn-resume" type="button" class="primary">Resume</button>
-          <details class="game-menu"><summary>More</summary>
-            <div class="game-menu-panel">
-              <button data-act="game:prevRound" type="button">Previous round</button>
-              <button data-act="game:nextRound" type="button">Next round</button>
-              <button data-act="game:stop" type="button" class="bad">Stop game</button>
-            </div>
-          </details>
+          <button data-act="game:stop" id="btn-stop" type="button" class="quiet">Stop game</button>
         </div>
 
         <button id="buzzer" type="button" class="buzzer hidden">

@@ -62,6 +62,16 @@ export interface Info {
   authors: string[];
   sources: string[];
   comments: string;
+  /** Host-only notes (v5 `showmanComments`), e.g. where to look on a picture. */
+  showmanComments: string;
+}
+
+/** How the answerer responds: a spoken/typed answer, an A–F option, or a click on the picture. */
+export type AnswerType = 'text' | 'select' | 'point';
+
+export interface AnswerOption {
+  label: string;
+  content: ContentItem[];
 }
 
 export interface Question {
@@ -74,6 +84,12 @@ export interface Question {
   right: string[];
   wrong: string[];
   info: Info;
+  answerType: AnswerType;
+  answerOptions: AnswerOption[];
+  /** Point questions: allowed click distance, as a fraction of the picture height. */
+  answerDeviation: number | null;
+  /** Per-question answer time in seconds (v5 `answerDuration`). */
+  answerDuration: number | null;
 }
 
 export interface Theme {
@@ -199,6 +215,7 @@ function parseInfo(infoNode: XmlNode | undefined): Info {
     authors: asArray(infoNode?.authors?.author).map(text).filter(Boolean),
     sources: asArray(infoNode?.sources?.source).map(text).filter(Boolean),
     comments: text(infoNode?.comments),
+    showmanComments: text(infoNode?.showmanComments),
   };
 }
 
@@ -452,7 +469,11 @@ function parseModernQuestion(q: XmlNode, resolver: MediaResolver) {
     else if (kind === 'numberSet') {
       typeParams[name] = parseNumberSet(p.numberSet ?? {});
     } else if (kind === 'content') typeParams[name] = parseContentParam(p, resolver);
-    else typeParams[name] = text(p);
+    // A group (answerOptions) nests one content param per option letter.
+    else if (kind === 'group') {
+      typeParams[name] = asArray(p.param).map((option) =>
+        ({ label: attr(option, 'name'), content: parseContentParam(option, resolver) }));
+    } else typeParams[name] = text(p);
   }
 
   const rawType = attr(q, 'type', 'simple') as QuestionType;
@@ -464,6 +485,25 @@ function parseModernQuestion(q: XmlNode, resolver: MediaResolver) {
 /* Package normalisation                                                     */
 /* ------------------------------------------------------------------------- */
 
+/** Lifts v5 answer params out of typeParams so the engine and client get typed fields. */
+function parseAnswerSpec(typeParams: QuestionTypeParams) {
+  const raw = String(typeParams.answerType ?? '').toLowerCase();
+  const options = Array.isArray(typeParams.answerOptions)
+    ? (typeParams.answerOptions as AnswerOption[]).filter((option) => option.label) : [];
+  // An option question without options cannot be answered by tapping, so it falls back to text.
+  const answerType: AnswerType = raw === 'point' ? 'point' : raw === 'select' && options.length ? 'select' : 'text';
+  const positive = (value: unknown) => {
+    const n = Number(value);
+    return value != null && value !== '' && Number.isFinite(n) && n > 0 ? n : null;
+  };
+  return {
+    answerType,
+    answerOptions: answerType === 'select' ? options : [],
+    answerDeviation: answerType === 'point' ? positive(typeParams.answerDeviation) ?? 0.05 : null,
+    answerDuration: positive(typeParams.answerDuration),
+  };
+}
+
 function parseQuestion(q: XmlNode, resolver: MediaResolver): Question {
   const isModern = q.params != null || q.scenario == null;
   const parsed = isModern ? parseModernQuestion(q, resolver) : parseLegacyQuestion(q, resolver);
@@ -473,6 +513,7 @@ function parseQuestion(q: XmlNode, resolver: MediaResolver): Question {
     right: asArray(q.right?.answer).map(text).filter(Boolean),
     wrong: asArray(q.wrong?.answer).map(text).filter(Boolean),
     info: parseInfo(q.info),
+    ...parseAnswerSpec(parsed.typeParams),
   };
 }
 

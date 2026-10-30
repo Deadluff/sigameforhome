@@ -36,8 +36,12 @@ test('restart after a final reveal continues through unplayed themes', async (t)
   room.engine.start();
   t.after(() => room.engine.reset());
 
+  // Only players with a positive score play the final.
+  player.score = 100;
   const reveal = (themeIndex) => {
-    room.engine.selectQuestion(host.id, true, themeIndex, 0);
+    // The last remaining theme starts on its own; earlier ones are picked from the board.
+    if (room.engine.phase === 'board') room.engine.selectQuestion(host.id, true, themeIndex, 0);
+    assert.equal(room.engine.current.themeIndex, themeIndex);
     room.engine.setFinalWager(player.id, 0);
     room.engine.openFinal();
     room.engine.closeFinal();

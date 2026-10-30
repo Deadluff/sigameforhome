@@ -28,12 +28,11 @@
 #stake-bid-form .field { flex: 1 1 160px; }
 #final-wager { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
 #final-wager .field { flex: 1 1 200px; }
-#final-host { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-#final-host-status { flex: 1 1 260px; font-weight: 700; }
-#final-host .row { flex: 1; justify-content: flex-end; align-items: center; }
-#final-host select { width: auto; min-width: 180px; }
-#final-host button:disabled { display: none; }
-#special-setup .row .field { flex: 1 1 180px; }
+/* Step controls (special setup, final) are groups inside the host bar, not extra panels. */
+.bar-group { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.bar-group .field { flex-direction: row; align-items: center; gap: 8px; }
+.bar-group .field select, .bar-group .field input { width: auto; min-width: 120px; max-width: 220px; }
+#final-host-status { color: var(--mist); font-weight: 700; }
 .submitted { padding: 12px 14px; border-radius: var(--r-control); background: var(--set-sunk); font-size: var(--t-m); font-weight: 700; white-space: pre-wrap; overflow-wrap: anywhere; }
 #for-all-host { display: grid; gap: 10px; }
 #for-all-close { justify-self: start; }
@@ -47,16 +46,12 @@
 
 /* Host toolbar: verdicts and progression first, pause and menu pushed right. */
 #host-controls {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px;
   border-radius: var(--r-panel); background: var(--set); border: 1px solid var(--rule);
 }
-#host-controls > button[data-act="judge-ok"], #host-controls > button[data-act="judge-bad"] { min-width: 132px; min-height: 52px; font-size: var(--t-m); }
+#host-controls > button[data-act="judge-ok"], #host-controls > button[data-act="judge-bad"] { min-width: 132px; font-size: var(--t-m); }
 .controls-spacer { flex: 1; }
-.game-menu { position: relative; }
-.game-menu summary { display: inline-flex; align-items: center; min-height: 44px; padding: 10px 16px; border-radius: var(--r-control); border: 1px solid var(--rule); list-style: none; }
-.game-menu summary::-webkit-details-marker { display: none; }
-.game-menu summary::after { content: ""; margin-left: 8px; border: 5px solid transparent; border-bottom-color: currentColor; transform: translateY(-3px); }
-.game-menu-panel { position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 6; display: grid; gap: 6px; min-width: 200px; padding: 8px; border-radius: var(--r-panel); background: var(--set-raised); border: 1px solid var(--rule); }
+#btn-stop { color: #ffb3bd; }
 
 /* Buzzer: the one control a player needs. Colour mirrors the table frame. */
 .buzzer {

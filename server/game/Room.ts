@@ -410,6 +410,7 @@ export class Room extends EventEmitter {
     const visible = !hiddenPhases.includes(this.engine.phase) &&
       !(this.engine.phase === 'paused' && hiddenPhases.includes(this.engine.paused?.phase ?? ''));
     if (visible && current.question.content.some(allowed)) return true;
+    if (visible && (current.question.answerOptions ?? []).some((option) => option.content.some(allowed))) return true;
     const canSeeAnswer = viewer.role === ROLES.HOST || current.answerShown;
     return canSeeAnswer && current.question.answerContent.some(allowed);
   }
@@ -423,6 +424,8 @@ export class Room extends EventEmitter {
     const game = this.engine.getView(viewer, canModerate);
     if (game.current) {
       game.current.content = game.current.content.map((item) => ({ ...item, url: this.mediaUrl(item.url, viewer, item.type) }));
+      game.current.answerOptions = (game.current.answerOptions ?? []).map((option) => ({ ...option,
+        content: option.content.map((item) => ({ ...item, url: this.mediaUrl(item.url, viewer, item.type) })) }));
       if (game.current.answerContent) {
         game.current.answerContent = game.current.answerContent.map((item) =>
           ({ ...item, url: this.mediaUrl(item.url, viewer, item.type) }));

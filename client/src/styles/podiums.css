@@ -1,5 +1,5 @@
 /* Contestant podiums: avatar on top, name, lit score window — a desk under the board. */
-.players { display: flex; flex-wrap: nowrap; justify-content: center; gap: 10px; margin: 0; padding-top: 22px; }
+.players { display: flex; flex-wrap: nowrap; justify-content: center; gap: 8px; margin: 0; padding-top: 16px; }
 @media (max-width: 1100px) { .players { flex-wrap: wrap; } }
 
 .player {
@@ -47,6 +47,35 @@
 .player.off > :not(.player-menu) { opacity: .5; }
 .player.you b::after { content: " (you)"; color: var(--mist); font-weight: 600; }
 
+/*
+ * Scoreboard podiums lie flat (avatar beside name and score) so the row costs about half the
+ * height of a stacked podium and the table gets the rest. The host seat stays a portrait.
+ */
+.players .player:not(.role-spectator) {
+  grid-template-columns: auto minmax(0, 1fr) max-content; grid-template-areas: "avatar name badge" "avatar score score";
+  justify-items: start; align-items: center; column-gap: 10px; row-gap: 2px;
+  width: 240px; padding: 8px 34px 8px 10px; text-align: left;
+}
+.players .player .avatar { grid-area: avatar; width: 44px; height: 44px; font-size: var(--t-s); }
+.players .player .avatar::after { width: 11px; height: 11px; box-shadow: 0 0 0 2px var(--set); }
+.players .player b { grid-area: name; }
+.players .player .score { grid-area: score; justify-self: stretch; width: auto; padding: 3px 8px; font-size: 19px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.players .player .role-label { grid-area: score; }
+.players .player .badge-slot { grid-area: badge; min-height: 0; justify-self: end; max-width: 100%; overflow: hidden; }
+.players .player .badge { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Offline seats fade and drop the chip; the grey dot already says it. */
+.players .player.off .off-badge { display: none; }
+.players .player.answering { transform: translateY(-2px); }
+
+/* Final judging happens on the podium: the written answer, the wager, and a verdict pair. */
+.players .player.judging { width: 280px; grid-template-areas: "avatar name badge" "avatar score score" "verdict verdict verdict"; }
+.podium-verdict { grid-area: verdict; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 8px; width: 100%; padding-top: 6px; border-top: 1px solid var(--rule); }
+.podium-verdict .final-text { grid-column: 1 / -1; font-weight: 700; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.podium-verdict .final-text.empty { color: var(--mist); font-style: italic; }
+.podium-verdict small { color: var(--mist); font-weight: 700; }
+.verdict-buttons { display: flex; gap: 6px; }
+.verdict-buttons button { min-width: 48px; min-height: 40px; padding: 6px 10px; font-size: var(--t-l); }
+
 /* Spectators are listed, but compact: they are not on the scoreboard. */
 .player.role-spectator { width: auto; min-width: 140px; align-self: end; grid-template-columns: auto minmax(0, 1fr); justify-items: start; align-items: center; padding: 8px 40px 8px 12px; background: transparent; border: 1px dashed var(--rule); text-align: left; }
 .player.role-spectator .avatar { width: 28px; height: 28px; font-size: 10px; }
@@ -93,10 +122,13 @@
 .score-form button { width: auto; }
 
 @media (max-width: 600px) {
-  .players { flex-wrap: nowrap; justify-content: flex-start; overflow-x: auto; padding: 32px 2px 4px; scroll-snap-type: x proximity; }
-  .player { width: 132px; flex: none; padding: 10px 8px 8px; gap: 4px; scroll-snap-align: start; }
-  .player .avatar { width: 40px; height: 40px; font-size: var(--t-s); }
-  .player .score { font-size: var(--t-m); padding: 6px; }
+  .players { flex-wrap: nowrap; justify-content: flex-start; overflow-x: auto; padding: 30px 2px 4px; scroll-snap-type: x proximity; }
+  .player { flex: none; scroll-snap-align: start; }
+  .players .player:not(.role-spectator) { width: 150px; padding: 6px 30px 6px 8px; column-gap: 8px; grid-template-areas: "avatar name" "avatar score"; grid-template-columns: auto minmax(0, 1fr); }
+  .players .player .badge-slot { display: none; }
+  .players .player .avatar { width: 32px; height: 32px; font-size: var(--t-xs); }
+  .players .player .score { font-size: var(--t-m); min-width: 0; padding: 2px 6px; }
+  .players .player.judging { width: 240px; grid-template-areas: "avatar name" "avatar score" "verdict verdict"; }
   /* On a phone your own score comes first; everyone else scrolls. */
   .player.you { order: -1; }
   /* The podium row scrolls sideways and would clip a popover, so on phones the menu is a bottom sheet. */
