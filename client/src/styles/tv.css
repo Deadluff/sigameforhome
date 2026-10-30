@@ -1,20 +1,24 @@
 /* TV view (/?tv): a read-only shared screen, sized for a room. */
-.tv-mode #manage, .tv-mode #host-controls, .tv-mode #buzzer, .tv-mode #host-answer, .tv-mode #typed-answer,
+.tv-mode #manage, .tv-mode #host-controls, .tv-mode #buzzer, .tv-mode .q-host, .tv-mode #typed-answer,
 .tv-mode #special-setup, .tv-mode #stake-bid-form, .tv-mode #for-all-answer-form, .tv-mode #for-all-host,
-.tv-mode #final-wager, .tv-mode #final-host, .tv-mode #btn-leave, .tv-mode .player-menu,
+.tv-mode #final-wager, .tv-mode #final-answer, .tv-mode #final-host, .tv-mode .round-arrow, .tv-mode #host-tools, .tv-mode #btn-leave, .tv-mode .player-menu,
 .tv-mode #appeal-vote-actions, .tv-mode #appeal-judgments button { display: none !important; }
 .tv-mode #app { max-width: none; padding: 2vw; }
 .tv-mode .topbar { font-size: clamp(18px, 1.6vw, 32px); }
 .tv-mode .brand { font-size: clamp(24px, 2.2vw, 44px); }
 .tv-mode .stage-layout { grid-template-columns: clamp(260px, 22vw, 420px) minmax(0, 1fr); flex: 1; }
 .tv-mode #game-stage { min-height: 62dvh; }
-.tv-mode .board .theme { font-size: clamp(18px, 1.6vw, 34px); min-height: clamp(80px, 10vh, 140px); }
-.tv-mode .board .cell { font-size: clamp(24px, 2.6vw, 52px); min-height: clamp(80px, 10vh, 140px); }
-.tv-mode .question-content, .tv-mode #question > div:not(.answer) { font-size: clamp(28px, 3.4vw, 64px); }
+/* Theme names follow the cell like prices do: a fixed 1.6vw overflowed the narrow theme column of 10-price boards. */
+.tv-mode .board .theme { font-size: clamp(14px, min(calc(100cqw * .2 / (var(--cols) + 1.8)), calc(100cqh * .24 / var(--rows))), 34px); min-height: clamp(80px, 10vh, 140px); }
+/* Price size follows the cell (as on other screens), so a 10-column board never clips four digits. */
+.tv-mode .board .cell { font-size: clamp(18px, min(calc(100cqw * .3 / (var(--cols) + 1.8)), calc(100cqh * .45 / var(--rows))), 52px); min-height: clamp(80px, 10vh, 140px); }
+.tv-mode .q-prompt { font-size: clamp(28px, 3.4vw, 72px); }
+.tv-mode #question:not(.has-media) .q-prompt { font-size: clamp(36px, 5vw, 96px); }
 .tv-mode .stage-title { font-size: clamp(22px, 2vw, 40px); }
 .tv-mode .stage-countdown { font-size: clamp(34px, 3vw, 64px); }
-.tv-mode .player { width: clamp(200px, 14vw, 280px); }
-.tv-mode .player .score { font-size: clamp(22px, 2vw, 40px); }
-.tv-mode .player b { font-size: clamp(16px, 1.3vw, 26px); }
-.tv-mode .player .avatar { width: clamp(56px, 4.4vw, 88px); height: clamp(56px, 4.4vw, 88px); font-size: clamp(18px, 1.4vw, 28px); }
+.tv-mode .players .player:not(.role-spectator) { width: clamp(230px, 16vw, 320px); }
+/* :not(.role-spectator) matches the podium rules' weight, which otherwise kept 19 px scores on a TV. */
+.tv-mode .players .player:not(.role-spectator) .score { font-size: clamp(22px, 2vw, 40px); }
+.tv-mode .players .player:not(.role-spectator) b { font-size: clamp(16px, 1.3vw, 26px); }
+.tv-mode .players .player:not(.role-spectator) .avatar { width: clamp(56px, 4.4vw, 88px); height: clamp(56px, 4.4vw, 88px); font-size: clamp(18px, 1.4vw, 28px); }
 .tv-mode .stage-subtitle { font-size: clamp(15px, 1.1vw, 22px); }

@@ -13,11 +13,16 @@
  * / room.emitEvent(); the transport layer decides who receives what.
  */
 import { randomUUID } from 'node:crypto';
-import type { ContentItem, Package, Question, QuestionType, Round } from '../packs/siqParser.ts';
+import type { AnswerOption, AnswerType, ContentItem, Package, Question, QuestionType, Round } from '../packs/siqParser.ts';
 import { PHASES, type Phase, ROLES } from './constants.ts';
 import type { Participant, Room } from './Room.ts';
 import type { GameSettings } from './settings.ts';
+import { safeTimeout } from '../utils/safeTimer.ts';
 
+const CLIENT_CLOCK_TRUST_MS = 500;
+
+/** Host verdict multipliers for a correct answer: half credit, full, or double. */
+const REWARD_FACTORS = [0.5, 1, 2];
 const QUESTION_PHASES = new Set<Phase>([PHASES.READING, PHASES.BUZZER_OPEN, PHASES.ANSWERING, PHASES.FOR_ALL_ANSWERING, PHASES.FOR_ALL_JUDGE, PHASES.REVEAL]);
 
 export interface ActiveTimer {
@@ -66,6 +71,14 @@ export interface CurrentQuestionState {
   assignedId: string | null;
   chooserBeforeQuestion: string | null;
   judgments: Judgment[];
+  /** Option letters and picture clicks, kept so the reveal can show every attempt. */
+  picks: AnswerPick[];
+}
+
+export interface AnswerPick {
+  playerId: string;
+  value: string;
+  correct: boolean;
 }
 
 export interface Judgment {
@@ -157,6 +170,13 @@ export interface GameView {
     answerContent: ContentItem[] | null;
     comments: string | null;
     sources: string[] | null;
+    answerType: AnswerType;
+    answerOptions: AnswerOption[];
+    answerDeviation: number | null;
+    /** Host-only notes from the pack. */
+    showmanComments: string | null;
+    selectionMode: string | null;
+    picks: AnswerPick[];
   } | null;
   undoJudgment: { presentationId: string; judgmentId: number; playerId: string } | null;
   buzzer: {
@@ -188,6 +208,10 @@ export interface GameView {
     yourWager: number | null;
     wagers: Record<string, number | undefined> | null;
     judged: string[];
+    eligibleIds: string[];
+    answeredIds: string[];
+    yourAnswer: string | null;
+    answers: Record<string, string> | null;
   } | null;
   appeals: {
     judgments: Array<Pick<Judgment, 'id' | 'playerId' | 'correct' | 'delta' | 'appealed' | 'voided'>>;
@@ -217,6 +241,7 @@ export class GameEngine {
   roundTimeout?: ReturnType<typeof setTimeout>;
   finalWagers!: Map<string, number>;
   finalJudged!: Set<string>;
+  finalAnswers!: Map<string, string>;
   removedFinalThemes!: Set<number>;
   paused!: PausedState | null;
   auction!: StakeAuction | null;
@@ -241,6 +266,7 @@ export class GameEngine {
     this.roundEndsAt = null;
     this.finalWagers = new Map();
     this.finalJudged = new Set();
+    this.finalAnswers = new Map();
     this.removedFinalThemes = new Set();
     this.paused = null;
     this.auction = null;
@@ -303,6 +329,21 @@ export class GameEngine {
     if (this.round?.type !== 'final') return [];
     return this.round.themes.flatMap((theme, index) =>
       theme.questions[0]?.price >= 0 && !this.played.has(`${this.roundIndex}:${index}:0`) ? [index] : []);
+  }
+
+  /** Only players with a positive score play the final, as in the show. */
+  finalists(): Participant[] {
+    return this.activePlayers().filter((p) => p.score > 0)
+      .sort((a, b) => a.score - b.score || a.joinedAt - b.joinedAt);
+  }
+
+  /** Answer types other than text are answered by tapping, even when answers are spoken. */
+  answerType(): AnswerType {
+    return this.current?.question.answerType ?? 'text';
+  }
+
+  usesAnswerInput(): boolean {
+    return !this.settings.oral || this.answerType() !== 'text';
   }
 
   finalEligibleIds(): string[] {
@@ -377,6 +418,7 @@ export class GameEngine {
     player.score -= judgment.delta;
     current.judgments.pop();
     this.judgmentUndo.pop();
+    if (current.picks.at(-1)?.playerId === judgment.playerId) current.picks.pop();
     this.clearTimer();
     clearTimeout(this.buzzWindowHandle);
     this.buzzWindowHandle = undefined;
@@ -389,8 +431,7 @@ export class GameEngine {
     this.finalJudged = saved.finalJudged;
     if (saved.timerName && saved.timerMs !== null) {
       this.startTimer(saved.timerName, Math.max(0.001, saved.timerMs / 1000),
-        saved.timerName === 'answering' && !this.settings.oral
-          ? () => { this.buzzer.typedAnswerClosed = true; } : undefined);
+        saved.timerName === 'answering' ? () => this.expireAnswering() : undefined);
     }
     return { playerId: player.id, delta: -judgment.delta };
   }
@@ -460,12 +501,13 @@ export class GameEngine {
     this.roundEndsAt = saved.roundMs == null ? null : Date.now() + saved.roundMs;
     this.scheduleRoundEnd();
     if (saved.timerName && saved.timerMs != null) {
-      const onExpire = saved.timerName === 'reading' ? () =>
+      const onExpire = saved.timerName === 'intro' ? () => this.beginQuestion()
+        : saved.timerName === 'reading' ? () =>
         this.current?.type === 'forAll' ? this.openForAllAnswers() : this.openBuzzer()
         : saved.timerName === 'stake' ? () => this.passStake(this.auctionTurnId())
         : saved.timerName === 'forAll' ? () => this.closeForAllAnswers()
         : saved.timerName === 'buzzer' ? () => this.expireBuzzer()
-          : saved.timerName === 'answering' && !this.settings.oral ? () => { this.buzzer.typedAnswerClosed = true; }
+          : saved.timerName === 'answering' ? () => this.expireAnswering()
           : saved.timerName === 'final' ? () => this.closeFinal()
             : saved.timerName === 'appeal' ? () => this.resolveAppeal()
               : saved.timerName === 'reveal' ? () => this.next() : undefined;
@@ -528,12 +570,18 @@ export class GameEngine {
     this.scheduleRoundEnd();
 
     const players = this.room.players();
-    if (index === 0 || !players.length) {
+    if (this.round?.type === 'final') {
+      // The lowest-scoring finalist removes first; without finalists the host removes themes.
+      this.chooserId = this.finalists()[0]?.id ?? null;
+    } else if (index === 0 || !players.length) {
       this.chooserId = players.length ? players[Math.floor(Math.random() * players.length)].id : null;
     } else {
       this.chooserId = [...players].sort((a, b) => a.score - b.score)[0].id;
     }
-    if (this.phase === PHASES.BOARD) this.startChoosingTimer();
+    if (this.round?.type === 'final' && finalThemes === 1) {
+      // A single final theme needs no pick; go straight to wagers.
+      this.selectQuestion(this.chooserId, true, this.finalThemeIndices()[0], 0);
+    } else if (this.phase === PHASES.BOARD) this.startChoosingTimer();
     else this.startFinalThemeTimer();
   }
 
@@ -552,9 +600,20 @@ export class GameEngine {
     this.assert(remaining > 1, 'The final theme is already selected');
     this.removedFinalThemes.add(themeIndex);
     if (remaining === 2) {
+      // The last theme left is the final question; a one-cell board would only add a click.
+      const last = this.finalThemeIndices().find((i) => !this.removedFinalThemes.has(i));
+      this.assert(last !== undefined, 'No final theme is left');
       this.phase = PHASES.BOARD;
-      this.startChoosingTimer();
-    } else this.startFinalThemeTimer();
+      this.selectQuestion(this.chooserId, true, last, 0);
+      return;
+    }
+    // Finalists take turns removing themes.
+    const finalists = this.finalists();
+    if (finalists.length) {
+      const at = finalists.findIndex((p) => p.id === this.chooserId);
+      this.chooserId = finalists[(at + 1) % finalists.length].id;
+    }
+    this.startFinalThemeTimer();
   }
 
   assertRoundTimeRemaining(): void {
@@ -570,14 +629,14 @@ export class GameEngine {
   scheduleRoundEnd(): void {
     clearTimeout(this.roundTimeout);
     if (!this.roundEndsAt) return;
-    this.roundTimeout = setTimeout(() => {
+    this.roundTimeout = safeTimeout('round end', () => {
       if (this.phase === PHASES.BOARD || this.phase === PHASES.FINAL_THEMES) {
         this.clearTimer();
         this.phase = PHASES.ROUND_END;
         this.room.emitEvent({ type: 'roundEnd', roundIndex: this.roundIndex, outOfTime: true });
         this.room.changed();
       }
-    }, Math.max(0, this.roundEndsAt - Date.now()));
+    }, Math.max(0, this.roundEndsAt - Date.now()), () => this.room.changed());
   }
 
   startChoosingTimer(): void {
@@ -652,19 +711,42 @@ export class GameEngine {
       assignedId: null,
       chooserBeforeQuestion: this.chooserId,
       judgments: [],
+      picks: [],
     };
     if (round.type === 'final') {
       this.finalWagers = new Map();
       this.finalJudged = new Set();
+      this.finalAnswers = new Map();
       this.phase = PHASES.FINAL_WAGER;
       return;
     }
+    this.room.emitEvent({ type: 'questionSelected', themeIndex, questionIndex, price: question.price });
+    // Like the show, the chosen cell is lit on every screen before the question (or its twist) starts.
+    // The intro is its own phase, so commands that accept READING refuse it without extra guards.
+    if (this.settings.timeForQuestionIntro > 0) {
+      this.phase = PHASES.INTRO;
+      this.startTimer('intro', this.settings.timeForQuestionIntro, () => this.beginQuestion());
+    } else this.beginQuestion();
+  }
+
+  /** Ends the intro: starts the auction, the special setup, or reading for the chosen question. */
+  beginQuestion(): void {
+    if (!this.current || (this.phase !== PHASES.INTRO && this.phase !== PHASES.BOARD)) return;
+    // A host skip arrives while the intro timer is still set; the next step starts its own timers.
+    this.clearTimer();
+    const { themeIndex, questionIndex, question } = this.current;
     if (this.current.type === 'stake') {
+      // Everyone may have left during the intro. Put the cell back instead of auctioning to nobody.
+      if (!this.activePlayers().length) {
+        this.played.delete(`${this.roundIndex}:${themeIndex}:${questionIndex}`);
+        this.returnToBoard();
+        return;
+      }
       this.startStakeAuction();
       return;
     }
     if (this.current.type === 'forAll') {
-      // Every connected player at selection gets a private answer slot.
+      // Every player connected when the question starts gets a private answer slot.
       this.forAll = { eligibleIds: this.activePlayers().map((p) => p.id), answers: new Map(), judged: new Set() };
       this.phase = PHASES.READING;
       this.startReading(question);
@@ -677,8 +759,6 @@ export class GameEngine {
       return;
     }
     this.phase = PHASES.READING;
-    this.room.emitEvent({ type: 'questionSelected', themeIndex, questionIndex, price: question.price });
-
     if (!this.settings.falseStart && !this.hasWaitForFinishMedia(question)) {
       const totalSeconds = this.estimateReadingSeconds(question) + this.settings.timeForThinkingOnQuestion;
       this.openBuzzer(totalSeconds);
@@ -879,23 +959,38 @@ export class GameEngine {
     this.assert(this.phase === PHASES.FINAL_WAGER, 'Final wagers are closed');
     const player = this.room.participants.get(playerId);
     this.assert(player?.role === ROLES.PLAYER, 'Only players may wager');
-    this.assert(Number.isInteger(amount) && amount >= 0 && amount <= Math.max(0, player.score),
-      'Wager must be between zero and your current positive score');
+    this.assert(player.score > 0, 'Only players with a positive score play the final');
+    this.assert(Number.isInteger(amount) && amount >= 0 && amount <= player.score,
+      'Wager must be between zero and your current score');
     this.finalWagers.set(playerId, amount);
   }
 
   openFinal(): void {
     this.assert(this.phase === PHASES.FINAL_WAGER, 'Final question is not ready');
-    this.assert(this.activePlayers().every((p) => this.finalWagers.has(p.id)), 'Wait for every connected player to wager');
-    // A disconnected player cannot block the final; their wager defaults to zero.
+    this.assert(this.finalists().every((p) => this.finalWagers.has(p.id)), 'Wait for every finalist to wager');
+    // A disconnected finalist cannot block the final; their wager defaults to zero.
     for (const player of this.room.players()) {
-      if (!this.finalWagers.has(player.id)) {
+      if (player.score > 0 && !this.finalWagers.has(player.id)) {
         this.finalWagers.set(player.id, 0);
         this.finalJudged.add(player.id);
       }
     }
     this.phase = PHASES.FINAL_QUESTION;
     this.startTimer('final', this.settings.timeForFinalThinking, () => this.closeFinal());
+  }
+
+  /** Finalists write a private answer so the host can judge what they actually said. */
+  submitFinalAnswer(playerId: string, answer: unknown): void {
+    this.assert(this.phase === PHASES.FINAL_QUESTION, 'Final answers are closed');
+    this.assert(this.finalEligibleIds().includes(playerId) && !this.finalJudged.has(playerId),
+      'You are not playing this final');
+    this.assert(typeof answer === 'string' && answer.trim().length > 0 && answer.length <= 350,
+      'Answer must be 1–350 characters');
+    this.finalAnswers.set(playerId, answer.trim());
+    // Everyone online has answered: waiting out the clock would only stall the room.
+    const waiting = this.finalEligibleIds().filter((id) => !this.finalJudged.has(id) &&
+      this.room.participants.get(id)?.connected && !this.finalAnswers.has(id));
+    if (!waiting.length) this.closeFinal();
   }
 
   closeFinal(): void {
@@ -950,10 +1045,11 @@ export class GameEngine {
       this.current?.type === 'forAll' ? this.openForAllAnswers() : this.openBuzzer());
   }
 
+  /** The host's device reports that the question's media ended; buzzers open then instead of on an estimate. */
   contentFinished(presentationId: string): { advanced: boolean } {
     if (this.phase !== PHASES.READING || !this.current ||
         this.current.presentationId !== presentationId ||
-        !this.hasWaitForFinishMedia(this.current.question)) return { advanced: false };
+        !this.current.question.content.some((item) => item.type === 'audio' || item.type === 'video')) return { advanced: false };
     if (this.current.type === 'forAll') this.openForAllAnswers();
     else this.openBuzzer();
     return { advanced: true };
@@ -991,7 +1087,7 @@ export class GameEngine {
 
   scheduleBuzzWindow(delayMs: number): void {
     this.buzzWindowEndsAt = Date.now() + delayMs;
-    this.buzzWindowHandle = setTimeout(() => {
+    this.buzzWindowHandle = safeTimeout('buzz window', () => {
       this.buzzWindowEndsAt = null;
       const pool = this.buzzer.pending;
       this.buzzer.pending = [];
@@ -999,16 +1095,17 @@ export class GameEngine {
         this.grantPendingBuzz(pool);
         this.room.changed();
       }
-    }, delayMs);
+    }, delayMs, () => this.room.changed());
   }
 
   expireBuzzer(): void {
     // A press before the countdown deadline counts even if its collection window is still open.
-    if (!this.buzzer.pending.length) return this.revealAnswer({ showAnswer: false });
+    // Time is up with no answerer: end the question and show what the answer was.
+    if (!this.buzzer.pending.length) return this.revealAnswer({ showAnswer: true, autoNext: true });
     const pool = this.buzzer.pending;
     this.buzzer.pending = [];
     if (this.grantPendingBuzz(pool)) this.buzzer.remainingMs = 1000;
-    else this.revealAnswer({ showAnswer: false });
+    else this.revealAnswer({ showAnswer: true, autoNext: true });
   }
 
   openBuzzer(overrideSeconds?: number): void {
@@ -1042,7 +1139,9 @@ export class GameEngine {
     const openedAt = this.buzzer.openedAt ?? serverNow;
     const num = Number(rawClientAt);
     if (!Number.isFinite(num)) return serverNow;
-    const minAllowed = Math.max(openedAt, serverNow - 2000);
+    // A player's clock is trusted only a little way back, so a skewed or forged clientAt cannot
+    // jump the queue by seconds (audit SEC-4).
+    const minAllowed = Math.max(openedAt, serverNow - CLIENT_CLOCK_TRUST_MS);
     const maxAllowed = serverNow + 20;
     return Math.min(maxAllowed, Math.max(minAllowed, num));
   }
@@ -1115,39 +1214,85 @@ export class GameEngine {
     this.buzzer.typedAnswerClosed = false;
     this.phase = PHASES.ANSWERING;
     // The host must make the verdict; an elapsed countdown must not silently decide it.
-    this.startTimer('answering', this.settings.timeForPrintingAnswer,
-      this.settings.oral ? undefined : () => { this.buzzer.typedAnswerClosed = true; });
-    this.room.emitEvent({ type: 'buzzAccepted', playerId, winnerInfo });
+    // Tapped answers (options, picture clicks) are auto-judged, so their timeout counts as wrong.
+    this.startTimer('answering', this.current?.question.answerDuration ?? this.settings.timeForPrintingAnswer,
+      () => this.expireAnswering());
+    this.room.emitEvent({ type: 'buzzAccepted', playerId, winnerInfo, assigned: this.isAssignedQuestion() });
+  }
+
+  expireAnswering(): void {
+    if (this.phase !== PHASES.ANSWERING) return;
+    if (this.answerType() !== 'text' && this.buzzer.typedAnswer === null) {
+      this.buzzer.typedAnswerClosed = true;
+      this.judge(false);
+    } else if (!this.settings.oral) this.buzzer.typedAnswerClosed = true;
   }
 
   submitAnswer(playerId: string, answer: unknown): void {
     this.assert(this.phase === PHASES.ANSWERING && this.buzzer.winnerId === playerId,
       'Only the current answerer can submit');
-    this.assert(!this.settings.oral, 'Written answers are disabled');
+    this.assert(this.usesAnswerInput(), 'Written answers are disabled');
     this.assert(this.buzzer.typedAnswer === null, 'Answer already submitted');
     this.assert(!this.buzzer.typedAnswerClosed && this.timer?.name === 'answering' &&
       Date.now() < this.timer.endsAt, 'Answer time has ended');
     this.assert(typeof answer === 'string' && answer.trim().length > 0 && answer.length <= 350,
       'Answer must be 1–350 characters');
-    this.buzzer.typedAnswer = answer.trim();
+    const type = this.answerType();
+    if (type === 'text') {
+      this.buzzer.typedAnswer = answer.trim();
+      this.buzzer.typedAnswerClosed = true;
+      return;
+    }
+    const value = answer.trim();
+    const correct = type === 'select' ? this.isRightOption(value) : this.isRightPoint(value);
+    this.buzzer.typedAnswer = value;
     this.buzzer.typedAnswerClosed = true;
+    this.current!.picks.push({ playerId, value, correct });
+    this.judge(correct);
   }
 
-  judge(correct: boolean): void {
+  isRightOption(label: string): boolean {
+    const question = this.current!.question;
+    this.assert(question.answerOptions.some((option) => option.label === label), 'Choose one of the options');
+    return question.right.some((right) => right.trim().toUpperCase() === label.toUpperCase());
+  }
+
+  /**
+   * Pack answers read "x,y,aspect" with x and y as fractions of the picture and aspect as its
+   * width/height ratio. As in SIGame's AnswerChecker, x is scaled by the aspect so distance and
+   * deviation are measured in picture heights and the hit area stays round.
+   */
+  isRightPoint(value: string): boolean {
+    const click = parsePoint(value);
+    this.assert(click, 'Click on the picture');
+    const question = this.current!.question;
+    const deviation = question.answerDeviation ?? 0.05;
+    return question.right.some((right) => {
+      const target = parsePoint(right);
+      if (!target) return false;
+      const aspect = target.aspect ?? 1;
+      return Math.hypot((click.x - target.x) * aspect, click.y - target.y) <= deviation;
+    });
+  }
+
+  /** `factor` lets the host award half (a partly right answer) or double the question value. */
+  judge(correct: boolean, factor = 1): void {
     this.assert(this.phase === PHASES.ANSWERING && this.buzzer.winnerId, 'Nobody is answering');
+    this.assert(REWARD_FACTORS.includes(factor), 'Reward must be half, full or double');
     this.assert(this.current, 'No active question');
-    this.assert(this.settings.oral || this.buzzer.typedAnswer !== null || this.buzzer.typedAnswerClosed,
+    this.assert(!this.usesAnswerInput() || this.buzzer.typedAnswer !== null || this.buzzer.typedAnswerClosed,
       'Wait for the written answer or its deadline');
     const player = this.room.participants.get(this.buzzer.winnerId);
     const price = this.current.price;
     this.captureJudgmentUndo();
 
     if (correct) {
-      if (player) player.score += price;
-      this.recordJudgment(this.buzzer.winnerId, true, price, price,
+      const reward = Math.round(price * factor);
+      if (player) player.score += reward;
+      this.recordJudgment(this.buzzer.winnerId, true, reward, reward,
         this.settings.ignoreWrong || this.current.type === 'noRisk' ? 0 : -price);
       this.chooserId = this.buzzer.winnerId;
-      this.room.emitEvent({ type: 'answerJudged', playerId: this.buzzer.winnerId, correct: true, delta: price });
+      this.room.emitEvent({ type: 'answerJudged', playerId: this.buzzer.winnerId, correct: true, delta: reward });
       this.revealAnswer({ showAnswer: true, autoNext: true });
       return;
     }
@@ -1161,11 +1306,14 @@ export class GameEngine {
 
     const someoneLeft = this.activePlayers().some((p) => !this.buzzer.attempted.has(p.id));
     if (someoneLeft && !this.isAssignedQuestion()) this.openBuzzer();
-    else this.revealAnswer({ showAnswer: false });
+    // Nobody can still answer: end the question and show what the answer was.
+    else this.revealAnswer({ showAnswer: true, autoNext: true });
   }
 
   estimateRevealSeconds(question: Question): number {
-    let seconds = 3;
+    // A picture answer needs a moment to be found and understood; text alone reads faster.
+    let seconds = question.answerContent.some((item) => item.type === 'image') ||
+      question.answerType === 'point' ? 6 : 4;
     for (const item of question.answerContent) {
       if (item.duration) seconds = Math.max(seconds, Math.ceil(item.duration));
       else if (item.type === 'audio' || item.type === 'video') seconds = Math.max(seconds, 5);
@@ -1307,8 +1455,15 @@ export class GameEngine {
       }
       return;
     }
+    // During the intro, Next is the host's "skip the pause", not "skip the question".
+    if (this.phase === PHASES.INTRO) return this.beginQuestion();
     this.assert(QUESTION_PHASES.has(this.phase) || this.phase === PHASES.SPECIAL_SETUP ||
       this.phase === PHASES.STAKE_AUCTION, 'Nothing to continue');
+    this.returnToBoard();
+  }
+
+  /** Clears the finished question and returns to the board, or ends the round when nothing is left. */
+  returnToBoard(): void {
     this.judgmentUndo = [];
     this.clearTimer();
     this.current = null;
@@ -1329,12 +1484,27 @@ export class GameEngine {
 
   /* ------------------------------------------------------------------ views */
 
+  /**
+   * True while nobody may see the question yet: the intro, special setup, an auction or a final wager
+   * (also while paused in one of them), and always for a gift. The view and media access share it.
+   */
+  contentHidden(): boolean {
+    if (!this.current || this.current.type === 'secretNoQuestion') return true;
+    const phase = this.phase === PHASES.PAUSED ? this.paused?.phase : this.phase;
+    return ([PHASES.INTRO, PHASES.SPECIAL_SETUP, PHASES.STAKE_AUCTION, PHASES.FINAL_WAGER] as Phase[])
+      .includes(phase ?? PHASES.PAUSED);
+  }
+
   getView(viewer: Participant | null, canModerate: boolean): GameView {
     const round = this.round;
     const c = this.current;
     const forAll = this.forAll;
     // A player who owns the room may moderate, but must never receive an early answer.
     const showAnswer = viewer?.role === ROLES.HOST || (c?.answerShown ?? false);
+    // Final answers and wagers stay private until the host has judged them all; then the room sees the payoff.
+    const shownPhase = this.phase === PHASES.PAUSED ? this.paused?.phase : this.phase;
+    const finalShown = (canModerate && this.phase === PHASES.FINAL_JUDGE) ||
+      (round?.type === 'final' && (shownPhase === PHASES.REVEAL || shownPhase === PHASES.APPEAL_VOTE));
 
     return {
       phase: this.phase,
@@ -1357,11 +1527,7 @@ export class GameEngine {
         themeName: c.type === 'secretNoQuestion' ? 'Gift' : c.themeName,
         price: c.price,
         type: c.type,
-        content: c.type === 'secretNoQuestion' ||
-          ([PHASES.SPECIAL_SETUP, PHASES.STAKE_AUCTION, PHASES.FINAL_WAGER] as Phase[]).includes(this.phase) ||
-          (this.phase === PHASES.PAUSED &&
-            ([PHASES.SPECIAL_SETUP, PHASES.STAKE_AUCTION, PHASES.FINAL_WAGER] as Phase[]).includes(this.paused?.phase ?? PHASES.PAUSED))
-          ? [] : c.question.content,
+        content: this.contentHidden() ? [] : c.question.content,
         assignedId: c.assignedId,
         priceRange: this.phase === PHASES.SPECIAL_SETUP ? c.question.typeParams?.price ?? null : null,
         answerShown: c.answerShown,
@@ -1370,6 +1536,13 @@ export class GameEngine {
         answerContent: showAnswer && c.type !== 'secretNoQuestion' ? c.question.answerContent : null,
         comments: showAnswer && c.type !== 'secretNoQuestion' ? c.question.info.comments : null,
         sources: showAnswer && c.type !== 'secretNoQuestion' && this.settings.displaySources ? c.question.info.sources : null,
+        answerType: c.type === 'secretNoQuestion' ? 'text' : c.question.answerType,
+        // Options carry text and media, so they follow the same gate as the question itself.
+        answerOptions: this.contentHidden() ? [] : c.question.answerOptions,
+        answerDeviation: c.question.answerDeviation,
+        showmanComments: viewer?.role === ROLES.HOST ? c.question.info.showmanComments || null : null,
+        selectionMode: c.question.typeParams?.selectionMode ?? null,
+        picks: c.answerShown ? c.picks : [],
       },
       undoJudgment: canModerate && this.canUndoJudgment() && c ? {
         presentationId: c.presentationId,
@@ -1384,7 +1557,7 @@ export class GameEngine {
         blockedPlayers: [...this.buzzer.blockedUntil.entries()]
           .filter(([, until]) => until > Date.now())
           .map(([id, until]) => ({ id, until })),
-        typedAnswer: !this.settings.oral &&
+        typedAnswer: this.usesAnswerInput() &&
           (this.phase === PHASES.ANSWERING ||
             (this.phase === PHASES.PAUSED && this.paused?.phase === PHASES.ANSWERING))
           ? {
@@ -1414,9 +1587,16 @@ export class GameEngine {
       final: this.round?.type === 'final' ? {
         wagered: [...this.finalWagers.keys()],
         yourWager: viewer ? this.finalWagers.get(viewer.id) ?? null : null,
-        wagers: canModerate && this.phase === PHASES.FINAL_JUDGE
+        wagers: finalShown
           ? Object.fromEntries(this.finalEligibleIds().map((id) => [id, this.finalWagers.get(id)])) : null,
         judged: [...this.finalJudged],
+        // Before wagers close, finalists are everyone with a positive score.
+        eligibleIds: this.phase === PHASES.FINAL_WAGER || this.phase === PHASES.FINAL_THEMES ||
+          this.phase === PHASES.BOARD ? this.finalists().map((p) => p.id) : this.finalEligibleIds(),
+        answeredIds: [...this.finalAnswers.keys()],
+        yourAnswer: viewer ? this.finalAnswers.get(viewer.id) ?? null : null,
+        answers: finalShown
+          ? Object.fromEntries(this.finalEligibleIds().map((id) => [id, this.finalAnswers.get(id) ?? ''])) : null,
       } : null,
       // Verdicts are public once the question reaches reveal; votes stay private until resolution.
       appeals: c && (
@@ -1439,4 +1619,11 @@ export class GameEngine {
       } : null,
     };
   }
+}
+
+/** Parses "x,y" or "x,y,aspect"; x and y must lie on the picture. */
+function parsePoint(value: string): { x: number; y: number; aspect: number | null } | null {
+  const [x, y, aspect] = value.split(',').map((part) => Number(part.trim()));
+  if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || x > 1 || y < 0 || y > 1) return null;
+  return { x, y, aspect: Number.isFinite(aspect) && aspect > 0 ? aspect : null };
 }

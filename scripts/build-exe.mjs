@@ -26,6 +26,9 @@ await build({ entryPoints: [path.join(root, 'server/packs/parseWorker.ts')], out
 await build({ entryPoints: [path.join(root, 'server/steam/steamworksWorker.ts')], outfile: path.join(staging, 'steam-worker.mjs'),
   bundle: true, platform: 'node', format: 'esm', target: 'node22', external: ['steamworks.js'],
   logLevel: 'warning' });
+// A SEA main script can only require built-ins, so bundle the entry with its shared restart policy.
+await build({ entryPoints: [path.join(root, 'scripts/sea-entry.cjs')], outfile: path.join(staging, 'sea-entry.cjs'),
+  bundle: true, platform: 'node', format: 'cjs', target: 'node22', logLevel: 'warning' });
 
 const files = new Map();
 function add(name, source) {
@@ -71,7 +74,7 @@ add('manifest.json', manifest);
 const blob = path.join(staging, 'app.blob');
 const seaConfig = path.join(staging, 'sea-config.json');
 fs.writeFileSync(seaConfig, JSON.stringify({
-  main: path.join(root, 'scripts/sea-entry.cjs'), output: blob,
+  main: path.join(staging, 'sea-entry.cjs'), output: blob,
   disableExperimentalSEAWarning: true, useSnapshot: false, useCodeCache: false,
   assets: Object.fromEntries(files),
 }));

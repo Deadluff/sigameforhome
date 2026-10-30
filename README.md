@@ -52,6 +52,11 @@ Pack files are limited to 200 MB compressed, 1 GB extracted, and 256 MB per medi
 > Allow Node.js through your firewall so phones can connect. To use a different port,
 > set `PORT=3001` before starting (`set PORT=3001` on Windows, `PORT=3001 ./start.sh` on macOS/Linux).
 
+> The server only accepts its own pages, reached by an IP address, `localhost`, a `*.local` name,
+> or this computer's name. If guests reach it by another name (a router DNS name or a reverse proxy),
+> start it with `ALLOWED_HOSTS=quiz.home` (comma-separated), or `ALLOW_ANY_ORIGIN=1` to turn the check off.
+> Each device may hold up to 32 connections that have not joined yet; change it with `SOCKET_CAP_PER_ADDRESS`.
+
 ## Quick start (macOS)
 
 1. Install **Node.js 20.19+ or 22.12+** from https://nodejs.org (or via Homebrew: `brew install node`).
@@ -63,7 +68,7 @@ Pack files are limited to 200 MB compressed, 1 GB extracted, and 256 MB per medi
    *(If macOS Gatekeeper blocks double-clicking `start.command` after cloning/downloading, either Right-Click → **Open**, or run `xattr -d com.apple.quarantine start.command start.sh` once in Terminal).*
 3. On the first run it installs dependencies, creates demo packs if `packs/` is empty, and prints your Mac's LAN link (`http://192.168.x.x:3000`) + a QR code for phones. To use a different port: `PORT=3001 ./start.sh`.
 
-For Steam Workshop downloads, keep the Steam desktop app open and signed in with SIGame added to your library. If the desktop download fails, the server installs Valve's macOS SteamCMD in `tools/steamcmd/` and tries it automatically. SIGame is listed for Windows only on Steam, and some Workshop items deny anonymous SteamCMD access. If this happens, download the item through Steam on a Windows computer and upload its `.siq` file in the host panel. SteamCMD can also use `STEAM_USER` and `STEAM_PASS` for an account with SIGame access.
+For Steam Workshop downloads, keep the Steam desktop app open and signed in with SIGame added to your library. If the desktop download fails, the server installs Valve's macOS SteamCMD in `tools/steamcmd/` and tries it automatically. SIGame is listed for Windows only on Steam, and some Workshop items deny anonymous SteamCMD access. If this happens, download the item through Steam on a Windows computer and upload its `.siq` file in the host panel. SteamCMD can also use `STEAM_USER` and `STEAM_PASS` for an account with SIGame access. SteamCMD receives the password on its command line, so other users of this computer can see it in process listings; use a dedicated Steam account, not your main one.
 
 Want a pack to test with? Run `npm run make-sample` to create two demo packs (modern v5 format and legacy v4 format).
 

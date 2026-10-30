@@ -5,8 +5,10 @@ import type { Server, Socket } from 'socket.io';
 import { PHASES, type Role } from '../game/constants.ts';
 import type { Participant, Room } from '../game/Room.ts';
 import { SETTINGS_SCHEMA } from '../game/settings.ts';
+import { renameParticipant } from '../game/nickname.ts';
 import { listPacks, loadPack } from '../packs/packManager.ts';
 import { downloadWorkshopPack } from '../steam/workshop.ts';
+import { createSocketLimits, type SocketLimits } from './socketLimits.ts';
 
 const JOINED_ROOM = 'joined';
 const JOIN_WINDOW_MS = 60_000;
@@ -23,7 +25,7 @@ function requireBoolean(value: unknown): boolean {
   return value;
 }
 
-export function registerSocketHandlers(io: Server, room: Room): void {
+export function registerSocketHandlers(io: Server, room: Room, limits: SocketLimits = createSocketLimits()): void {
   const joinAttempts = new Map<string, { startedAt: number; count: number }>();
   const checkJoinRate = (address: string): void => {
     const now = Date.now();
@@ -56,7 +58,7 @@ export function registerSocketHandlers(io: Server, room: Room): void {
     const s = io.sockets.sockets.get(p.socketId);
     s?.emit('session:kicked');
     s?.leave(JOINED_ROOM);
-    if (s) s.data.pid = null;
+    if (s) { s.data.pid = null; limits.left(s); } // still connected, so it counts as unjoined again
   });
 
   const emitToManagers = (event: string, payload: unknown): void => {
@@ -68,6 +70,7 @@ export function registerSocketHandlers(io: Server, room: Room): void {
   /* ------------------------------------------------------ per connection */
 
   io.on('connection', (socket: Socket) => {
+    limits.connected(socket);
     socket.data.pid = null as string | null;
     let commandWindowStartedAt = Date.now();
     let commandAttempts = 0;
@@ -128,6 +131,7 @@ export function registerSocketHandlers(io: Server, room: Room): void {
       if (stale) io.sockets.sockets.get(stale)?.disconnect(true);
       socket.data.pid = participant.id;
       socket.join(JOINED_ROOM);
+      limits.joined(socket);
     };
 
     /* ---- clock sync ---- */
@@ -156,6 +160,7 @@ export function registerSocketHandlers(io: Server, room: Room): void {
       room.remove(pid);
       socket.data.pid = null;
       socket.leave(JOINED_ROOM);
+      limits.left(socket);
     });
 
     /* ---- roles ---- */
@@ -165,6 +170,8 @@ export function registerSocketHandlers(io: Server, room: Room): void {
       room.setRole(pid, targetId ?? pid, role),
     );
     on<{ targetId: string }>('participant:kick', 'moderator', ({ targetId }, pid) => room.kick(pid, targetId));
+    on<{ targetId?: string; name: string }>('participant:rename', 'member', ({ targetId, name }, pid) =>
+      renameParticipant(room, pid, targetId ?? pid, name));
     on<{ targetId: string; delta: number }>('score:adjust', 'moderator', ({ targetId, delta }, pid) =>
       room.adjustScore(pid, targetId, Number(delta)),
     );
@@ -229,6 +236,8 @@ export function registerSocketHandlers(io: Server, room: Room): void {
       room.engine.judgeForAll(playerId, requireBoolean(correct)));
     on<{ amount: number }>('game:finalWager', 'member', ({ amount }, pid) =>
       room.engine.setFinalWager(pid, Number(amount)));
+    on<{ answer: string }>('game:finalAnswer', 'member', ({ answer }, pid) =>
+      room.engine.submitFinalAnswer(pid, answer));
     on('game:openFinal', 'moderator', () => room.engine.openFinal());
     on('game:closeFinal', 'moderator', () => room.engine.closeFinal());
     on<{ playerId: string; correct: boolean }>('game:judgeFinal', 'moderator', ({ playerId, correct }) =>
@@ -243,7 +252,8 @@ export function registerSocketHandlers(io: Server, room: Room): void {
           buzzer.pending.some((press) => press.playerId === pid)) return { result: 'ignored' };
       return room.engine.buzz(pid, payload);
     });
-    on<{ correct: boolean }>('game:judge', 'moderator', ({ correct }) => room.engine.judge(requireBoolean(correct)));
+    on<{ correct: boolean; factor?: number }>('game:judge', 'moderator', ({ correct, factor }) =>
+      room.engine.judge(requireBoolean(correct), factor === undefined ? 1 : Number(factor)));
     on<{ presentationId: string; judgmentId: number }>('game:undoJudgment', 'moderator',
       ({ presentationId, judgmentId }) => room.engine.undoJudgment(presentationId, judgmentId));
     on<{ judgmentId: number }>('game:appealRequest', 'member', ({ judgmentId }, pid) =>
@@ -257,6 +267,7 @@ export function registerSocketHandlers(io: Server, room: Room): void {
     on('game:nextRound', 'moderator', () => room.engine.nextRound());
 
     socket.on('disconnect', () => {
+      limits.disconnected(socket);
       if (socket.data.pid) room.detach(socket.data.pid as string, socket.id);
     });
   });

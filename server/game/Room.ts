@@ -10,8 +10,11 @@ import type { ContentItem, PackageStats, RoundType } from '../packs/siqParser.ts
 import { PHASES, ROLES, type Role } from './constants.ts';
 import { GameEngine, type GameView } from './GameEngine.ts';
 import { applySettingsPatch, defaultSettings, type GameSettings } from './settings.ts';
+import { takeGraceMode } from './seatGrace.ts';
+import { clearHandover, handoverReady, startHandover } from './moderationHandover.ts';
+import { assertNicknameFree, normalizeNickname } from './nickname.ts';
+import { safeTimeout } from '../utils/safeTimer.ts';
 
-const NICK_MAX = 24;
 const MAX_MANUAL_SCORE = 1_000_000_000_000;
 export const MAX_ROOM_PARTICIPANTS = 64;
 
@@ -97,7 +100,8 @@ export class Room extends EventEmitter {
     if (!p || p.displayOnly) return false;
     if (p.role === ROLES.HOST) return true;
     const host = this.host();
-    return pid === this.ownerId && !(host && host.connected);
+    // With no host the owner runs the game; an absent host is covered only after the handover wait.
+    return pid === this.ownerId && (!host || (!host.connected && handoverReady(this, host.id)));
   }
 
   /** Pack/settings management: moderators and the owner. */
@@ -115,21 +119,16 @@ export class Room extends EventEmitter {
   join(rawNickname: unknown, asSpectator = false): { participant: Participant; token: string } {
     // Spectators also consume a session, snapshot fan-out, and persisted state.
     if (this.participants.size >= MAX_ROOM_PARTICIPANTS) throw new Error('The room is full');
-    const name = String(rawNickname ?? '')
-      .replace(/[\u0000-\u001f\u007f]/g, '')
-      .trim()
-      .slice(0, NICK_MAX);
-    if (!name) throw new Error('Please enter a nickname');
-
-    const taken = [...this.participants.values()].some((p) => p.name.toLowerCase() === name.toLowerCase());
-    if (taken) throw new Error('This nickname is already taken');
+    const name = normalizeNickname(rawNickname);
+    assertNicknameFree(this, name);
 
     const isFirst = this.ownerId === null;
     if (isFirst && asSpectator) throw new Error('A host or player must join before opening the TV view');
     let role: Role;
     if (isFirst) role = ROLES.PENDING;
     else if (asSpectator) role = ROLES.SPECTATOR;
-    else role = this.hasFreePlayerSlot() ? ROLES.PLAYER : ROLES.SPECTATOR;
+    // A locked room seats newcomers as spectators; only the host can seat them (audit QOL-3).
+    else role = this.hasFreePlayerSlot() && !this.settings.lockRoom ? ROLES.PLAYER : ROLES.SPECTATOR;
 
     const participant: Participant = {
       id: crypto.randomUUID(),
@@ -143,7 +142,7 @@ export class Room extends EventEmitter {
       joinedAt: Date.now(),
       // Auto-assigned spectators are promoted automatically when a player slot frees up.
       // A display-only TV never inherits a player seat when one opens.
-      autoSpectator: role === ROLES.SPECTATOR && !asSpectator,
+      autoSpectator: role === ROLES.SPECTATOR && !asSpectator && !this.settings.lockRoom,
       displayOnly: asSpectator,
     };
     this.participants.set(participant.id, participant);
@@ -172,6 +171,8 @@ export class Room extends EventEmitter {
         !this.removalTimers.has(this.ownerId)) this.reassignOwner();
     clearTimeout(this.removalTimers.get(pid));
     this.removalTimers.delete(pid);
+    takeGraceMode(this, pid); // a reconnect ends any restore grace; later drops follow live rules
+    clearHandover(this, pid);
     this.changed();
     return previous;
   }
@@ -183,9 +184,10 @@ export class Room extends EventEmitter {
       this.engine.auctionTurnId() === pid;
     p.connected = false;
     p.socketId = null;
+    if (p.role === ROLES.HOST) startHandover(this, pid);
     this.removalTimers.set(
       pid,
-      setTimeout(() => this.expire(pid), config.reconnectGraceMs),
+      safeTimeout(`reconnect grace ${pid}`, () => this.expire(pid), config.reconnectGraceMs, () => this.changed()),
     );
     // A disconnected bidder cannot act, so offer the turn to the next player now.
     if (wasAuctionTurn) this.engine.advanceStakeAuction();
@@ -196,8 +198,10 @@ export class Room extends EventEmitter {
   expire(pid: string): void {
     const p = this.participants.get(pid);
     this.removalTimers.delete(pid);
+    // A restored 'keep' seat survives a lobby fallback (e.g. its saved pack failed to load).
+    const keepRestored = takeGraceMode(this, pid) === 'keep';
     if (!p || p.connected) return;
-    const inGame = this.engine.phase !== PHASES.LOBBY;
+    const inGame = this.engine.phase !== PHASES.LOBBY || keepRestored;
     if (inGame && (p.role === ROLES.PLAYER || p.role === ROLES.HOST)) {
       // Keep scores/seats for reconnects, but let a connected participant recover moderation.
       if (this.ownerId === pid) {
@@ -223,6 +227,8 @@ export class Room extends EventEmitter {
       this.engine.auctionTurnId() === pid;
     clearTimeout(this.removalTimers.get(pid));
     this.removalTimers.delete(pid);
+    takeGraceMode(this, pid);
+    clearHandover(this, pid);
     this.participants.delete(pid);
     this.tokens.delete(p.token);
     if (this.engine.chooserId === pid) this.engine.chooserId = this.players()[0]?.id ?? null;
@@ -247,7 +253,8 @@ export class Room extends EventEmitter {
   promoteSpectators(): void {
     if (this.engine.phase !== PHASES.LOBBY && this.engine.phase !== PHASES.GAME_OVER) return;
     const waiting = [...this.participants.values()]
-      .filter((p) => p.connected && p.role === ROLES.SPECTATOR && p.autoSpectator && !p.displayOnly)
+      // A locked room freezes seating, also for people who were waiting before the lock (QOL-3).
+      .filter((p) => !this.settings.lockRoom && p.connected && p.role === ROLES.SPECTATOR && p.autoSpectator && !p.displayOnly)
       .sort((a, b) => a.joinedAt - b.joinedAt);
     for (const s of waiting) {
       if (!this.hasFreePlayerSlot()) break;
@@ -293,6 +300,7 @@ export class Room extends EventEmitter {
       if (!moderator && !(self && actorId === this.ownerId)) throw new Error('Only the owner can claim the host seat');
     } else {
       if (!self && !moderator) throw new Error('You cannot change other participants');
+      if (role === ROLES.PLAYER && !moderator && this.settings.lockRoom) throw new Error('The room is locked');
       if (role === ROLES.PLAYER && !this.hasFreePlayerSlot()) throw new Error('All player slots are taken');
     }
 
@@ -300,6 +308,10 @@ export class Room extends EventEmitter {
       this.engine.auctionTurnId() === targetId;
     target.role = role;
     delete target.autoSpectator;
+    // A released host seat ends that host's wait; an offline new host starts one, or the owner could
+    // never moderate (the seat is kept for the whole game and only a moderator can release it).
+    if (role === ROLES.HOST && !target.connected) startHandover(this, targetId);
+    else clearHandover(this, targetId);
     this.promoteSpectators();
     // A reseated bidder cannot act, so let the next eligible player bid immediately.
     if (wasAuctionTurn && role !== ROLES.PLAYER) this.engine.advanceStakeAuction();
@@ -406,10 +418,10 @@ export class Room extends EventEmitter {
     };
     if (allowed(this.loadedPack.pack.logo)) return true;
     if (!current || current.type === 'secretNoQuestion') return false;
-    const hiddenPhases = ['specialSetup', 'finalWager', 'stakeAuction'];
-    const visible = !hiddenPhases.includes(this.engine.phase) &&
-      !(this.engine.phase === 'paused' && hiddenPhases.includes(this.engine.paused?.phase ?? ''));
+    // Same gate as the state view, so a file never loads before its question is on screen.
+    const visible = !this.engine.contentHidden();
     if (visible && current.question.content.some(allowed)) return true;
+    if (visible && (current.question.answerOptions ?? []).some((option) => option.content.some(allowed))) return true;
     const canSeeAnswer = viewer.role === ROLES.HOST || current.answerShown;
     return canSeeAnswer && current.question.answerContent.some(allowed);
   }
@@ -423,6 +435,8 @@ export class Room extends EventEmitter {
     const game = this.engine.getView(viewer, canModerate);
     if (game.current) {
       game.current.content = game.current.content.map((item) => ({ ...item, url: this.mediaUrl(item.url, viewer, item.type) }));
+      game.current.answerOptions = (game.current.answerOptions ?? []).map((option) => ({ ...option,
+        content: option.content.map((item) => ({ ...item, url: this.mediaUrl(item.url, viewer, item.type) })) }));
       if (game.current.answerContent) {
         game.current.answerContent = game.current.answerContent.map((item) =>
           ({ ...item, url: this.mediaUrl(item.url, viewer, item.type) }));

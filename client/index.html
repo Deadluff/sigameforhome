@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#0f1656" />
+  <meta name="theme-color" content="#1a0f2e" />
   <title>SIGame Local</title>
   <link rel="stylesheet" href="/src/styles/index.css" />
 </head>
@@ -45,11 +45,45 @@
     <section id="screen-game" class="screen hidden">
       <header class="topbar">
         <strong class="brand" aria-label="SIGame Local">SIGame</strong>
-        <span id="phase" class="topbar-round" role="status" aria-live="polite"></span>
+        <!-- The host steps between rounds right where the round is named. -->
+        <span class="round-nav">
+          <button data-act="game:prevRound" id="btn-prev-round" type="button" class="quiet round-arrow icon-only hidden" data-icon="prev" aria-label="Previous round" title="Previous round"></button>
+          <span id="phase" class="topbar-round" role="status" aria-live="polite"></span>
+          <button data-act="game:nextRound" id="btn-next-round" type="button" class="quiet round-arrow icon-only hidden" data-icon="next" aria-label="Next round" title="Next round"></button>
+          <!-- Pause and stop share the host pill, so the host bar only appears when a step needs it. -->
+          <span id="host-tools" class="host-tools hidden">
+            <button data-act="game:pause" id="btn-pause" type="button" class="quiet icon-only" data-icon="pause" title="Pause"><span class="label">Pause</span></button>
+            <button data-act="game:resume" id="btn-resume" type="button" class="primary" data-icon="play" title="Resume">Resume</button>
+            <button id="btn-settings" type="button" class="quiet icon-only" data-icon="sliders" title="Game settings" aria-controls="manage"><span class="label">Game settings</span></button>
+            <button data-act="game:stop" id="btn-stop" type="button" class="quiet icon-only" data-icon="stop" title="Stop game"><span class="label">Stop game</span></button>
+          </span>
+        </span>
+        <!-- Phones fold the round arrows and the host pill into one menu (built by renderTopbar). -->
+        <details id="host-menu" class="host-menu hidden">
+          <summary class="button-like" data-icon="sliders">Host</summary>
+          <div id="host-menu-panel" class="host-menu-panel"></div>
+        </details>
+        <!-- Volume is per device: the TV can be loud while phones stay quiet. -->
+        <span class="volume">
+          <button id="btn-volume" type="button" class="quiet icon-only" data-icon="volume" title="Sound volume" aria-expanded="false" aria-controls="volume-pop"><span class="label">Sound volume</span></button>
+          <span id="volume-pop" class="volume-pop hidden">
+            <button id="volume-mute" type="button" class="quiet icon-only" data-icon="mute" title="Mute"><span class="label">Mute</span></button>
+            <input id="volume-range" type="range" min="0" max="100" step="5" aria-label="Sound volume" />
+            <output id="volume-value" for="volume-range"></output>
+            <!-- Only for phones on the LAN address, where the browser has no native wake lock (QOL-1). -->
+            <label id="keep-awake" class="keep-awake" hidden><input type="checkbox" id="pref-keepAwake" /> Keep screen on</label>
+          </span>
+        </span>
+        <!-- TV, projector and host screens can fill the display (QOL-4). -->
+        <button id="btn-fullscreen" type="button" class="quiet icon-only" data-icon="expand" title="Full screen" hidden><span class="label">Full screen</span></button>
+        <!-- Everyone should know who runs the game, including when nobody does yet. -->
+        <span id="host-chip" class="host-chip"></span>
         <span id="me" class="me-chip"></span>
-        <button id="btn-leave" type="button" class="quiet">Leave</button>
+        <button id="btn-leave" type="button" class="quiet" data-icon="leave" title="Leave the room"><span class="label">Leave</span></button>
       </header>
       <div id="connection-status" role="status" aria-live="polite"></div>
+      <!-- Says why the game is waiting when the host drops (audit UX-4). -->
+      <div id="host-banner" class="host-banner" role="status" aria-live="polite" hidden></div>
 
       <section id="results" class="card hidden" aria-labelledby="results-title">
         <h2 id="results-title">Final scores</h2>
@@ -57,6 +91,7 @@
         <ol id="results-list"></ol>
         <div class="results-actions">
           <p id="results-hint"></p>
+          <button id="btn-copy-results" type="button" data-icon="copy">Copy results</button>
           <button id="btn-rematch" type="button" class="primary hidden">Start a rematch</button>
         </div>
       </section>
@@ -100,8 +135,12 @@
             </details>
           </section>
 
-          <section class="card manage-col" aria-labelledby="settings-title">
-            <div class="col-head"><h3 id="settings-title">Game settings</h3></div>
+          <section id="settings-panel" class="card manage-col" aria-labelledby="settings-title">
+            <div class="col-head"><h3 id="settings-title">Game settings</h3>
+              <button id="btn-close-settings" type="button" class="quiet small icon-only hidden" data-icon="cross" title="Close settings"><span class="label">Close settings</span></button></div>
+            <!-- A per-device preference, not a room setting: single-key shortcuts must be possible to turn off. -->
+            <label class="setting-toggle"><input type="checkbox" id="pref-hostKeys" />
+              <span><strong>Keyboard shortcuts</strong><small>Space runs the highlighted step, Y marks correct, N marks wrong. Saved on this device.</small></span></label>
             <details class="lobby-details" open>
               <summary>Rules</summary>
               <div class="settings-box">
@@ -126,11 +165,16 @@
                   <span><strong>Allow appeals</strong><small>Players can vote to overturn a verdict.</small></span></label>
                 <label class="setting-toggle"><input type="checkbox" id="set-playAllQuestionsInFinalRound" />
                   <span><strong>Play every final theme</strong><small>One final question per theme.</small></span></label>
+                <label class="setting-toggle"><input type="checkbox" id="set-soundOnHostOnly" />
+                  <span><strong>Sound on host and TV only</strong><small>Phones show clips muted, so the room hears one speaker.</small></span></label>
+                <label class="setting-toggle"><input type="checkbox" id="set-lockRoom" />
+                  <span><strong>Lock the room</strong><small>New arrivals watch until you seat them.</small></span></label>
               </div>
             </details>
             <details class="lobby-details">
               <summary>Timers</summary>
               <div class="settings-grid">
+                <label class="field"><span>Pick reveal</span><span class="unit-input"><input type="number" id="set-timeForQuestionIntro" min="0" max="5" /><em>sec</em></span></label>
                 <label class="field"><span>Reading speed</span><span class="unit-input"><input type="number" id="set-readingSpeed" min="1" max="100" /><em>chars/s</em></span></label>
                 <label class="field"><span>Time to buzz</span><span class="unit-input"><input type="number" id="set-timeForThinkingOnQuestion" min="1" max="120" /><em>sec</em></span></label>
                 <label class="field"><span>Time to answer</span><span class="unit-input"><input type="number" id="set-timeForPrintingAnswer" min="1" max="300" /><em>sec</em></span></label>
@@ -146,7 +190,7 @@
                 <label class="field wide"><span>Who wins a close press</span>
                   <select id="set-buzzSyncMode">
                     <option value="server">First press the server receives</option>
-                    <option value="clientTimestamp">Earliest press on a calibrated device</option>
+                    <option value="clientTimestamp">Earliest press on a calibrated device (trusts player clocks)</option>
                   </select>
                   <small id="set-buzzSyncMode-desc"></small>
                 </label>
@@ -184,14 +228,18 @@
               <span>Join from a phone on the same Wi‑Fi</span>
               <div class="row">
                 <code id="invite-url">…</code>
-                <button id="btn-copy-invite" type="button">Copy link</button>
-                <a id="tv-link" class="button-link" href="/?tv" target="_blank" rel="noopener">TV view</a>
+                <!-- Shown only when the server has several network addresses (UX-6). -->
+                <select id="invite-address" aria-label="Network address for the join link" hidden></select>
+                <button id="btn-copy-invite" type="button" data-icon="copy">Copy link</button>
+                <a id="tv-link" class="button-link" href="/?tv" target="_blank" rel="noopener" data-icon="tv">TV view</a>
               </div>
+              <img id="invite-qr" class="invite-qr hidden" alt="QR code that opens the join link" width="168" height="168" />
             </div>
           </div>
           <div id="board" class="board"></div>
+          <!-- Round entrance: the round's name swells in over the table, then the board lights up. -->
+          <div id="round-splash" class="round-splash" aria-hidden="true"></div>
           <div id="question" class="question-card hidden"></div>
-          <div id="host-answer" class="hidden" aria-live="off"></div>
         </div>
       </div>
 
@@ -206,14 +254,6 @@
             <button type="submit" class="primary">Submit answer</button>
           </form>
         </section>
-        <form id="special-setup" class="card hidden">
-          <strong>Special question setup</strong>
-          <div class="row">
-            <label class="field"><span>Answering player</span><select id="special-player" required></select></label>
-            <label class="field"><span>Value</span><input id="special-price" type="number" required /></label>
-            <button type="submit" class="primary">Show question</button>
-          </div>
-        </form>
         <section id="stake-auction" class="card hidden" aria-labelledby="stake-auction-title">
           <h3 id="stake-auction-title">Question auction</h3>
           <p id="stake-auction-status" role="status" aria-live="polite"></p>
@@ -243,44 +283,45 @@
           <p id="appeal-status" role="status" aria-live="polite"></p>
           <div id="appeal-judgments"></div>
           <div id="appeal-vote-actions" class="row hidden">
-            <button id="appeal-support" type="button" class="ok">Support appeal</button>
-            <button id="appeal-oppose" type="button" class="bad">Keep verdict</button>
+            <button id="appeal-support" type="button" class="ok" data-icon="check">Support appeal</button>
+            <button id="appeal-oppose" type="button" class="bad" data-icon="cross">Keep verdict</button>
           </div>
           <button id="appeal-close" type="button" class="hidden">Close vote</button>
         </section>
         <form id="final-wager" class="card hidden">
-          <label class="field"><span>Your final wager</span><input id="final-amount" type="number" min="0" required /></label>
+          <label class="field"><span id="final-amount-label" aria-live="polite">Your final wager</span><input id="final-amount" type="number" inputmode="numeric" min="0" required /></label>
           <button type="submit" class="primary">Save wager</button>
-          <span id="final-wager-status" class="hint"></span>
+          <button id="final-all-in" type="button">All in</button>
         </form>
-        <div id="final-host" class="card hidden">
-          <p id="final-host-status" role="status"></p>
-          <button id="btn-open-final" type="button" class="primary">Show final question</button>
-          <button id="btn-close-final" type="button">End answer time</button>
-          <div id="final-judge-row" class="row">
-            <label class="sr-only" for="final-player">Player to judge</label><select id="final-player"></select>
-            <button id="btn-final-correct" type="button" class="ok">Correct</button>
-            <button id="btn-final-wrong" type="button" class="bad">Wrong</button>
-          </div>
-        </div>
+        <form id="final-answer" class="card hidden">
+          <label for="final-answer-input">Your final answer</label>
+          <textarea id="final-answer-input" rows="2" maxlength="350" required></textarea>
+          <button type="submit" class="primary">Submit answer</button>
+          <span id="final-answer-status" class="hint" role="status"></span>
+        </form>
 
         <div id="host-controls" class="hidden" role="toolbar" aria-label="Host controls">
-          <button data-act="judge-ok" type="button" class="ok">Correct</button>
-          <button data-act="judge-bad" type="button" class="bad">Wrong</button>
-          <button data-act="game:openBuzzer" id="btn-open-buzzer" type="button" class="primary">Open buzzer now</button>
-          <button data-act="game:reveal" type="button">Show answer</button>
-          <button data-act="game:next" type="button" class="primary">Next</button>
-          <button id="btn-undo-judgment" type="button" class="quiet hidden">Undo verdict</button>
-          <span class="controls-spacer"></span>
-          <button data-act="game:pause" id="btn-pause" type="button" class="quiet">Pause</button>
-          <button data-act="game:resume" id="btn-resume" type="button" class="primary">Resume</button>
-          <details class="game-menu"><summary>More</summary>
-            <div class="game-menu-panel">
-              <button data-act="game:prevRound" type="button">Previous round</button>
-              <button data-act="game:nextRound" type="button">Next round</button>
-              <button data-act="game:stop" type="button" class="bad">Stop game</button>
-            </div>
-          </details>
+          <!-- Verdicts are neutral; their colour lives in the icon and edge, so only one button on the bar is filled. -->
+          <button data-act="judge-ok" type="button" class="verdict verdict-ok" data-icon="check" title="Correct (Y)">Correct</button>
+          <button data-act="judge-half" type="button" class="reward" title="Correct for half the value">½</button>
+          <button data-act="judge-double" type="button" class="reward" title="Correct for double the value">×2</button>
+          <button data-act="judge-bad" type="button" class="verdict verdict-bad" data-icon="cross" title="Wrong (N)">Wrong</button>
+          <button data-act="game:openBuzzer" id="btn-open-buzzer" type="button" data-icon="zap">Open buzzer now</button>
+          <button data-act="game:reveal" type="button" class="quiet" data-icon="eye">Show answer</button>
+          <button data-act="game:next" type="button" data-icon="next">Next</button>
+          <button id="btn-undo-judgment" type="button" class="quiet hidden" data-icon="undo">Undo verdict</button>
+          <!-- Step-specific host controls share this one bar instead of stacking extra panels. -->
+          <form id="special-setup" class="bar-group hidden">
+            <strong id="special-setup-title">Special question</strong>
+            <label class="field"><span>Answering player</span><select id="special-player" required></select></label>
+            <label class="field"><span>Value</span><input id="special-price" type="number" inputmode="numeric" required /></label>
+            <button type="submit" class="primary">Show question</button>
+          </form>
+          <div id="final-host" class="bar-group hidden">
+            <span id="final-host-status" role="status"></span>
+            <button id="btn-open-final" type="button" class="primary">Show final question</button>
+            <button id="btn-close-final" type="button">End answer time</button>
+          </div>
         </div>
 
         <button id="buzzer" type="button" class="buzzer hidden">
@@ -290,7 +331,23 @@
       </div>
     </section>
   </main>
+  <!-- Outside the screens so it also shows on the join screen when the server is unreachable. -->
+  <div id="connection-notice" class="connection-notice" role="alert" hidden>
+    <span id="connection-notice-text"></span>
+    <button id="connection-reclaim" type="button" class="small" hidden>Use here</button>
+  </div>
   <div id="toasts" class="toasts" aria-live="assertive"></div>
+  <!-- One in-app confirmation for the whole client (see confirmDialog.ts); the browser's confirm() is not used. -->
+  <dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-body">
+    <form method="dialog">
+      <h2 id="confirm-title"></h2>
+      <p id="confirm-body"></p>
+      <div class="confirm-actions">
+        <button id="confirm-cancel" value="cancel" class="quiet">Cancel</button>
+        <button id="confirm-ok" value="ok" class="primary">OK</button>
+      </div>
+    </form>
+  </dialog>
 
   <script type="module" src="/src/app.ts"></script>
 </body>

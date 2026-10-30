@@ -102,6 +102,8 @@ async function loadPackOnce(fileName: string): Promise<LoadedPack> {
     extractTo: alreadyExtracted ? undefined : cacheDir,
   });
   if (!alreadyExtracted) await fsp.writeFile(path.join(cacheDir, MARKER), new Date().toISOString());
+  // The marker's mtime records the last use, so startup pruning keeps packs played recently.
+  else await fsp.utimes(path.join(cacheDir, MARKER), new Date(), new Date()).catch(() => {});
   const htmlAssets = await collectHtmlAssets(pack, cacheDir, packId);
 
   backgroundTranscodePackMedia(cacheDir).catch((err: Error) => {
@@ -119,9 +121,21 @@ export function loadPack(fileName: string): Promise<LoadedPack> {
   return load;
 }
 
-export async function pruneCache(keepIds: string[] = []): Promise<void> {
+/**
+ * Removes extracted pack caches except `keepIds`. With `maxAgeMs`, only caches not used for that
+ * long go (audit CONN-8: extracted media used to pile up without limit).
+ */
+export async function pruneCache(keepIds: string[] = [], maxAgeMs?: number): Promise<void> {
   if (!(await pathExists(config.cacheDir))) return;
+  const now = Date.now();
   for (const dir of await fsp.readdir(config.cacheDir)) {
-    if (!keepIds.includes(dir)) await fsp.rm(path.join(config.cacheDir, dir), { recursive: true, force: true });
+    if (keepIds.includes(dir)) continue;
+    const full = path.join(config.cacheDir, dir);
+    if (maxAgeMs !== undefined) {
+      // Age pruning only touches folders this app extracted: CACHE_DIR may point somewhere shared.
+      const used = await fsp.stat(path.join(full, MARKER)).catch(() => null);
+      if (!used || now - used.mtimeMs < maxAgeMs) continue;
+    }
+    await fsp.rm(full, { recursive: true, force: true });
   }
 }

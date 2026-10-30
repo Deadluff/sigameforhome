@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { supervise } from './restart-policy.cjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const modules = path.join(root, 'node_modules');
@@ -68,9 +69,5 @@ if (!fs.readdirSync(packsDir).some((name) => name.toLowerCase().endsWith('.siq')
     process.exit(sample.status || 1);
   }
 }
-const server = spawnSync(process.execPath, ['--import', 'tsx', path.join(root, 'server', 'index.ts')], {
-  cwd: root,
-  stdio: 'inherit',
-});
-if (server.error) console.error(server.error);
-process.exit(server.status ?? 1);
+// One crash should not end the game night: restart it unless the stop was deliberate (audit CONN-1).
+supervise({ command: process.execPath, args: ['--import', 'tsx', path.join(root, 'server', 'index.ts')], cwd: root });

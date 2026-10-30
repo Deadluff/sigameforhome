@@ -32,6 +32,8 @@ export interface RoomState {
     ignoreWrong: boolean;
     playAllQuestionsInFinalRound: boolean;
     useApellations: boolean;
+    soundOnHostOnly: boolean;
+    lockRoom: boolean;
     timeForBlockingButton: number;
     readingSpeed: number;
     partialText: boolean;
@@ -43,12 +45,14 @@ export interface RoomState {
     timeForFinalThinking: number;
     timeOfRound: number;
     timeForMediaDelay: number;
+    timeForQuestionIntro: number;
     buzzSyncMode: 'server' | 'clientTimestamp';
     buzzSyncWindowMs: number;
     maxPlayers: number;
     [key: string]: string | number | boolean;
   };
   pack: {
+    file: string;
     name: string;
     stats: { questions: number };
     rounds: { name: string }[];
@@ -78,6 +82,12 @@ export interface RoomState {
       answerContent: ContentItem[] | null;
       comments: string | null;
       sources: string[] | null;
+      answerType: 'text' | 'select' | 'point';
+      answerOptions: { label: string; content: ContentItem[] }[];
+      answerDeviation: number | null;
+      showmanComments: string | null;
+      selectionMode: string | null;
+      picks: { playerId: string; value: string; correct: boolean }[];
     } | null;
     buzzer: {
       winnerId: string | null;
@@ -108,6 +118,10 @@ export interface RoomState {
       yourWager: number | null;
       wagers: Record<string, number> | null;
       judged: string[];
+      eligibleIds: string[];
+      answeredIds: string[];
+      yourAnswer: string | null;
+      answers: Record<string, string> | null;
     } | null;
     appeals: {
       judgments: { id: number; playerId: string; correct: boolean; delta: number; appealed: boolean; voided: boolean }[];
@@ -127,6 +141,7 @@ export interface PackListItem {
   file: string;
   name: string;
   rounds?: number | null;
+  outline?: { name: string; themes: string[] }[];
   size: number;
   error?: string;
 }
@@ -149,8 +164,9 @@ export interface CommandPayloads {
   'game:undoJudgment': { presentationId: string; judgmentId: number };
   'game:answer': { answer: string };
   'participant:kick': { targetId: string };
+  'participant:rename': { targetId: string; name: string };
   'role:choose': { role: 'host' | 'player' };
-  'role:set': { targetId: string; role: 'host' | 'spectator' };
+  'role:set': { targetId: string; role: 'host' | 'player' | 'spectator' };
   'score:adjust': { targetId: string; delta: number };
   'packs:load': { file: string };
   'settings:update': Partial<RoomState['settings']>;
@@ -159,8 +175,9 @@ export interface CommandPayloads {
   'game:removeFinalTheme': { themeIndex: number };
   'game:configureSpecial': { playerId: string; price: number };
   'game:finalWager': { amount: number };
+  'game:finalAnswer': { answer: string };
   'game:judgeFinal': { playerId: string; correct: boolean };
-  'game:judge': { correct: boolean };
+  'game:judge': { correct: boolean; factor?: number };
   'game:stakeBid': { amount: number; allIn: boolean };
   'game:forAllAnswer': { answer: string };
   'game:judgeForAll': { playerId: string; correct: boolean };
@@ -174,7 +191,8 @@ export type CommandEvent = NoPayloadCommand | keyof CommandPayloads;
 // Player-specific fields mirror GameEngine.emitEvent payloads; the client uses them for podium replics.
 export type GameEvent =
   | { type: 'answerJudged'; correct: boolean; playerId?: string | null; delta?: number }
-  | { type: 'buzzAccepted' | 'falseStart' | 'stakePass'; playerId: string }
+  | { type: 'buzzAccepted'; playerId: string; assigned?: boolean }
+  | { type: 'falseStart' | 'stakePass'; playerId: string }
   | { type: 'stakeBid'; playerId: string; amount: number; allIn: boolean }
   | { type: 'stakeWon'; playerId: string; amount: number }
   | { type: 'giftAwarded'; playerId: string; price: number }

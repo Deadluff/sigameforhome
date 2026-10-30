@@ -24,6 +24,11 @@ export const PHASES = Object.freeze({
   FINAL_QUESTION: 'finalQuestion',
   FINAL_JUDGE: 'finalJudge',
   PAUSED: 'paused',
+  /**
+   * The chosen cell is lit on the board before the question starts. A phase of its own (not a timer
+   * inside READING) so every action that accepts READING refuses it by default and no content leaks.
+   */
+  INTRO: 'intro',
   /** Question content is being shown/read. Pressing now = false start. */
   READING: 'reading',
   /** Buzzers are live. */

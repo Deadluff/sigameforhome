@@ -76,7 +76,7 @@ r = await host.emit('packs:load', { file: demo.file });
 check(r.ok, `pack loaded: ${demo.name}`);
 
 // The demo pack contains special and final questions, so use Simple mode for the opening checks.
-r = await host.emit('settings:update', { gameMode: 'simple' });
+r = await host.emit('settings:update', { gameMode: 'simple', timeForQuestionIntro: 0 });
 check(r.ok, 'host selected Simple mode for the demo pack');
 
 r = await host.emit('game:start');
@@ -183,7 +183,7 @@ check(
 // The classic stake question keeps its content private until the auction awards it.
 r = await host.emit('game:stop');
 check(r.ok, 'host reset the game for a classic-mode auction');
-r = await host.emit('settings:update', { gameMode: 'classic', falseStart: true });
+r = await host.emit('settings:update', { gameMode: 'classic', timeForQuestionIntro: 0, falseStart: true });
 check(r.ok, 'host selected Classic mode');
 r = await host.emit('game:start');
 check(r.ok, 'Classic game started');

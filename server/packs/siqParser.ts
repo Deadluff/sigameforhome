@@ -62,6 +62,16 @@ export interface Info {
   authors: string[];
   sources: string[];
   comments: string;
+  /** Host-only notes (v5 `showmanComments`), e.g. where to look on a picture. */
+  showmanComments: string;
+}
+
+/** How the answerer responds: a spoken/typed answer, an A–F option, or a click on the picture. */
+export type AnswerType = 'text' | 'select' | 'point';
+
+export interface AnswerOption {
+  label: string;
+  content: ContentItem[];
 }
 
 export interface Question {
@@ -74,6 +84,12 @@ export interface Question {
   right: string[];
   wrong: string[];
   info: Info;
+  answerType: AnswerType;
+  answerOptions: AnswerOption[];
+  /** Point questions: allowed click distance, as a fraction of the picture height. */
+  answerDeviation: number | null;
+  /** Per-question answer time in seconds (v5 `answerDuration`). */
+  answerDuration: number | null;
 }
 
 export interface Theme {
@@ -114,9 +130,16 @@ export interface Package {
   stats: PackageStats;
 }
 
+export interface PackOutlineRound {
+  name: string;
+  themes: string[];
+}
+
 export interface PackHeader {
   name: string;
   rounds: number | null;
+  /** Round and theme names for the host's pack preview (audit QOL-7); capped to stay small. */
+  outline?: PackOutlineRound[];
   difficulty?: number;
   version?: string;
   error?: string;
@@ -199,6 +222,7 @@ function parseInfo(infoNode: XmlNode | undefined): Info {
     authors: asArray(infoNode?.authors?.author).map(text).filter(Boolean),
     sources: asArray(infoNode?.sources?.source).map(text).filter(Boolean),
     comments: text(infoNode?.comments),
+    showmanComments: text(infoNode?.showmanComments),
   };
 }
 
@@ -452,7 +476,11 @@ function parseModernQuestion(q: XmlNode, resolver: MediaResolver) {
     else if (kind === 'numberSet') {
       typeParams[name] = parseNumberSet(p.numberSet ?? {});
     } else if (kind === 'content') typeParams[name] = parseContentParam(p, resolver);
-    else typeParams[name] = text(p);
+    // A group (answerOptions) nests one content param per option letter.
+    else if (kind === 'group') {
+      typeParams[name] = asArray(p.param).map((option) =>
+        ({ label: attr(option, 'name'), content: parseContentParam(option, resolver) }));
+    } else typeParams[name] = text(p);
   }
 
   const rawType = attr(q, 'type', 'simple') as QuestionType;
@@ -464,6 +492,25 @@ function parseModernQuestion(q: XmlNode, resolver: MediaResolver) {
 /* Package normalisation                                                     */
 /* ------------------------------------------------------------------------- */
 
+/** Lifts v5 answer params out of typeParams so the engine and client get typed fields. */
+function parseAnswerSpec(typeParams: QuestionTypeParams) {
+  const raw = String(typeParams.answerType ?? '').toLowerCase();
+  const options = Array.isArray(typeParams.answerOptions)
+    ? (typeParams.answerOptions as AnswerOption[]).filter((option) => option.label) : [];
+  // An option question without options cannot be answered by tapping, so it falls back to text.
+  const answerType: AnswerType = raw === 'point' ? 'point' : raw === 'select' && options.length ? 'select' : 'text';
+  const positive = (value: unknown) => {
+    const n = Number(value);
+    return value != null && value !== '' && Number.isFinite(n) && n > 0 ? n : null;
+  };
+  return {
+    answerType,
+    answerOptions: answerType === 'select' ? options : [],
+    answerDeviation: answerType === 'point' ? positive(typeParams.answerDeviation) ?? 0.05 : null,
+    answerDuration: positive(typeParams.answerDuration),
+  };
+}
+
 function parseQuestion(q: XmlNode, resolver: MediaResolver): Question {
   const isModern = q.params != null || q.scenario == null;
   const parsed = isModern ? parseModernQuestion(q, resolver) : parseLegacyQuestion(q, resolver);
@@ -473,6 +520,7 @@ function parseQuestion(q: XmlNode, resolver: MediaResolver): Question {
     right: asArray(q.right?.answer).map(text).filter(Boolean),
     wrong: asArray(q.wrong?.answer).map(text).filter(Boolean),
     info: parseInfo(q.info),
+    ...parseAnswerSpec(parsed.typeParams),
   };
 }
 
@@ -526,6 +574,22 @@ function findContentEntry(zip: AdmZip): IZipEntry | null {
   return zip.getEntries().find((e) => !e.isDirectory && e.entryName.toLowerCase() === 'content.xml') ?? null;
 }
 
+/**
+ * Reads an entry without trusting a declared size of 0 (audit SEC-1).
+ * Our size limits check only the declared size. adm-zip <=0.6.0 capped inflation only when that
+ * size was above 0, so a crafted 0-byte entry could inflate to ~4 GB. The pinned 0.6.1 throws on
+ * such an entry instead, which would still fail the whole pack. Skipping the read keeps the pack
+ * playable and stays safe if the library version drifts. A genuinely empty file loses nothing.
+ */
+function readEntry(entry: IZipEntry): Buffer {
+  return entry.header.size === 0 ? Buffer.alloc(0) : entry.getData();
+}
+
+function readContentXml(entry: IZipEntry): string {
+  if (entry.header.size === 0) throw new Error('content.xml is empty');
+  return readEntry(entry).toString('utf8');
+}
+
 export function isSiqArchive(filePath: string): boolean {
   try {
     return findContentEntry(new AdmZip(filePath)) != null;
@@ -542,13 +606,17 @@ export function readPackHeader(filePath: string): PackHeader {
   if (!entry) throw new Error('content.xml not found');
   // Listing is allowed before loading, so it needs the same XML bound as parseSiq.
   if (entry.header.size > MAX_CONTENT_XML_BYTES) throw new Error('Pack content.xml exceeds 10 MB');
-  const root = xmlParser.parse(entry.getData().toString('utf8'));
+  const root = xmlParser.parse(readContentXml(entry));
   const pkg = root.package;
   if (!pkg) throw new Error('content.xml has no <package> root element');
   validateQuestionNumbers(pkg);
   return {
     name: attr(pkg, 'name', path.basename(filePath, '.siq')),
     rounds: asArray(pkg.rounds?.round).length,
+    outline: asArray(pkg.rounds?.round).slice(0, 20).map((round, index) => ({
+      name: attr(round, 'name', `Round ${index + 1}`).slice(0, 80),
+      themes: asArray(round?.themes?.theme).slice(0, 30).map((theme) => attr(theme, 'name', '').slice(0, 80)),
+    })),
     difficulty: num(attr(pkg, 'difficulty'), 5),
     version: attr(pkg, 'version', '4'),
   };
@@ -562,7 +630,7 @@ async function extractMedia(zip: AdmZip, destDir: string): Promise<void> {
     if (segments.length < 2 || !Object.values(MEDIA_FOLDERS).includes(segments[0].toLowerCase())) continue;
     const target = safeJoin(destDir, ...segments);
     await ensureDir(path.dirname(target));
-    await fsp.writeFile(target, e.getData());
+    await fsp.writeFile(target, readEntry(e));
   }
 }
 
@@ -583,7 +651,7 @@ export async function parseSiq(
   if (!contentEntry) throw new Error(`"${path.basename(filePath)}" is not a valid .siq (content.xml missing)`);
   if (contentEntry.header.size > MAX_CONTENT_XML_BYTES) throw new Error('Pack content.xml exceeds 10 MB');
 
-  const xml = contentEntry.getData().toString('utf8').replace(/^\uFEFF/, '');
+  const xml = readContentXml(contentEntry).replace(/^\uFEFF/, '');
   const resolver = createMediaResolver(zip.getEntries(), mediaBaseUrl);
   const pack = normalizePackage(xmlParser.parse(xml), resolver);
 

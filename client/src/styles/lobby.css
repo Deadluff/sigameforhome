@@ -1,5 +1,13 @@
 /* Lobby: readiness bar, pack picker, settings, invite. */
 #manage { display: flex; flex-direction: column; gap: var(--gap); }
+/* Mid-game the settings slide in as a drawer over the table; only the settings column shows. */
+#manage.in-game {
+  position: fixed; z-index: 30; top: 0; right: 0; bottom: 0; width: min(460px, 100vw); overflow-y: auto;
+  padding: 12px; background: var(--studio); border-left: 1px solid var(--rule); box-shadow: -18px 0 44px rgba(0, 0, 0, .55);
+}
+#manage.in-game .start-bar, #manage.in-game .manage-col:not(#settings-panel) { display: none; }
+#manage.in-game .manage-grid { display: block; }
+#settings-panel .col-head { display: flex; align-items: center; justify-content: space-between; }
 .start-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; position: sticky; top: 8px; z-index: 3; }
 .checklist { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 0; padding: 0; list-style: none; flex: 1; }
 .checklist li { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; color: var(--mist); }
@@ -50,6 +58,8 @@
 .setting-toggle { display: flex; align-items: flex-start; gap: 12px; padding: 10px 0; cursor: pointer; }
 .setting-toggle strong { display: block; font-size: var(--t-s); }
 .setting-toggle small { display: block; color: var(--mist); font-weight: 600; }
+/* A brief mark after the room accepts a change; settings otherwise save without any sign. */
+.field.saved > span:first-child::after, .setting-toggle.saved strong::after { content: " · Saved"; color: var(--ok-hover); }
 
 
 @media (max-width: 860px) {
@@ -71,7 +81,7 @@
 #results-list li::before { content: counter(rank); color: var(--mist); font: 700 var(--t-s) var(--font-display); }
 #results-list .name { font-weight: 800; overflow-wrap: anywhere; }
 #results-list .pts { color: var(--lamp); font: 600 var(--t-l) var(--font-display); font-variant-numeric: tabular-nums; }
-#results-list li.winner { background: var(--lamp); color: #1d1400; }
-#results-list li.winner::before, #results-list li.winner .pts { color: #1d1400; }
+#results-list li.winner { background: var(--lamp); color: var(--on-lamp); }
+#results-list li.winner::before, #results-list li.winner .pts { color: var(--on-lamp); }
 .results-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
 #results-hint { color: var(--mist); }

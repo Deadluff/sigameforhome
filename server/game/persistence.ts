@@ -6,6 +6,8 @@ import { config } from '../config.ts';
 import { loadPack } from '../packs/packManager.ts';
 import { PHASES, type Phase } from './constants.ts';
 import { defaultSettings, type GameSettings } from './settings.ts';
+import { armGrace, graceModeForSavedPhase } from './seatGrace.ts';
+import { startHandover } from './moderationHandover.ts';
 import type { CurrentQuestionState, Judgment } from './GameEngine.ts';
 import type { Participant, Room } from './Room.ts';
 
@@ -69,7 +71,7 @@ export async function restoreRoom(room: Room, stateFile = file): Promise<void> {
       const restoredPhase: Phase = game.phase === PHASES.PAUSED ? game.paused?.phase ?? PHASES.BOARD : game.phase;
       // Replay an interrupted question from the board; scores and prior questions remain.
       if (([PHASES.SPECIAL_SETUP, PHASES.STAKE_AUCTION, PHASES.FOR_ALL_ANSWERING, PHASES.FOR_ALL_JUDGE,
-        PHASES.APPEAL_VOTE,
+        PHASES.APPEAL_VOTE, PHASES.INTRO,
         PHASES.READING, PHASES.BUZZER_OPEN, PHASES.ANSWERING,
         PHASES.FINAL_WAGER, PHASES.FINAL_QUESTION, PHASES.FINAL_JUDGE] as Phase[]).includes(restoredPhase) && game.current) {
         room.engine.played.delete(`${game.roundIndex}:${game.current.themeIndex}:${game.current.questionIndex}`);
@@ -105,8 +107,16 @@ export async function restoreRoom(room: Room, stateFile = file): Promise<void> {
         room.engine.scheduleRoundEnd();
       }
     }
+    // Everyone restored is offline, so give each the normal reconnect window (audit CONN-4).
+    const mode = graceModeForSavedPhase(game?.phase);
+    for (const pid of room.participants.keys()) armGrace(room, pid, mode);
+    // The restored host is offline too, so the owner waits the same handover time (audit UX-7).
+    const host = room.host();
+    if (host) startHandover(room, host.id);
   } catch (err) {
     console.warn(`[room] State not restored: ${(err as Error).message}`);
+    for (const timer of room.removalTimers.values()) clearTimeout(timer);
+    room.removalTimers.clear();
     room.participants.clear(); room.tokens.clear(); room.ownerId = null; room.loadedPack = null;
     room.engine.reset();
   }

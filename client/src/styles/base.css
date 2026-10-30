@@ -1,5 +1,6 @@
 * { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; }
+/* Fast taps on a phone (buzz, pick, pin) must not trigger double-tap zoom; pinch zoom still works. */
+html { -webkit-text-size-adjust: 100%; touch-action: manipulation; }
 body {
   margin: 0; min-height: 100vh; min-height: 100dvh;
   background: var(--studio); color: var(--paper);
@@ -9,7 +10,7 @@ body {
 /* A faint studio light from above; the board is the brightest thing on screen. */
 body::before {
   content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
-  background: radial-gradient(120% 70% at 50% -10%, #23309a 0, transparent 60%);
+  background: radial-gradient(120% 70% at 50% -10%, var(--studio-light) 0, transparent 60%);
 }
 h1, h2, h3 { margin: 0; line-height: 1.2; }
 h2 { font-size: var(--t-l); font-weight: 800; }
@@ -28,15 +29,15 @@ button, .button-link {
   font: 700 var(--t-s)/1.2 var(--font-ui); text-decoration: none; cursor: pointer;
   transition: background-color .15s, border-color .15s, transform .08s;
 }
-button:not(:disabled):hover, .button-link:hover { background: #2c3aa8; }
+button:not(:disabled):hover, .button-link:hover { background: var(--set-hover); }
 button:not(:disabled):active { transform: translateY(1px); }
 button:disabled { opacity: .4; cursor: default; }
-button.primary { background: var(--lamp); border-color: transparent; color: #1d1400; font-weight: 800; }
+button.primary { background: var(--lamp); border-color: transparent; color: var(--on-lamp); font-weight: 800; }
 button.primary:not(:disabled):hover { background: var(--lamp-soft); }
-button.ok { background: #1c9a5e; border-color: transparent; }
-button.ok:not(:disabled):hover { background: #22b06c; }
-button.bad { background: #c43a50; border-color: transparent; }
-button.bad:not(:disabled):hover { background: #d9475e; }
+button.ok { background: var(--ok-fill); border-color: transparent; }
+button.ok:not(:disabled):hover { background: var(--ok-hover); }
+button.bad { background: var(--bad-fill); border-color: transparent; }
+button.bad:not(:disabled):hover { background: var(--bad-hover); }
 button.quiet { background: transparent; }
 button.quiet:not(:disabled):hover { background: var(--set-raised); }
 button.small { min-height: 36px; padding: 6px 12px; font-size: var(--t-xs); }
@@ -62,12 +63,28 @@ summary { cursor: pointer; min-height: 44px; padding: 12px 0; font-weight: 800; 
 .field { display: flex; flex-direction: column; gap: 6px; min-width: 0; font-size: var(--t-xs); color: var(--mist); }
 .field > span:first-child { font-weight: 700; }
 .hint { color: var(--mist); }
-.error { color: #ffb3bd; font-weight: 700; }
+.error { color: var(--error-text); font-weight: 700; }
 .error:empty { display: none; }
+
+/* Confirmation dialog: the studio's own question panel, in place of the browser's confirm(). */
+.confirm-dialog {
+  width: min(92vw, 420px); padding: 0; border: 1px solid var(--rule-strong); border-radius: var(--r-table);
+  background: var(--set); color: var(--paper); box-shadow: 0 24px 60px rgba(0, 0, 0, .55);
+}
+.confirm-dialog[open] { animation: dialog-in .2s cubic-bezier(.2, .8, .2, 1); }
+.confirm-dialog::backdrop { background: rgb(var(--shade-rgb) / .62); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); }
+.confirm-dialog form { display: grid; gap: 10px; padding: 24px 24px 20px; border-top: 4px solid var(--lamp); }
+.confirm-dialog.danger form { border-top-color: var(--stop); }
+.confirm-dialog h2 { font-size: var(--t-l); font-weight: 800; line-height: 1.25; overflow-wrap: anywhere; }
+.confirm-dialog p { color: var(--mist); font-size: var(--t-s); line-height: 1.5; }
+.confirm-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.confirm-actions button { min-width: 112px; }
+@keyframes dialog-in { from { opacity: 0; transform: translateY(8px) scale(.97); } }
+@media (max-width: 420px) { .confirm-actions button { flex: 1 1 0; } }
 
 /* Toasts replace blocking alerts so a failed action never freezes the game screen. */
 .toasts { position: fixed; z-index: 50; left: 50%; bottom: max(16px, env(safe-area-inset-bottom)); transform: translateX(-50%); display: grid; gap: 8px; width: min(92vw, 420px); pointer-events: none; }
-.toast { padding: 12px 16px; border-radius: var(--r-control); background: #3a1430; border: 1px solid var(--stop); color: var(--paper); font-weight: 700; pointer-events: auto; animation: toast-in .2s ease-out; }
+.toast { padding: 12px 16px; border-radius: var(--r-control); background: var(--toast-bg); border: 1px solid var(--stop); color: var(--paper); font-weight: 700; pointer-events: auto; animation: toast-in .2s ease-out; }
 .toast.info { background: var(--set-raised); border-color: var(--rule); }
 @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } }
 

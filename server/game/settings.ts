@@ -22,6 +22,8 @@ export interface GameSettings {
   displaySources: boolean;
   useApellations: boolean;
   gameMode: GameMode;
+  soundOnHostOnly: boolean;
+  lockRoom: boolean;
   timeForChoosingQuestion: number;
   timeForThinkingOnQuestion: number;
   timeForPrintingAnswer: number;
@@ -34,6 +36,7 @@ export interface GameSettings {
   timeForShowmanDecisions: number;
   timeForBlockingButton: number;
   timeForMediaDelay: number;
+  timeForQuestionIntro: number;
 }
 
 export interface BooleanSettingSchema {
@@ -87,7 +90,7 @@ export const SETTINGS_SCHEMA: Record<keyof GameSettings, SettingSchemaEntry> = O
   buzzSyncMode: oneOf<BuzzSyncMode>(
     'server',
     ['server', 'clientTimestamp'],
-    'Who-clicked-first sync mode (server vs client request time)',
+    'Who-clicked-first sync mode (server arrival vs client request time; client time trusts player clocks)',
   ),
   buzzSyncWindowMs: int(120, 20, 500, 'Client timestamp sync collection window (ms)'),
   buttonPressMode: oneOf<ButtonPressMode>('firstWins', ['firstWins', 'randomWithinInterval'], 'Button press resolution'),
@@ -96,6 +99,10 @@ export const SETTINGS_SCHEMA: Record<keyof GameSettings, SettingSchemaEntry> = O
   displaySources: bool(false, 'Show question sources'),
   useApellations: bool(true, 'Allow appeals'),
   gameMode: oneOf<GameMode>('classic', ['classic', 'simple'], 'Game mode'),
+  // Phones in one room play clips out of sync; the host or TV screen can be the only speaker.
+  soundOnHostOnly: bool(false, 'Play question sound only on the host and TV screens'),
+  // Newcomers join as spectators and wait for the host to seat them.
+  lockRoom: bool(false, 'Lock the room: new arrivals watch until the host seats them'),
 
   /* ---- Timers in seconds (TimeSettings) ---- */
   timeForChoosingQuestion: int(30, 1, 300, 'Time to choose a question'),
@@ -110,6 +117,7 @@ export const SETTINGS_SCHEMA: Record<keyof GameSettings, SettingSchemaEntry> = O
   timeForShowmanDecisions: int(30, 1, 300, 'Host decision time'),
   timeForBlockingButton: int(3, 0, 10, 'Button block after false start'),
   timeForMediaDelay: int(0, 0, 10, 'Delay before media playback'),
+  timeForQuestionIntro: int(2, 0, 5, 'Pick reveal: seconds the chosen cell stays lit before the question'),
 });
 
 export function defaultSettings(): GameSettings {

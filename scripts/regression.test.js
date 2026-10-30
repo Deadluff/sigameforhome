@@ -17,6 +17,7 @@ const [{ Room }, { listPacks, loadPack }, { persistRoom, restoreRoom }] = await 
   import('../server/packs/packManager.ts'),
   import('../server/game/persistence.ts'),
 ]);
+const { markHandoverReady } = await import('../server/game/moderationHandover.ts');
 const file = (await listPacks()).find((pack) => pack.name.includes('v5')).file;
 const loaded = await loadPack(file);
 
@@ -36,7 +37,7 @@ function createRoom(t, gameMode = 'simple', modifyPack = () => {}) {
   const pack = structuredClone(loaded.pack);
   modifyPack(pack);
   room.setPack({ ...loaded, pack });
-  room.updateSettings(host.id, { gameMode });
+  room.updateSettings(host.id, { gameMode, timeForQuestionIntro: 0 });
   room.engine.start();
   // Engine timers keep Node alive after an assertion unless explicitly cleared.
   t.after(() => {
@@ -78,6 +79,9 @@ test('connected player recovers moderation after host grace expires', (t) => {
 
   assert.equal(room.ownerId, player.id);
   assert.equal(room.participants.get(host.id).role, 'host');
+  // UX-7: the owner-player only takes over after the handover wait.
+  assert.equal(room.canModerate(player.id), false);
+  markHandoverReady(room, host.id);
   assert.equal(room.canModerate(player.id), true);
   room.setRole(player.id, host.id, 'spectator');
   room.setRole(player.id, spectator.id, 'host');
@@ -260,10 +264,10 @@ test('final wagers stay private and scoring follows each wager', (t) => {
   const { room, host, player } = createRoom(t, 'classic');
   room.adjustScore(host.id, player.id, 500);
   room.engine.enterRound(2);
-  room.engine.selectQuestion(host.id, true, 0, 0);
+  // A single final theme skips the board and opens wagers directly.
   assert.equal(room.engine.phase, 'finalWager');
   assert.deepEqual(room.snapshotFor(player.id).game.current.content, []);
-  assert.throws(() => room.engine.openFinal(), /every connected player/);
+  assert.throws(() => room.engine.openFinal(), /every finalist/);
 
   room.engine.setFinalWager(player.id, 300);
   assert.equal(room.snapshotFor(player.id).game.final.yourWager, 300);
@@ -294,7 +298,16 @@ test('restart preserves seats and replays an interrupted question', async (t) =>
   assert.equal(restored.participants.get(player.id).connected, false);
   assert.equal(restored.participants.get(host.id).role, 'host');
   restored.attach(player.id, 'reconnected-player');
+  // CONN-4: the restored owner is in reconnect grace, so reconnecting first must not take ownership.
+  assert.equal(restored.ownerId, host.id);
+  assert.ok(restored.removalTimers.has(host.id));
+  // Once the owner's grace runs out, the connected player inherits ownership and moderation.
+  clearTimeout(restored.removalTimers.get(host.id));
+  restored.expire(host.id);
   assert.equal(restored.ownerId, player.id);
+  // UX-7: the restored host is offline, so moderation waits for the handover too.
+  assert.equal(restored.canModerate(player.id), false);
+  markHandoverReady(restored, host.id);
   assert.equal(restored.canModerate(player.id), true);
 });
 
@@ -358,6 +371,16 @@ test('restart preserves seats and scores when the selected pack is missing', asy
   assert.equal(restored.participants.get(player.id).score, 300);
   assert.equal(restored.participants.get(host.id).role, 'host');
   restored.attach(player.id, 'reconnected-player');
+  // CONN-4: ownership waits for the restored owner's grace, as in the replay test above.
+  assert.equal(restored.ownerId, host.id);
+  assert.ok(restored.removalTimers.has(host.id));
+  clearTimeout(restored.removalTimers.get(host.id));
+  restored.expire(host.id);
+  // The saved game was not in the lobby, so the seat survives the lobby fallback ('keep' mode).
+  assert.equal(restored.participants.get(host.id).role, 'host');
+  assert.equal(restored.participants.get(player.id).score, 300);
+  assert.equal(restored.ownerId, player.id);
+  markHandoverReady(restored, host.id);
   assert.equal(restored.canModerate(player.id), true);
 });
 
@@ -420,7 +443,7 @@ test('restart replays an interrupted for-all answer session from the board', asy
   assert.equal(restored.engine.isAvailable(0, 0), true);
 });
 
-test('wrong answers do not reveal the answer to players, while correct answers schedule auto-next', (t) => {
+test('when everyone is wrong the answer is shown and the board returns on its own', (t) => {
   const { room, host, player, spectator } = createRoom(t);
   room.engine.selectQuestion(host.id, true, 0, 0);
   room.engine.openBuzzer();
@@ -428,10 +451,10 @@ test('wrong answers do not reveal the answer to players, while correct answers s
   room.engine.judge(false);
 
   assert.equal(room.engine.phase, 'reveal');
-  assert.equal(room.engine.current.answerShown, false);
-  assert.equal(room.snapshotFor(player.id).game.current.right, null);
-  assert.equal(room.snapshotFor(spectator.id).game.current.right, null);
-  assert.ok(room.snapshotFor(host.id).game.current.right?.length);
+  assert.equal(room.engine.current.answerShown, true);
+  assert.ok(room.snapshotFor(player.id).game.current.right?.length);
+  assert.ok(room.snapshotFor(spectator.id).game.current.right?.length);
+  assert.equal(room.engine.timer?.name, 'reveal');
 
   room.engine.next();
   room.engine.selectQuestion(host.id, true, 0, 1);

@@ -12,30 +12,50 @@ import { config } from './config.ts';
 import { Room } from './game/Room.ts';
 import { persistRoom, restoreRoom } from './game/persistence.ts';
 import { ensureIosCompatibleMedia } from './packs/mediaTranscoder.ts';
-import { listPacks } from './packs/packManager.ts';
+import { listPacks, pruneCache } from './packs/packManager.ts';
 import { canUpload, MAX_UPLOAD_BYTES, saveUploadedPack, UploadError } from './packs/upload.ts';
+import { errorHandler, originMiddleware, securityHeaders } from './http/httpSafety.ts';
+import { pickInviteUrl } from './http/invite.ts';
 import { registerSocketHandlers } from './socket/handlers.ts';
+import { logRefusal, policyFromEnv, refusalReason } from './socket/originGuard.ts';
+import { createSocketLimits } from './socket/socketLimits.ts';
 import { ensureDir, safeJoin } from './utils/fsx.ts';
 import { getLanAddresses } from './utils/network.ts';
+import { qrSvg } from './utils/qrSvg.ts';
 
 await Promise.all([ensureDir(config.packsDir), ensureDir(config.cacheDir)]);
 
 const app = express();
 const server = http.createServer(app);
+const originPolicy = policyFromEnv();
 const io = new Server(server, {
   pingInterval: 10_000,
   pingTimeout: 8_000,
   maxHttpBufferSize: 1e6,
+  // Foreign pages and unexpected Host names cannot open a game socket (audit SEC-3).
+  allowRequest: (req, callback) => {
+    const reason = refusalReason(req.headers, originPolicy);
+    if (reason) logRefusal(req.headers, reason);
+    callback(reason, !reason);
+  },
 });
+const socketLimits = createSocketLimits();
+io.use(socketLimits.middleware);
 
 const room = new Room();
 await restoreRoom(room);
 const flushRoomState = persistRoom(room);
-registerSocketHandlers(io, room);
+// Extracted media for packs unused for 30 days is deleted; the restored pack stays (audit CONN-8).
+// Awaited before listening, so no pack load can race a folder being deleted.
+await pruneCache(room.loadedPack ? [room.loadedPack.packId] : [], 30 * 24 * 60 * 60 * 1000)
+  .catch((err: Error) => console.warn(`[packs] Cache cleanup skipped: ${err.message}`));
+registerSocketHandlers(io, room, socketLimits);
 
 /* ------------------------------------------------------------------ HTTP */
 
 app.disable('x-powered-by');
+app.use(originMiddleware(originPolicy));
+app.use(securityHeaders);
 
 app.get('/api/info', (_req: Request, res: Response) => {
   res.json({
@@ -44,13 +64,17 @@ app.get('/api/info', (_req: Request, res: Response) => {
   });
 });
 
-app.get('/api/packs', async (_req: Request, res: Response, next: NextFunction) => {
-  try {
-    res.json(await listPacks());
-  } catch (err) {
-    next(err);
-  }
+// The lobby shows this so phones can join by camera instead of typing the LAN address.
+app.get('/api/invite.svg', (req: Request, res: Response) => {
+  const fallback = getLanAddresses().map((a) => `http://${a.address}:${config.port}`)[0] ?? `http://localhost:${config.port}`;
+  // Only encode this server's own address, never an arbitrary caller-supplied link (audit SEC-9).
+  const ownHosts = [...getLanAddresses().map((a) => `${a.address}:${config.port}`), req.headers.host ?? ''];
+  const url = pickInviteUrl(req.query.url, ownHosts, fallback);
+  res.type('image/svg+xml').set('Cache-Control', 'no-store').send(qrSvg(url));
 });
+
+// No unauthenticated pack listing (audit SEC-2): the client lists packs over the socket
+// (`packs:list`), and an open GET let anyone on the LAN re-parse every broken pack on demand.
 
 /** Hosts and room owners may add a pack without exposing an unfinished archive to players. */
 app.post('/api/packs/upload', async (req, res) => {
@@ -132,21 +156,34 @@ if (fs.existsSync(config.publicDir)) {
   app.use(express.static(config.publicDir, { index: 'index.html' }));
 }
 
-app.use((err: Error & { status?: number }, _req: Request, res: Response, _next: NextFunction) => {
-  if (err.status === 404) return res.status(404).end();
-  console.error(err);
-  res.status(500).json({ error: err.message });
-});
+app.use(errorHandler);
 
 /* --------------------------------------------------------------- startup */
+
+/** The launcher never restarts on this code: a taken port stays taken until the user acts. */
+const EXIT_PORT_IN_USE = 78;
 
 server.on('error', (err: NodeJS.ErrnoException) => {
   if (err.code === 'EADDRINUSE') {
     console.error(`\n  Port ${config.port} is already in use. Close the other app or set PORT=3001 before starting again.\n`);
-  } else {
-    console.error(err);
+    process.exit(EXIT_PORT_IN_USE);
   }
+  console.error(err);
   process.exit(1);
+});
+
+/*
+ * Last-resort crash handling (audit CONN-1). A stray rejected promise is logged and the game
+ * goes on. A synchronous throw may have left state half-updated, so save what we have and exit;
+ * the launcher restarts the server and players resume from the saved room.
+ */
+process.on('unhandledRejection', (reason) => {
+  console.error('[server] Unhandled promise rejection (game continues):', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[server] Uncaught exception, saving the room and exiting:', err);
+  setTimeout(() => process.exit(1), 2000).unref();
+  flushRoomState().catch(() => {}).finally(() => process.exit(1));
 });
 
 server.listen(config.port, config.host, () => {
