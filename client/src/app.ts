@@ -4,6 +4,9 @@ import { ContentPresenter } from './contentPresenter';
 import { avatar, formatScore, questionTypeLabel, replicFor, roleLabels, sayReplic, toast, type ReplicTone } from './ui';
 import { audioCue, drawPins, drawRing, fitText, imageFrame, makePickable, optionText, optionTiles, parsePoint,
   setBackdrop, type Pin } from './stageParts';
+import { buzzerView, createPressTracker, phaseLabel } from './buzzerFeedback';
+import { createConnectionMonitor, noticeText } from './connection';
+import { hostBannerText } from './hostBanner';
 import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentItem,
   GameEvent, JoinAck, NoPayloadCommand, PackListItem, RoomState, ServerToClientEvents } from './types';
 
@@ -54,7 +57,11 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   const tvMode = new URLSearchParams(location.search).has('tv');
   const TOKEN_KEY = tvMode ? 'sigame.tv.token' : 'sigame.token';
   if (tvMode) document.body.classList.add('tv-mode');
-  const socket: Socket<ServerToClientEvents, ClientToServerEvents> = io({ transports: ['websocket', 'polling'] });
+  // tryAllTransports: fall back to polling when a network blocks WebSockets (audit CONN-7).
+  const socket: Socket<ServerToClientEvents, ClientToServerEvents> = io({ transports: ['websocket', 'polling'], tryAllTransports: true });
+  const buzzPress = createPressTracker(() => updateOrientiers());
+  // A cold-cache pack load can take minutes; 8 s reported "outcome unknown" and invited a second click (audit UX-1).
+  const slowCommandMs: Partial<Record<CommandEvent, number>> = { 'packs:load': 120_000, 'packs:list': 120_000 };
 
   let state: RoomState | null = null;
   let clockOffset = 0; // serverTime - Date.now()
@@ -219,7 +226,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       };
       const onDisconnect = () => finish({ ok: false, error: uncertainActionMessage }, true);
       socket.once('disconnect', onDisconnect);
-      timeout = setTimeout(() => finish({ ok: false, error: uncertainActionMessage }, true), 8000);
+      timeout = setTimeout(() => finish({ ok: false, error: uncertainActionMessage }, true), slowCommandMs[event] ?? 8000);
       emit(event, payload, (result) => finish(result ?? { ok: false, error: 'Request failed' }));
     });
   }
@@ -266,6 +273,16 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     $('#connection-status').textContent = actionUncertain
       ? uncertainActionMessage : 'Disconnected — reconnecting…';
   });
+  // Wake probe, "open on another tab" and "can't reach the server" (audits CONN-3, CONN-5, CONN-6).
+  const connection = createConnectionMonitor(socket, { onNotice: (notice) => {
+    $('#connection-notice').hidden = notice === 'none';
+    $('#connection-notice-text').textContent = notice === 'none' ? '' : noticeText[notice];
+    $('#connection-reclaim').hidden = notice !== 'otherTab';
+    if (notice === 'otherTab') $('#connection-status').textContent = ''; // it will not reconnect by itself
+  } });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) connection.hidden(); else void connection.visible(); });
+  window.addEventListener('pageshow', (event) => { if (event.persisted) void connection.restored(); });
+  $('#connection-reclaim').addEventListener('click', () => connection.reclaim());
 
   $('#join-form').addEventListener('submit', (e) => {
     e.preventDefault();
@@ -406,6 +423,10 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     show('screen-game');
     $('#screen-game').dataset.phase = game.phase;
     renderTopbar();
+    const hostAway = hostBannerText(state) ?? '';
+    $('#host-banner').hidden = !hostAway;
+    // Rewriting the same text in a live region would re-announce it on every snapshot.
+    if ($('#host-banner').textContent !== hostAway) $('#host-banner').textContent = hostAway;
     if (tvMode) {
       renderPlayers();
       renderResults();
@@ -1236,7 +1257,9 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   ] as const;
   let packsLoaded = false;
   let knownPacks: PackListItem[] = [];
-  let renderedPackName: string | null | undefined;
+  // Compared by file: two packs can share a name (audit UX-2).
+  let renderedPackFile: string | null | undefined;
+  let loadingPackFile: string | null = null;
   async function refreshPacks() {
     const res = await send('packs:list');
     if (!res.ok) return;
@@ -1246,8 +1269,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
 
   // Pack rows show the loaded pack as current, so the host can see what will play at a glance.
   function renderPackList() {
-    const loaded = state?.pack?.name ?? null;
-    renderedPackName = loaded;
+    const loaded = state?.pack?.file ?? null;
+    renderedPackFile = loaded;
     const list = $('#pack-list');
     list.replaceChildren();
     if (!knownPacks.length) {
@@ -1258,7 +1281,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     }
     for (const p of knownPacks) {
       const li = document.createElement('li');
-      const current = !p.error && p.name === loaded;
+      const current = !p.error && p.file === loaded;
       li.classList.toggle('current', current);
       const meta = Object.assign(document.createElement('div'), { className: 'pack-meta' });
       const rounds = p.rounds == null ? 'Rounds unknown' : `${p.rounds} round${p.rounds === 1 ? '' : 's'}`;
@@ -1266,11 +1289,18 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
         Object.assign(document.createElement('span'), { textContent: `${rounds} · ${(p.size / 1e6).toFixed(1)} MB` }));
       if (p.error) meta.append(Object.assign(document.createElement('span'), { className: 'error', textContent: p.error }));
       const btn = Object.assign(document.createElement('button'), {
-        type: 'button', className: 'small', textContent: current ? 'Loaded' : 'Load',
+        type: 'button', className: 'small', textContent: current ? 'Loaded' : p.file === loadingPackFile ? 'Loading…' : 'Load',
       });
-      btn.disabled = !!p.error || current;
+      // One load at a time: a second click while waiting used to start a second load.
+      btn.disabled = !!p.error || current || loadingPackFile !== null;
       btn.setAttribute('aria-label', p.error ? `${p.name} unavailable: ${p.error}` : `Load ${p.name}`);
-      btn.onclick = () => send('packs:load', { file: p.file });
+      btn.onclick = async () => {
+        loadingPackFile = p.file;
+        renderPackList();
+        await send('packs:load', { file: p.file });
+        loadingPackFile = null;
+        renderPackList();
+      };
       li.append(meta, btn);
       list.append(li);
     }
@@ -1402,7 +1432,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       packsLoaded = true;
       refreshPacks();
     }
-    if (renderedPackName !== (state.pack?.name ?? null)) renderPackList();
+    if (renderedPackFile !== (state.pack?.file ?? null)) renderPackList();
     const current = $('#pack-current');
     current.classList.toggle('empty', !state.pack);
     current.replaceChildren();
@@ -2284,36 +2314,15 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     buzzerBtn.classList.toggle('moderator-buzzer', !!you?.canModerate);
     if (!showBuzzer) return;
 
-    buzzerBtn.classList.remove('buzz-reading', 'buzz-open', 'buzz-blocked', 'buzz-you-answering', 'buzz-idle');
-    const blockedUntil = game.buzzer?.blockedUntil ?? 0;
-    const isBlocked = blockedUntil > now;
-    const alreadyTried = (game.buzzer?.attempted ?? []).includes(you.id);
-    const setBuzzer = (tone: string, main: string, sub: string) => {
-      buzzerBtn.classList.add(tone);
-      $('#buzzer-main').textContent = main;
-      $('#buzzer-sub').textContent = sub;
-    };
-
-    if (isBlocked) {
-      setBuzzer('buzz-blocked', `Blocked ${((blockedUntil - now) / 1000).toFixed(1)} s`, 'You pressed before the signal.');
-    } else if (alreadyTried && (game.phase === 'buzzerOpen' || game.phase === 'answering')) {
-      setBuzzer('buzz-idle', 'You already answered', 'Waiting for the others.');
-    } else if (game.phase === 'intro') {
-      // Nothing can be pressed until the question appears, whatever the false-start rule says.
-      setBuzzer('buzz-reading', 'Wait', settings.falseStart
-        ? `An early press blocks you for ${settings.timeForBlockingButton} s.` : 'Opens after the question.');
-    } else if (game.phase === 'reading') {
-      if (settings.falseStart) setBuzzer('buzz-reading', 'Wait for green', `An early press blocks you for ${settings.timeForBlockingButton} s.`);
-      else setBuzzer('buzz-open', 'Buzz', 'Press now to answer.');
-    } else if (game.phase === 'buzzerOpen') {
-      setBuzzer('buzz-open', 'Buzz', touchOnly ? 'Tap here.' : 'Tap here or press Space.');
-    } else if (game.phase === 'answering') {
-      if (game.buzzer.winnerId === you.id) setBuzzer('buzz-you-answering', 'Your answer',
-        (game.current?.answerType ?? 'text') === 'text' ? 'Say it out loud to the host.' : 'Tap your answer on the stage.');
-      else setBuzzer('buzz-idle', `${nameOf(game.buzzer.winnerId)} answers`, 'Get ready in case they are wrong.');
-    } else {
-      setBuzzer('buzz-idle', 'Waiting for a question', 'The button opens after a question is chosen.');
-    }
+    buzzerBtn.classList.remove('buzz-reading', 'buzz-open', 'buzz-blocked', 'buzz-you-answering', 'buzz-idle',
+      'offline', 'sent', 'not-sent');
+    // Labels, offline state and press feedback live in buzzerFeedback.ts (audit UX-3).
+    buzzPress.follow(`${game.current?.presentationId ?? ''}:${game.phase}`);
+    const view = buzzerView(phaseLabel({ game, youId: you.id, settings, now, touchOnly, nameOf }), socket.connected, buzzPress.state);
+    buzzerBtn.classList.add(view.tone, ...view.flags);
+    (buzzerBtn as HTMLButtonElement).disabled = view.disabled;
+    $('#buzzer-main').textContent = view.main;
+    $('#buzzer-sub').textContent = view.sub;
     // "Wait" stays on screen from the pick until the buttons open, so the thumb has a home and nothing jumps.
     // Other idle states (already answered, someone else answering) only cover the podiums, so they hide.
     buzzerBtn.classList.toggle('hidden', buzzerBtn.classList.contains('buzz-idle'));
@@ -2397,7 +2406,10 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   /* ---------------- controls ---------------- */
 
   function triggerBuzz() {
-    socket.emit('game:buzz', { clientAt: Math.round(nowServer()) }, () => {});
+    // An offline press would be flushed unjoined on reconnect and silently rejected (audit CONN-2).
+    if (!socket.connected) return;
+    navigator.vibrate?.(15);
+    socket.emit('game:buzz', { clientAt: Math.round(nowServer()) }, buzzPress.press());
   }
   $('#buzzer').addEventListener('pointerdown', triggerBuzz);
   // Keyboard and assistive clicks have no pointerdown; pointer clicks already buzz above.

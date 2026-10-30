@@ -19,6 +19,7 @@ const [{ Room }, { listPacks, loadPack }, { persistRoom, restoreRoom }] = await 
   import('../server/packs/packManager.ts'),
   import('../server/game/persistence.ts'),
 ]);
+const { markHandoverReady } = await import('../server/game/moderationHandover.ts');
 const loaded = await loadPack((await listPacks()).find((pack) => pack.name.includes('v5')).file);
 after(async () => rm(root, { recursive: true, force: true }));
 
@@ -116,7 +117,9 @@ test("(c') after a missing-pack restore the owner can replace the ghost host and
   const restored = await saveAndRestore(t, room, (saved) => { saved.packFile = 'removed-pack.siq'; });
   restored.attach(P.id, 'p-again');
   restored.attach(Q.id, 'q-again');
-  // H stays offline: the ghost host. With no connected host, the owner moderates.
+  // H stays offline: the ghost host. After the handover wait (UX-7), the owner moderates.
+  // The handover is ended by a direct call; grace timers below run on real time.
+  markHandoverReady(restored, H.id);
   assert.equal(restored.canModerate(P.id), true);
   restored.setRole(P.id, H.id, 'spectator');
   restored.setRole(P.id, Q.id, 'host');

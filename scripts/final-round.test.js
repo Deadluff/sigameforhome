@@ -12,6 +12,7 @@ await import('./make-sample-pack.ts');
 const [{ Room }, { loadPack }] = await Promise.all([
   import('../server/game/Room.ts'), import('../server/packs/packManager.ts'),
 ]);
+const { markHandoverReady } = await import('../server/game/moderationHandover.ts');
 const loaded = await loadPack('Demo pack (v5 format).siq');
 after(async () => rm(root, { recursive: true, force: true }));
 
@@ -191,6 +192,9 @@ test('a recovered moderator can see wagers for judging without seeing the answer
   room.detach(host.id, 'host');
   clearTimeout(room.removalTimers.get(host.id));
   room.expire(host.id);
+  // UX-7: the owner-player only takes over after the handover wait.
+  assert.equal(room.canModerate(player.id), false);
+  markHandoverReady(room, host.id);
   assert.equal(room.canModerate(player.id), true);
   assert.deepEqual(room.snapshotFor(player.id).game.final.wagers, { [player.id]: 200 });
   assert.equal(room.snapshotFor(player.id).game.current.right, null);

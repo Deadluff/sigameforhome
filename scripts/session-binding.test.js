@@ -14,6 +14,7 @@ const [{ Room, MAX_ROOM_PARTICIPANTS }, { registerSocketHandlers }, { listPacks,
   import('../server/game/Room.ts'), import('../server/socket/handlers.ts'),
   import('../server/packs/packManager.ts'),
 ]);
+const { markHandoverReady } = await import('../server/game/moderationHandover.ts');
 const packFile = (await listPacks()).find((pack) => pack.name.includes('v5')).file;
 after(() => rm(root, { recursive: true, force: true }));
 
@@ -275,6 +276,11 @@ test('only the current moderator can finish media after host recovery', async (t
   clearTimeout(room.removalTimers.get(oldHostId));
   room.expire(oldHostId);
   assert.equal((await send(hostSocket, 'game:contentFinished', { presentationId })).ok, false);
+  // UX-7: until the handover wait ends, the owner-player cannot moderate either.
+  assert.deepEqual(await send(playerSocket, 'game:contentFinished', { presentationId }),
+    { ok: false, error: 'Only the host can do that' });
+  assert.equal(room.engine.phase, 'reading');
+  markHandoverReady(room, oldHostId);
   assert.deepEqual(await send(playerSocket, 'game:contentFinished', { presentationId }),
     { ok: true, advanced: true });
   assert.deepEqual(await send(playerSocket, 'game:contentFinished', { presentationId }),
@@ -378,4 +384,22 @@ test('verdict events reject non-boolean values', async () => {
   assert.equal(verdicts, 0);
   assert.equal((await send('game:judge', { correct: false })).ok, true);
   assert.equal(verdicts, 1);
+});
+
+test('a buzz from a socket that has not joined is rejected, not replayed (audit CONN-2)', async () => {
+  // socket.io-client flushes a press buffered while offline before the app resumes its
+  // session, so it arrives unjoined. The server must refuse it rather than score it later.
+  const room = new Room();
+  let onConnection;
+  const io = {
+    sockets: { sockets: new Map() },
+    on(event, callback) { if (event === 'connection') onConnection = callback; },
+    to() { return { emit() {} }; },
+  };
+  registerSocketHandlers(io, room);
+  const socket = new FakeSocket('fresh');
+  io.sockets.sockets.set(socket.id, socket);
+  onConnection(socket);
+  const reply = await new Promise((resolve) => socket.emit('game:buzz', {}, resolve));
+  assert.deepEqual(reply, { ok: false, error: 'Join the game first' });
 });

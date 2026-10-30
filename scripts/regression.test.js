@@ -17,6 +17,7 @@ const [{ Room }, { listPacks, loadPack }, { persistRoom, restoreRoom }] = await 
   import('../server/packs/packManager.ts'),
   import('../server/game/persistence.ts'),
 ]);
+const { markHandoverReady } = await import('../server/game/moderationHandover.ts');
 const file = (await listPacks()).find((pack) => pack.name.includes('v5')).file;
 const loaded = await loadPack(file);
 
@@ -78,6 +79,9 @@ test('connected player recovers moderation after host grace expires', (t) => {
 
   assert.equal(room.ownerId, player.id);
   assert.equal(room.participants.get(host.id).role, 'host');
+  // UX-7: the owner-player only takes over after the handover wait.
+  assert.equal(room.canModerate(player.id), false);
+  markHandoverReady(room, host.id);
   assert.equal(room.canModerate(player.id), true);
   room.setRole(player.id, host.id, 'spectator');
   room.setRole(player.id, spectator.id, 'host');
@@ -301,6 +305,9 @@ test('restart preserves seats and replays an interrupted question', async (t) =>
   clearTimeout(restored.removalTimers.get(host.id));
   restored.expire(host.id);
   assert.equal(restored.ownerId, player.id);
+  // UX-7: the restored host is offline, so moderation waits for the handover too.
+  assert.equal(restored.canModerate(player.id), false);
+  markHandoverReady(restored, host.id);
   assert.equal(restored.canModerate(player.id), true);
 });
 
@@ -373,6 +380,7 @@ test('restart preserves seats and scores when the selected pack is missing', asy
   assert.equal(restored.participants.get(host.id).role, 'host');
   assert.equal(restored.participants.get(player.id).score, 300);
   assert.equal(restored.ownerId, player.id);
+  markHandoverReady(restored, host.id);
   assert.equal(restored.canModerate(player.id), true);
 });
 

@@ -80,6 +80,10 @@
 .buzzer.buzz-reading { background: var(--set-raised); color: var(--mist); box-shadow: inset 0 0 0 2px var(--rule-strong); }
 .buzzer.buzz-open { background: var(--go); color: var(--on-go); }
 .buzzer.buzz-open:not(:disabled):hover { background: var(--go-hover); }
+/* A press gets visible confirmation; offline or unconfirmed presses say so (audit UX-3). */
+.buzzer.sent { box-shadow: inset 0 0 0 4px var(--paper); }
+.buzzer.not-sent { box-shadow: inset 0 0 0 4px var(--stop); }
+.buzzer.offline { opacity: .8; }
 .buzzer.buzz-blocked { background: repeating-linear-gradient(45deg, var(--stop-deep) 0 14px, var(--stop-deeper) 14px 28px); color: var(--stop-soft); box-shadow: inset 0 0 0 3px var(--stop); cursor: not-allowed; }
 .buzzer.buzz-you-answering { background: var(--talk); color: var(--on-talk); }
 .buzzer.buzz-idle { background: var(--set); color: var(--mist); }

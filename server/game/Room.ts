@@ -11,6 +11,7 @@ import { PHASES, ROLES, type Role } from './constants.ts';
 import { GameEngine, type GameView } from './GameEngine.ts';
 import { applySettingsPatch, defaultSettings, type GameSettings } from './settings.ts';
 import { takeGraceMode } from './seatGrace.ts';
+import { clearHandover, handoverReady, startHandover } from './moderationHandover.ts';
 import { safeTimeout } from '../utils/safeTimer.ts';
 
 const NICK_MAX = 24;
@@ -99,7 +100,8 @@ export class Room extends EventEmitter {
     if (!p || p.displayOnly) return false;
     if (p.role === ROLES.HOST) return true;
     const host = this.host();
-    return pid === this.ownerId && !(host && host.connected);
+    // With no host the owner runs the game; an absent host is covered only after the handover wait.
+    return pid === this.ownerId && (!host || (!host.connected && handoverReady(this, host.id)));
   }
 
   /** Pack/settings management: moderators and the owner. */
@@ -175,6 +177,7 @@ export class Room extends EventEmitter {
     clearTimeout(this.removalTimers.get(pid));
     this.removalTimers.delete(pid);
     takeGraceMode(this, pid); // a reconnect ends any restore grace; later drops follow live rules
+    clearHandover(this, pid);
     this.changed();
     return previous;
   }
@@ -186,6 +189,7 @@ export class Room extends EventEmitter {
       this.engine.auctionTurnId() === pid;
     p.connected = false;
     p.socketId = null;
+    if (p.role === ROLES.HOST) startHandover(this, pid);
     this.removalTimers.set(
       pid,
       safeTimeout(`reconnect grace ${pid}`, () => this.expire(pid), config.reconnectGraceMs, () => this.changed()),
@@ -229,6 +233,7 @@ export class Room extends EventEmitter {
     clearTimeout(this.removalTimers.get(pid));
     this.removalTimers.delete(pid);
     takeGraceMode(this, pid);
+    clearHandover(this, pid);
     this.participants.delete(pid);
     this.tokens.delete(p.token);
     if (this.engine.chooserId === pid) this.engine.chooserId = this.players()[0]?.id ?? null;
@@ -306,6 +311,10 @@ export class Room extends EventEmitter {
       this.engine.auctionTurnId() === targetId;
     target.role = role;
     delete target.autoSpectator;
+    // A released host seat ends that host's wait; an offline new host starts one, or the owner could
+    // never moderate (the seat is kept for the whole game and only a moderator can release it).
+    if (role === ROLES.HOST && !target.connected) startHandover(this, targetId);
+    else clearHandover(this, targetId);
     this.promoteSpectators();
     // A reseated bidder cannot act, so let the next eligible player bid immediately.
     if (wasAuctionTurn && role !== ROLES.PLAYER) this.engine.advanceStakeAuction();

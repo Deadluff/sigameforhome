@@ -78,6 +78,8 @@
         <button id="btn-leave" type="button" class="quiet" data-icon="leave" title="Leave the room"><span class="label">Leave</span></button>
       </header>
       <div id="connection-status" role="status" aria-live="polite"></div>
+      <!-- Says why the game is waiting when the host drops (audit UX-4). -->
+      <div id="host-banner" class="host-banner" role="status" aria-live="polite" hidden></div>
 
       <section id="results" class="card hidden" aria-labelledby="results-title">
         <h2 id="results-title">Final scores</h2>
@@ -320,6 +322,11 @@
       </div>
     </section>
   </main>
+  <!-- Outside the screens so it also shows on the join screen when the server is unreachable. -->
+  <div id="connection-notice" class="connection-notice" role="alert" hidden>
+    <span id="connection-notice-text"></span>
+    <button id="connection-reclaim" type="button" class="small" hidden>Use here</button>
+  </div>
   <div id="toasts" class="toasts" aria-live="assertive"></div>
   <!-- One in-app confirmation for the whole client (see confirmDialog.ts); the browser's confirm() is not used. -->
   <dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-body">

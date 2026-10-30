@@ -73,6 +73,10 @@
 .me-chip .me-score { display: none; }
 .me-chip .role { padding: 2px 8px; border-radius: 999px; background: var(--set-raised); color: var(--mist); font-size: var(--t-xs); font-weight: 700; }
 #connection-status:empty { display: none; }
+/* Host-away banner and the fixed connection notice share the warning look of the status line. */
+.host-banner { padding: 10px 14px; border-radius: var(--r-control); background: var(--warn-bg); border: 1px solid var(--lamp); font-weight: 700; }
+.connection-notice { position: fixed; z-index: 60; top: max(10px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); width: min(92vw, 520px); display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-radius: var(--r-control); background: var(--warn-bg); border: 1px solid var(--lamp); font-weight: 700; }
+.host-banner[hidden], .connection-notice[hidden], #connection-reclaim[hidden] { display: none; }
 #connection-status { padding: 10px 14px; border-radius: var(--r-control); background: var(--warn-bg); border: 1px solid var(--lamp); font-weight: 700; }
 
 .stage-layout { display: grid; grid-template-columns: 264px minmax(0, 1fr); gap: var(--gap); align-items: stretch; }

@@ -51,6 +51,7 @@ export interface RoomState {
     [key: string]: string | number | boolean;
   };
   pack: {
+    file: string;
     name: string;
     stats: { questions: number };
     rounds: { name: string }[];
