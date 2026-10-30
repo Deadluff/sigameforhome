@@ -5,6 +5,7 @@ import type { Server, Socket } from 'socket.io';
 import { PHASES, type Role } from '../game/constants.ts';
 import type { Participant, Room } from '../game/Room.ts';
 import { SETTINGS_SCHEMA } from '../game/settings.ts';
+import { renameParticipant } from '../game/nickname.ts';
 import { listPacks, loadPack } from '../packs/packManager.ts';
 import { downloadWorkshopPack } from '../steam/workshop.ts';
 import { createSocketLimits, type SocketLimits } from './socketLimits.ts';
@@ -169,6 +170,8 @@ export function registerSocketHandlers(io: Server, room: Room, limits: SocketLim
       room.setRole(pid, targetId ?? pid, role),
     );
     on<{ targetId: string }>('participant:kick', 'moderator', ({ targetId }, pid) => room.kick(pid, targetId));
+    on<{ targetId?: string; name: string }>('participant:rename', 'member', ({ targetId, name }, pid) =>
+      renameParticipant(room, pid, targetId ?? pid, name));
     on<{ targetId: string; delta: number }>('score:adjust', 'moderator', ({ targetId, delta }, pid) =>
       room.adjustScore(pid, targetId, Number(delta)),
     );

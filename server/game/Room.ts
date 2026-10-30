@@ -12,9 +12,9 @@ import { GameEngine, type GameView } from './GameEngine.ts';
 import { applySettingsPatch, defaultSettings, type GameSettings } from './settings.ts';
 import { takeGraceMode } from './seatGrace.ts';
 import { clearHandover, handoverReady, startHandover } from './moderationHandover.ts';
+import { assertNicknameFree, normalizeNickname } from './nickname.ts';
 import { safeTimeout } from '../utils/safeTimer.ts';
 
-const NICK_MAX = 24;
 const MAX_MANUAL_SCORE = 1_000_000_000_000;
 export const MAX_ROOM_PARTICIPANTS = 64;
 
@@ -119,21 +119,16 @@ export class Room extends EventEmitter {
   join(rawNickname: unknown, asSpectator = false): { participant: Participant; token: string } {
     // Spectators also consume a session, snapshot fan-out, and persisted state.
     if (this.participants.size >= MAX_ROOM_PARTICIPANTS) throw new Error('The room is full');
-    const name = String(rawNickname ?? '')
-      .replace(/[\u0000-\u001f\u007f]/g, '')
-      .trim()
-      .slice(0, NICK_MAX);
-    if (!name) throw new Error('Please enter a nickname');
-
-    const taken = [...this.participants.values()].some((p) => p.name.toLowerCase() === name.toLowerCase());
-    if (taken) throw new Error('This nickname is already taken');
+    const name = normalizeNickname(rawNickname);
+    assertNicknameFree(this, name);
 
     const isFirst = this.ownerId === null;
     if (isFirst && asSpectator) throw new Error('A host or player must join before opening the TV view');
     let role: Role;
     if (isFirst) role = ROLES.PENDING;
     else if (asSpectator) role = ROLES.SPECTATOR;
-    else role = this.hasFreePlayerSlot() ? ROLES.PLAYER : ROLES.SPECTATOR;
+    // A locked room seats newcomers as spectators; only the host can seat them (audit QOL-3).
+    else role = this.hasFreePlayerSlot() && !this.settings.lockRoom ? ROLES.PLAYER : ROLES.SPECTATOR;
 
     const participant: Participant = {
       id: crypto.randomUUID(),
@@ -147,7 +142,7 @@ export class Room extends EventEmitter {
       joinedAt: Date.now(),
       // Auto-assigned spectators are promoted automatically when a player slot frees up.
       // A display-only TV never inherits a player seat when one opens.
-      autoSpectator: role === ROLES.SPECTATOR && !asSpectator,
+      autoSpectator: role === ROLES.SPECTATOR && !asSpectator && !this.settings.lockRoom,
       displayOnly: asSpectator,
     };
     this.participants.set(participant.id, participant);
@@ -258,7 +253,8 @@ export class Room extends EventEmitter {
   promoteSpectators(): void {
     if (this.engine.phase !== PHASES.LOBBY && this.engine.phase !== PHASES.GAME_OVER) return;
     const waiting = [...this.participants.values()]
-      .filter((p) => p.connected && p.role === ROLES.SPECTATOR && p.autoSpectator && !p.displayOnly)
+      // A locked room freezes seating, also for people who were waiting before the lock (QOL-3).
+      .filter((p) => !this.settings.lockRoom && p.connected && p.role === ROLES.SPECTATOR && p.autoSpectator && !p.displayOnly)
       .sort((a, b) => a.joinedAt - b.joinedAt);
     for (const s of waiting) {
       if (!this.hasFreePlayerSlot()) break;
@@ -304,6 +300,7 @@ export class Room extends EventEmitter {
       if (!moderator && !(self && actorId === this.ownerId)) throw new Error('Only the owner can claim the host seat');
     } else {
       if (!self && !moderator) throw new Error('You cannot change other participants');
+      if (role === ROLES.PLAYER && !moderator && this.settings.lockRoom) throw new Error('The room is locked');
       if (role === ROLES.PLAYER && !this.hasFreePlayerSlot()) throw new Error('All player slots are taken');
     }
 

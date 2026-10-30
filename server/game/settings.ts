@@ -23,6 +23,7 @@ export interface GameSettings {
   useApellations: boolean;
   gameMode: GameMode;
   soundOnHostOnly: boolean;
+  lockRoom: boolean;
   timeForChoosingQuestion: number;
   timeForThinkingOnQuestion: number;
   timeForPrintingAnswer: number;
@@ -100,6 +101,8 @@ export const SETTINGS_SCHEMA: Record<keyof GameSettings, SettingSchemaEntry> = O
   gameMode: oneOf<GameMode>('classic', ['classic', 'simple'], 'Game mode'),
   // Phones in one room play clips out of sync; the host or TV screen can be the only speaker.
   soundOnHostOnly: bool(false, 'Play question sound only on the host and TV screens'),
+  // Newcomers join as spectators and wait for the host to seat them.
+  lockRoom: bool(false, 'Lock the room: new arrivals watch until the host seats them'),
 
   /* ---- Timers in seconds (TimeSettings) ---- */
   timeForChoosingQuestion: int(30, 1, 300, 'Time to choose a question'),

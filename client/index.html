@@ -70,8 +70,12 @@
             <button id="volume-mute" type="button" class="quiet icon-only" data-icon="mute" title="Mute"><span class="label">Mute</span></button>
             <input id="volume-range" type="range" min="0" max="100" step="5" aria-label="Sound volume" />
             <output id="volume-value" for="volume-range"></output>
+            <!-- Only for phones on the LAN address, where the browser has no native wake lock (QOL-1). -->
+            <label id="keep-awake" class="keep-awake" hidden><input type="checkbox" id="pref-keepAwake" /> Keep screen on</label>
           </span>
         </span>
+        <!-- TV, projector and host screens can fill the display (QOL-4). -->
+        <button id="btn-fullscreen" type="button" class="quiet icon-only" data-icon="expand" title="Full screen" hidden><span class="label">Full screen</span></button>
         <!-- Everyone should know who runs the game, including when nobody does yet. -->
         <span id="host-chip" class="host-chip"></span>
         <span id="me" class="me-chip"></span>
@@ -162,6 +166,8 @@
                   <span><strong>Play every final theme</strong><small>One final question per theme.</small></span></label>
                 <label class="setting-toggle"><input type="checkbox" id="set-soundOnHostOnly" />
                   <span><strong>Sound on host and TV only</strong><small>Phones show clips muted, so the room hears one speaker.</small></span></label>
+                <label class="setting-toggle"><input type="checkbox" id="set-lockRoom" />
+                  <span><strong>Lock the room</strong><small>New arrivals watch until you seat them.</small></span></label>
               </div>
             </details>
             <details class="lobby-details">

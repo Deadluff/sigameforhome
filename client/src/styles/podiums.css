@@ -165,9 +165,9 @@
 #host-seat .player-menu-panel { bottom: auto; top: calc(100% + 6px); }
 .player-menu .row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .player-menu button { width: 100%; min-height: 36px; padding: 6px 8px; font-size: var(--t-xs); }
-.score-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
-.score-form input { min-height: 36px; padding: 6px 8px; font-size: 14px; }
-.score-form button { width: auto; }
+.score-form, .rename-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+.score-form input, .rename-form input { min-height: 36px; padding: 6px 8px; font-size: 14px; }
+.score-form button, .rename-form button { width: auto; }
 
 @media (max-width: 600px) {
   /* Replics sit inside the podium on phones too, so the row needs no 30 px gutter above it. */

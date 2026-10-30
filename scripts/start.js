@@ -1,10 +1,10 @@
 /** Install native dependencies for this machine, then start the local server. */
-import { spawn, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { shouldRestart } from './restart-policy.cjs';
+import { supervise } from './restart-policy.cjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const modules = path.join(root, 'node_modules');
@@ -69,47 +69,5 @@ if (!fs.readdirSync(packsDir).some((name) => name.toLowerCase().endsWith('.siq')
     process.exit(sample.status || 1);
   }
 }
-/*
- * Run the server under a small supervisor so one crash does not end the game night (audit CONN-1).
- * Async spawn, not spawnSync: a parent blocked in spawnSync cannot see its own SIGINT/SIGTERM,
- * so it could not tell a deliberate stop from a crash.
- */
-const isWindows = process.platform === 'win32';
-const restarts = [];
-let parentStopping = false;
-let child = null;
-
-for (const signal of ['SIGINT', 'SIGTERM']) {
-  process.on(signal, () => {
-    parentStopping = true;
-    // POSIX: forward, so `kill <launcher>` also stops the server. A terminal Ctrl+C reaches both
-    // processes; the server's shuttingDown guard ignores the duplicate.
-    // Windows: do not forward. child.kill() terminates at once and skips the room-state save,
-    // and a console Ctrl+C already reaches the child. Just wait for it to exit.
-    if (!isWindows && child && child.exitCode === null && child.signalCode === null) child.kill(signal);
-  });
-}
-
-function runServer() {
-  if (parentStopping) process.exit(0);
-  child = spawn(process.execPath, ['--import', 'tsx', path.join(root, 'server', 'index.ts')], {
-    cwd: root,
-    stdio: 'inherit',
-  });
-  child.on('error', (err) => {
-    console.error(err);
-    process.exit(1);
-  });
-  child.on('exit', (status, signal) => {
-    const now = Date.now();
-    if (shouldRestart({ status, signal, parentStopping, history: restarts, now })) {
-      restarts.push(now);
-      console.error(`\n  The server stopped unexpectedly (exit ${status}). Restarting; players can rejoin with their saved seats.\n`);
-      setTimeout(runServer, 1000);
-      return;
-    }
-    process.exit(status ?? 1);
-  });
-}
-
-runServer();
+// One crash should not end the game night: restart it unless the stop was deliberate (audit CONN-1).
+supervise({ command: process.execPath, args: ['--import', 'tsx', path.join(root, 'server', 'index.ts')], cwd: root });

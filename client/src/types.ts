@@ -33,6 +33,7 @@ export interface RoomState {
     playAllQuestionsInFinalRound: boolean;
     useApellations: boolean;
     soundOnHostOnly: boolean;
+    lockRoom: boolean;
     timeForBlockingButton: number;
     readingSpeed: number;
     partialText: boolean;
@@ -162,8 +163,9 @@ export interface CommandPayloads {
   'game:undoJudgment': { presentationId: string; judgmentId: number };
   'game:answer': { answer: string };
   'participant:kick': { targetId: string };
+  'participant:rename': { targetId: string; name: string };
   'role:choose': { role: 'host' | 'player' };
-  'role:set': { targetId: string; role: 'host' | 'spectator' };
+  'role:set': { targetId: string; role: 'host' | 'player' | 'spectator' };
   'score:adjust': { targetId: string; delta: number };
   'packs:load': { file: string };
   'settings:update': Partial<RoomState['settings']>;

@@ -6,6 +6,9 @@ import { audioCue, drawPins, drawRing, fitText, imageFrame, makePickable, option
   setBackdrop, type Pin } from './stageParts';
 import { buzzerView, createPressTracker, phaseLabel } from './buzzerFeedback';
 import { createConnectionMonitor, noticeText } from './connection';
+import { fullscreenSupported, toggleFullscreen } from './fullscreen';
+import { betweenQuestions, removeConfirmBody, renameForm } from './seatActions';
+import { setupKeepAwake } from './wakeLock';
 import { hostBannerText } from './hostBanner';
 import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentItem,
   GameEvent, JoinAck, NoPayloadCommand, PackListItem, RoomState, ServerToClientEvents } from './types';
@@ -60,6 +63,9 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   // tryAllTransports: fall back to polling when a network blocks WebSockets (audit CONN-7).
   const socket: Socket<ServerToClientEvents, ClientToServerEvents> = io({ transports: ['websocket', 'polling'], tryAllTransports: true });
   const buzzPress = createPressTracker(() => updateOrientiers());
+  // Keep the screen on during play (QOL-1): native where allowed, opt-in video elsewhere.
+  const refreshKeepAwake = setupKeepAwake({ toggle: $('#keep-awake') as HTMLLabelElement, checkbox: input('#pref-keepAwake'),
+    isGameRunning: () => !!state && !['lobby', 'gameOver'].includes(state.game.phase) });
   // A cold-cache pack load can take minutes; 8 s reported "outcome unknown" and invited a second click (audit UX-1).
   const slowCommandMs: Partial<Record<CommandEvent, number>> = { 'packs:load': 120_000, 'packs:list': 120_000 };
 
@@ -423,6 +429,9 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     show('screen-game');
     $('#screen-game').dataset.phase = game.phase;
     renderTopbar();
+    // Keep the screen on during play (QOL-1) and offer fullscreen to the TV and host (QOL-4).
+    refreshKeepAwake();
+    $('#btn-fullscreen').hidden = !(fullscreenSupported() && (tvMode || you.canModerate));
     const hostAway = hostBannerText(state) ?? '';
     $('#host-banner').hidden = !hostAway;
     // Rewriting the same text in a live region would re-announce it on every snapshot.
@@ -1057,6 +1066,12 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
         [field.dataset.playerId ?? '', field.value] as const)));
     const focusedDraft = document.activeElement instanceof HTMLInputElement &&
       document.activeElement.closest('.score-form') ? document.activeElement.dataset.playerId : undefined;
+    // A half-typed new name survives the rebuild the same way (QOL-2).
+    const nameDrafts = new Map(containers.flatMap((box) =>
+      Array.from(box.querySelectorAll<HTMLInputElement>('.rename-form input')).map((field) =>
+        [field.dataset.playerId ?? '', field.value] as const)));
+    const focusedName = document.activeElement instanceof HTMLInputElement &&
+      document.activeElement.closest('.rename-form') ? document.activeElement.dataset.playerId : undefined;
     seats.replaceChildren();
     hostSeat.replaceChildren();
 
@@ -1152,14 +1167,29 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
         panel.append(row, form);
         if (focusedDraft === p.id) queueMicrotask(() => field.focus());
       }
-      if (you.canModerate && p.id !== you.id) {
+      // Rename: the host anyone, anyone themselves in the lobby (QOL-2). The server checks the same rule.
+      if (!p.displayOnly && (you.canModerate || (p.id === you.id && game.phase === 'lobby'))) {
+        const rename = renameForm(p.id, p.name, nameDrafts.get(p.id), (name) => void send('participant:rename', { targetId: p.id, name }));
+        panel.append(rename);
+        if (focusedName === p.id) queueMicrotask(() => rename.querySelector('input')?.focus());
+      }
+      // A newcomer who landed as a spectator gets a seat between questions (QOL-2, QOL-3).
+      const freeSeat = participants.filter((member) => member.role === 'player').length < state.settings.maxPlayers;
+      if (you.canModerate && p.role === 'spectator' && !p.displayOnly && freeSeat && betweenQuestions(game)) {
+        const seat = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Make player' });
+        seat.setAttribute('aria-label', `Make ${p.name} a player`);
+        seat.onclick = () => send('role:set', { targetId: p.id, role: 'player' });
+        panel.append(seat);
+      }
+      // An offline player's seat is removed only between questions; a connected guest can go any time.
+      if (you.canModerate && p.id !== you.id && (p.connected || p.role !== 'player' || betweenQuestions(game))) {
         const kick = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Remove from room' });
         kick.className = 'bad';
         kick.dataset.icon = 'cross';
         kick.setAttribute('aria-label', `Remove ${p.name} from the room`);
         kick.onclick = async () => {
           if (await askConfirm({
-            title: `Remove ${p.name} from the room?`, body: 'They leave the game right away.', confirmLabel: 'Remove', danger: true,
+            title: `Remove ${p.name} from the room?`, body: removeConfirmBody(p), confirmLabel: 'Remove', danger: true,
           })) send('participant:kick', { targetId: p.id });
         };
         panel.append(kick);
@@ -1499,6 +1529,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     if (document.activeElement !== $('#set-soundOnHostOnly')) {
       input('#set-soundOnHostOnly').checked = s.soundOnHostOnly;
     }
+    if (document.activeElement !== $('#set-lockRoom')) input('#set-lockRoom').checked = s.lockRoom;
   }
 
   // Settings change listeners.
@@ -1518,6 +1549,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     saveSetting(select('#set-buzzSyncMode'), { buzzSyncMode: select('#set-buzzSyncMode').value as RoomState['settings']['buzzSyncMode'] }));
   const toggleSettingKeys = [
     'falseStart', 'ignoreWrong', 'partialText', 'oral', 'playAllQuestionsInFinalRound', 'useApellations', 'soundOnHostOnly',
+    'lockRoom',
   ] as const;
   for (const key of toggleSettingKeys) {
     input(`#set-${key}`).addEventListener('change', () => {
@@ -2432,6 +2464,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
    * pick intro. Keys use e.code so a Russian layout works. A step that just changed ignores keys for
    * 700 ms, so a double press cannot open the buttons the moment the question appears.
    */
+  $('#btn-fullscreen').addEventListener('click', () => { void toggleFullscreen().catch(() => toast('Full screen is not available here.')); });
+
   const HOST_KEYS_KEY = 'sigame.hostKeys';
   let hostKeys = true;
   try { hostKeys = localStorage.getItem(HOST_KEYS_KEY) !== 'off'; } catch { /* Keep the default. */ }

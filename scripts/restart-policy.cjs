@@ -1,11 +1,13 @@
 /**
- * When the launcher should restart a server that exited (audit CONN-1).
+ * When and how a launcher restarts a server that exited (audit CONN-1).
  *
- * Pure and CommonJS so the standalone executable's entry (`sea-entry.cjs`, plan wave 4) can
- * reuse it later; today only `start.js` supervises the server.
- * The rule: restart a crash, but never a deliberate stop, and give up on a crash loop.
+ * CommonJS so both `start.js` and the standalone executable's entry (`sea-entry.cjs`, bundled by
+ * esbuild) share one copy. The rule: restart a crash, but never a deliberate stop, and give up
+ * on a crash loop.
  */
 'use strict';
+
+const { spawn } = require('node:child_process');
 
 /** The server exits with this when its port is taken. Retrying cannot help. */
 const EXIT_PORT_IN_USE = 78;
@@ -31,4 +33,48 @@ function shouldRestart({ status, signal, parentStopping, history = [], now = Dat
   return recent.length < MAX_RESTARTS_IN_WINDOW;
 }
 
-module.exports = { shouldRestart, EXIT_PORT_IN_USE };
+/**
+ * Runs the server as a child process and restarts it per shouldRestart, then exits with its status.
+ * Async spawn, not spawnSync: a parent blocked in spawnSync cannot see its own SIGINT/SIGTERM,
+ * so it could not tell a deliberate stop from a crash.
+ * @param {{ command: string, args: string[], cwd?: string, env?: NodeJS.ProcessEnv }} options
+ */
+function supervise({ command, args, cwd, env }) {
+  const isWindows = process.platform === 'win32';
+  const restarts = [];
+  let parentStopping = false;
+  let child = null;
+
+  for (const signal of ['SIGINT', 'SIGTERM']) {
+    process.on(signal, () => {
+      parentStopping = true;
+      // POSIX: forward, so `kill <launcher>` also stops the server. A terminal Ctrl+C reaches both
+      // processes; the server's shuttingDown guard ignores the duplicate.
+      // Windows: do not forward. child.kill() terminates at once and skips the room-state save,
+      // and a console Ctrl+C already reaches the child. Just wait for it to exit.
+      if (!isWindows && child && child.exitCode === null && child.signalCode === null) child.kill(signal);
+    });
+  }
+
+  const run = () => {
+    if (parentStopping) process.exit(0);
+    child = spawn(command, args, { cwd, env, stdio: 'inherit', windowsHide: true });
+    child.on('error', (err) => {
+      console.error(err);
+      process.exit(1);
+    });
+    child.on('exit', (status, signal) => {
+      const now = Date.now();
+      if (shouldRestart({ status, signal, parentStopping, history: restarts, now })) {
+        restarts.push(now);
+        console.error(`\n  The server stopped unexpectedly (exit ${status}). Restarting; players can rejoin with their saved seats.\n`);
+        setTimeout(run, 1000);
+        return;
+      }
+      process.exit(status ?? 1);
+    });
+  };
+  run();
+}
+
+module.exports = { shouldRestart, supervise, EXIT_PORT_IN_USE };
