@@ -2411,45 +2411,56 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
    * While a question is read, its words light up in step with the reading clock (the same clock
    * the table frame drains), so players see how far the host has got. A short fading edge runs
    * ahead of the lit text every frame, so the sweep glides instead of stepping a letter at a time.
+   * Each letter is wrapped once in a span carrying its index (--i); per frame only the prompt's
+   * --read value moves and CSS works out every letter's brightness. Nothing is rebuilt per frame,
+   * so the edge moves continuously at full frame rate instead of in rebuilt eighth-letter steps.
    */
-  const READ_EDGE = 8;
+  const READ_EDGE = 12;
+  // Letters by code point, so an emoji is never split into two broken halves.
+  const promptLetters = new WeakMap<HTMLElement, string[]>();
+  const lettersOf = (p: HTMLElement) => {
+    let letters = promptLetters.get(p);
+    if (!letters) promptLetters.set(p, letters = Array.from(p.textContent ?? ''));
+    return letters;
+  };
+  // Clock resyncs can nudge the server time back a few ms; the sweep never steps backwards for them.
+  let readFloor = 0;
+  let readFirstLine: HTMLElement | undefined;
   function paintReadingProgress() {
     const s = state;
     if (!s?.game.current || !stageSlots || s.settings.partialText) return;
     if (s.game.phase === 'paused') return; // Keep the highlight where the pause froze it.
     const t = s.game.timer;
     const reading = s.game.phase === 'reading' && t?.name === 'reading' && t.durationMs > 0;
-    const lines = [...stageSlots.prompt.querySelectorAll<HTMLElement>('.slot-item > p')];
-    const fullText = (p: HTMLElement) => (p.dataset.full ??= p.textContent ?? '');
-    const total = lines.reduce((sum, p) => sum + fullText(p).length, 0);
+    const prompt = stageSlots.prompt;
+    const lines = [...prompt.querySelectorAll<HTMLElement>('.slot-item > p')];
+    if (!reading || lines[0] !== readFirstLine) readFloor = 0;
+    readFirstLine = lines[0];
+    const total = lines.reduce((sum, p) => sum + lettersOf(p).length, 0);
     const done = reading && t ? Math.min(1, Math.max(0, 1 - (t.endsAt - nowServer()) / t.durationMs)) : 1;
     // Stretch the sweep so the fading edge also finishes exactly when the clock does.
-    const progress = done * (total + READ_EDGE);
+    const progress = readFloor = Math.max(readFloor, done * (total + READ_EDGE));
+    const finished = !reading || progress >= total + READ_EDGE;
     let offset = 0;
     for (const p of lines) {
-      const full = fullText(p);
-      const local = progress - offset;
-      offset += full.length;
-      const finished = !reading || local >= full.length + READ_EDGE;
-      const key = finished ? 'full' : (Math.round(local * 8) / 8).toFixed(3);
-      if (p.dataset.lit === key) continue;
-      p.dataset.lit = key;
-      if (finished) {
-        p.textContent = full;
-        continue;
+      const letters = lettersOf(p);
+      if (finished && p.dataset.split) {
+        // Back to plain text once read, so nothing else has to step around the letter spans.
+        delete p.dataset.split;
+        p.textContent = letters.join('');
+      } else if (!finished && !p.dataset.split) {
+        p.dataset.split = '1';
+        p.replaceChildren(...letters.map((char, j) => {
+          const span = Object.assign(document.createElement('span'), { textContent: char });
+          span.style.setProperty('--i', String(offset + j));
+          return span;
+        }));
       }
-      const lit = Math.max(0, Math.floor(local - READ_EDGE));
-      const parts: (string | HTMLElement)[] = [full.slice(0, lit)];
-      const edgeEnd = Math.min(full.length, Math.max(0, Math.ceil(local)));
-      for (let i = lit; i < edgeEnd; i++) {
-        // 1 at the lit side, falling to 0 at the reading point.
-        const k = Math.min(1, Math.max(0, (local - i) / READ_EDGE));
-        const char = Object.assign(document.createElement('span'), { textContent: full[i] });
-        char.style.color = `color-mix(in srgb, var(--paper) ${Math.round(36 + 64 * k)}%, transparent)`;
-        parts.push(char);
-      }
-      parts.push(Object.assign(document.createElement('span'), { className: 'unread', textContent: full.slice(edgeEnd) }));
-      p.replaceChildren(...parts);
+      offset += letters.length;
+    }
+    if (!finished) {
+      prompt.style.setProperty('--read', progress.toFixed(2));
+      prompt.style.setProperty('--read-edge', String(READ_EDGE));
     }
   }
   const readingFrame = () => {

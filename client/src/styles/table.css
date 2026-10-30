@@ -181,8 +181,15 @@
   font-size: clamp(20px, 3vw, 48px); font-weight: 800; line-height: 1.18; text-wrap: balance; overflow-wrap: anywhere;
 }
 .q-prompt:empty { display: none; }
-/* Words not yet reached by the reading clock. */
-.q-prompt .unread { color: color-mix(in srgb, var(--paper) 36%, transparent); }
+/* Words not yet reached by the reading clock.
+   62% paper on the violet board is ~3.5:1 — readable from the couch (36% was ~2:1)
+   yet still clearly dimmer than the read words (~6.4:1).
+   Each letter (--i) brightens as the reading clock (--read, set by script) passes it. The fade
+   spans --read-edge letters and is smoothstepped, so both ends feather in without a hard kink. */
+.q-prompt [data-split] > span {
+  --k: clamp(0, (var(--read, 0) - var(--i)) / var(--read-edge, 12), 1);
+  color: color-mix(in srgb, var(--paper) calc(62% + 38% * var(--k) * var(--k) * (3 - 2 * var(--k))), transparent);
+}
 /* With nothing to show, the words are the whole screen. */
 .q-prompt > * + * { margin-top: .25em; }
 #question:not(.has-media) .q-prompt {
