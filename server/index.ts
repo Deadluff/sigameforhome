@@ -12,9 +12,10 @@ import { config } from './config.ts';
 import { Room } from './game/Room.ts';
 import { persistRoom, restoreRoom } from './game/persistence.ts';
 import { ensureIosCompatibleMedia } from './packs/mediaTranscoder.ts';
-import { listPacks } from './packs/packManager.ts';
+import { listPacks, pruneCache } from './packs/packManager.ts';
 import { canUpload, MAX_UPLOAD_BYTES, saveUploadedPack, UploadError } from './packs/upload.ts';
 import { errorHandler, originMiddleware, securityHeaders } from './http/httpSafety.ts';
+import { pickInviteUrl } from './http/invite.ts';
 import { registerSocketHandlers } from './socket/handlers.ts';
 import { logRefusal, policyFromEnv, refusalReason } from './socket/originGuard.ts';
 import { createSocketLimits } from './socket/socketLimits.ts';
@@ -44,6 +45,10 @@ io.use(socketLimits.middleware);
 const room = new Room();
 await restoreRoom(room);
 const flushRoomState = persistRoom(room);
+// Extracted media for packs unused for 30 days is deleted; the restored pack stays (audit CONN-8).
+// Awaited before listening, so no pack load can race a folder being deleted.
+await pruneCache(room.loadedPack ? [room.loadedPack.packId] : [], 30 * 24 * 60 * 60 * 1000)
+  .catch((err: Error) => console.warn(`[packs] Cache cleanup skipped: ${err.message}`));
 registerSocketHandlers(io, room, socketLimits);
 
 /* ------------------------------------------------------------------ HTTP */
@@ -62,9 +67,9 @@ app.get('/api/info', (_req: Request, res: Response) => {
 // The lobby shows this so phones can join by camera instead of typing the LAN address.
 app.get('/api/invite.svg', (req: Request, res: Response) => {
   const fallback = getLanAddresses().map((a) => `http://${a.address}:${config.port}`)[0] ?? `http://localhost:${config.port}`;
-  const requested = typeof req.query.url === 'string' ? req.query.url : '';
-  // Only encode this server's own http(s) address, never an arbitrary caller-supplied link.
-  const url = /^https?:\/\/[^/\s]+\/?(\?tv)?$/.test(requested) && requested.length <= 200 ? requested : fallback;
+  // Only encode this server's own address, never an arbitrary caller-supplied link (audit SEC-9).
+  const ownHosts = [...getLanAddresses().map((a) => `${a.address}:${config.port}`), req.headers.host ?? ''];
+  const url = pickInviteUrl(req.query.url, ownHosts, fallback);
   res.type('image/svg+xml').set('Cache-Control', 'no-store').send(qrSvg(url));
 });
 

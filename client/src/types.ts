@@ -141,6 +141,7 @@ export interface PackListItem {
   file: string;
   name: string;
   rounds?: number | null;
+  outline?: { name: string; themes: string[] }[];
   size: number;
   error?: string;
 }

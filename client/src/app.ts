@@ -8,6 +8,7 @@ import { buzzerView, createPressTracker, phaseLabel } from './buzzerFeedback';
 import { createConnectionMonitor, noticeText } from './connection';
 import { fullscreenSupported, toggleFullscreen } from './fullscreen';
 import { betweenQuestions, removeConfirmBody, renameForm } from './seatActions';
+import { inviteChoices, resultsText } from './sharing';
 import { setupKeepAwake } from './wakeLock';
 import { hostBannerText } from './hostBanner';
 import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentItem,
@@ -1006,6 +1007,14 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   button('#appeal-oppose').onclick = () => send('game:appealVote', { support: false });
   button('#appeal-close').onclick = () => send('game:appealClose');
 
+  button('#btn-copy-results').onclick = async () => {
+    const { participants, pack } = activeState();
+    const ranking = participants.filter((p) => p.role === 'player').sort((a, b) => b.score - a.score);
+    try {
+      await navigator.clipboard.writeText(resultsText(ranking, pack?.name));
+      toast('Results copied.', 'info');
+    } catch { toast('Copying needs the host computer (the browser blocks it on this address).'); }
+  };
   function renderResults() {
     const { game, participants, you, pack } = activeState();
     const finished = game.phase === 'gameOver';
@@ -1318,6 +1327,14 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       meta.append(Object.assign(document.createElement('strong'), { textContent: p.name }),
         Object.assign(document.createElement('span'), { textContent: `${rounds} · ${(p.size / 1e6).toFixed(1)} MB` }));
       if (p.error) meta.append(Object.assign(document.createElement('span'), { className: 'error', textContent: p.error }));
+      // Round and theme names let the host check a pack before loading it (QOL-7).
+      if (p.outline?.length) {
+        const preview = Object.assign(document.createElement('details'), { className: 'pack-outline' });
+        preview.append(Object.assign(document.createElement('summary'), { textContent: 'Themes' }),
+          ...p.outline.map((round) => Object.assign(document.createElement('p'), {
+            textContent: `${round.name}: ${round.themes.join(', ')}` })));
+        meta.append(preview);
+      }
       const btn = Object.assign(document.createElement('button'), {
         type: 'button', className: 'small', textContent: current ? 'Loaded' : p.file === loadingPackFile ? 'Loading…' : 'Load',
       });
@@ -1340,11 +1357,18 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   let inviteLoaded = false;
   async function loadInvite() {
     inviteLoaded = true;
-    let url = location.origin;
+    let urls = [location.origin];
     try {
       const info = await (await fetch('/api/info')).json() as { urls?: string[] };
-      if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') url = info.urls?.[0] ?? url;
+      urls = inviteChoices(info.urls, location.hostname, location.origin);
     } catch { /* The current origin still works for devices that reached this page. */ }
+    const picker = select('#invite-address');
+    picker.replaceChildren(...urls.map((u) => new Option(u.replace(/^https?:\/\//, ''), u)));
+    picker.hidden = urls.length < 2;
+    picker.onchange = () => showInvite(picker.value);
+    showInvite(urls[0]);
+  }
+  function showInvite(url: string) {
     $('#invite-url').textContent = url;
     ($('#tv-link') as HTMLAnchorElement).href = `${url}/?tv`;
     // Phones join by pointing the camera at the screen instead of typing the address.

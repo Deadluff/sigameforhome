@@ -177,3 +177,20 @@
   #screen-game > .dock > .buzzer { order: 3; }
   #screen-game:has(.dock > .card:not(.hidden)) #game-stage { min-height: 24dvh; }
 }
+
+#invite-address[hidden] { display: none; }
+.pack-outline { margin-top: 4px; font-size: var(--t-xs); color: var(--mist); }
+.pack-outline summary { cursor: pointer; font-weight: 700; }
+.pack-outline p { margin: 4px 0 0; }
+
+/*
+ * Touch screens get 44 px targets for the small controls (audit UX-5, WCAG 2.5.5).
+ * The podium's corner menu keeps its 32 px look and grows only its hit area, so seats keep their shape.
+ */
+@media (pointer: coarse) {
+  .round-arrow, .host-tools button, .volume-pop #volume-mute { min-width: 44px; min-height: 44px; }
+  .host-chip button, #btn-leave, button.small, .host-menu > summary,
+  .player-menu button, .score-form input, .rename-form input { min-height: 44px; }
+  .player-menu summary { position: relative; }
+  .player-menu summary::after { content: ''; position: absolute; inset: -6px; }
+}

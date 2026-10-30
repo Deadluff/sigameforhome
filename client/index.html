@@ -91,6 +91,7 @@
         <ol id="results-list"></ol>
         <div class="results-actions">
           <p id="results-hint"></p>
+          <button id="btn-copy-results" type="button" data-icon="copy">Copy results</button>
           <button id="btn-rematch" type="button" class="primary hidden">Start a rematch</button>
         </div>
       </section>
@@ -189,7 +190,7 @@
                 <label class="field wide"><span>Who wins a close press</span>
                   <select id="set-buzzSyncMode">
                     <option value="server">First press the server receives</option>
-                    <option value="clientTimestamp">Earliest press on a calibrated device</option>
+                    <option value="clientTimestamp">Earliest press on a calibrated device (trusts player clocks)</option>
                   </select>
                   <small id="set-buzzSyncMode-desc"></small>
                 </label>
@@ -227,6 +228,8 @@
               <span>Join from a phone on the same Wi‑Fi</span>
               <div class="row">
                 <code id="invite-url">…</code>
+                <!-- Shown only when the server has several network addresses (UX-6). -->
+                <select id="invite-address" aria-label="Network address for the join link" hidden></select>
                 <button id="btn-copy-invite" type="button" data-icon="copy">Copy link</button>
                 <a id="tv-link" class="button-link" href="/?tv" target="_blank" rel="noopener" data-icon="tv">TV view</a>
               </div>

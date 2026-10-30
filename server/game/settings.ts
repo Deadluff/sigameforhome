@@ -90,7 +90,7 @@ export const SETTINGS_SCHEMA: Record<keyof GameSettings, SettingSchemaEntry> = O
   buzzSyncMode: oneOf<BuzzSyncMode>(
     'server',
     ['server', 'clientTimestamp'],
-    'Who-clicked-first sync mode (server vs client request time)',
+    'Who-clicked-first sync mode (server arrival vs client request time; client time trusts player clocks)',
   ),
   buzzSyncWindowMs: int(120, 20, 500, 'Client timestamp sync collection window (ms)'),
   buttonPressMode: oneOf<ButtonPressMode>('firstWins', ['firstWins', 'randomWithinInterval'], 'Button press resolution'),

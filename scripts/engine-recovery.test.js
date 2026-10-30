@@ -293,9 +293,12 @@ test('timestamp-synced presses retain their ordering when the buzzer deadline en
   engine.selectQuestion(host.id, true, 0, 0);
   engine.openBuzzer();
   const openedAt = engine.buzzer.openedAt;
+  // The window opens at 650 ms and the 1 s deadline cuts it short. Presses arrive 200-250 ms after
+  // they were made: inside the 500 ms a player clock is trusted (audit SEC-4 narrowed this from
+  // 2 s), with room for timer lag under a parallel test run, so their order still decides the winner.
   await delay(650);
-  assert.equal(engine.buzz(alice.id, { clientAt: openedAt + 100 }).result, 'queued');
-  assert.equal(engine.buzz(bob.id, { clientAt: openedAt + 50 }).result, 'queued');
+  assert.equal(engine.buzz(alice.id, { clientAt: openedAt + 450 }).result, 'queued');
+  assert.equal(engine.buzz(bob.id, { clientAt: openedAt + 400 }).result, 'queued');
   await delay(450);
   assert.equal(engine.phase, 'answering');
   assert.equal(engine.buzzer.winnerId, bob.id);

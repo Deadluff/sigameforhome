@@ -19,6 +19,8 @@ import type { Participant, Room } from './Room.ts';
 import type { GameSettings } from './settings.ts';
 import { safeTimeout } from '../utils/safeTimer.ts';
 
+const CLIENT_CLOCK_TRUST_MS = 500;
+
 /** Host verdict multipliers for a correct answer: half credit, full, or double. */
 const REWARD_FACTORS = [0.5, 1, 2];
 const QUESTION_PHASES = new Set<Phase>([PHASES.READING, PHASES.BUZZER_OPEN, PHASES.ANSWERING, PHASES.FOR_ALL_ANSWERING, PHASES.FOR_ALL_JUDGE, PHASES.REVEAL]);
@@ -1137,7 +1139,9 @@ export class GameEngine {
     const openedAt = this.buzzer.openedAt ?? serverNow;
     const num = Number(rawClientAt);
     if (!Number.isFinite(num)) return serverNow;
-    const minAllowed = Math.max(openedAt, serverNow - 2000);
+    // A player's clock is trusted only a little way back, so a skewed or forged clientAt cannot
+    // jump the queue by seconds (audit SEC-4).
+    const minAllowed = Math.max(openedAt, serverNow - CLIENT_CLOCK_TRUST_MS);
     const maxAllowed = serverNow + 20;
     return Math.min(maxAllowed, Math.max(minAllowed, num));
   }

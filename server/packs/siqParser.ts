@@ -130,9 +130,16 @@ export interface Package {
   stats: PackageStats;
 }
 
+export interface PackOutlineRound {
+  name: string;
+  themes: string[];
+}
+
 export interface PackHeader {
   name: string;
   rounds: number | null;
+  /** Round and theme names for the host's pack preview (audit QOL-7); capped to stay small. */
+  outline?: PackOutlineRound[];
   difficulty?: number;
   version?: string;
   error?: string;
@@ -606,6 +613,10 @@ export function readPackHeader(filePath: string): PackHeader {
   return {
     name: attr(pkg, 'name', path.basename(filePath, '.siq')),
     rounds: asArray(pkg.rounds?.round).length,
+    outline: asArray(pkg.rounds?.round).slice(0, 20).map((round, index) => ({
+      name: attr(round, 'name', `Round ${index + 1}`).slice(0, 80),
+      themes: asArray(round?.themes?.theme).slice(0, 30).map((theme) => attr(theme, 'name', '').slice(0, 80)),
+    })),
     difficulty: num(attr(pkg, 'difficulty'), 5),
     version: attr(pkg, 'version', '4'),
   };
