@@ -89,6 +89,56 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   }
   setInterval(syncClockSample, 8000);
 
+  /* ---------------- Volume ---------------- */
+  // Each device keeps its own level, so a loud TV and a quiet phone can share one room.
+  const VOLUME_KEY = 'sigame.volume';
+  let volume = 1;
+  try {
+    const saved = localStorage.getItem(VOLUME_KEY);
+    if (saved !== null && Number.isFinite(Number(saved))) volume = Math.min(1, Math.max(0, Number(saved)));
+  } catch { /* Private mode: keep full volume. */ }
+  // iPhone and iPad ignore media.volume, so same-origin clips play through a Web Audio gain instead.
+  let masterGain: GainNode | null = null;
+  const routedMedia = new WeakSet<HTMLMediaElement>();
+  function routeThroughVolume(el: HTMLMediaElement, url: string) {
+    el.volume = volume;
+    // A suspended context would silence the clip, and cross-origin clips play silent through Web Audio.
+    if (!audioCtx || audioCtx.state !== 'running' || new URL(url, location.href).origin !== location.origin) return;
+    try {
+      if (!masterGain) {
+        masterGain = audioCtx.createGain();
+        masterGain.connect(audioCtx.destination);
+      }
+      audioCtx.createMediaElementSource(el).connect(masterGain);
+      masterGain.gain.value = volume;
+      el.volume = 1; // The gain does the work; also lowering the element would square the level.
+      routedMedia.add(el);
+    } catch { /* Keep the plain element volume. */ }
+  }
+  function applyVolume() {
+    if (masterGain) masterGain.gain.value = volume;
+    for (const media of questionMedia()) media.volume = routedMedia.has(media) ? 1 : volume;
+    input('#volume-range').value = String(Math.round(volume * 100));
+    $('#volume-value').textContent = `${Math.round(volume * 100)}%`;
+    button('#btn-volume').dataset.icon = volume === 0 ? 'mute' : 'volume';
+  }
+  input('#volume-range').addEventListener('input', () => {
+    volume = Number(input('#volume-range').value) / 100;
+    try { localStorage.setItem(VOLUME_KEY, String(volume)); } catch { /* Not saved; still applies now. */ }
+    applyVolume();
+  });
+  button('#btn-volume').onclick = (event) => {
+    event.stopPropagation();
+    const open = $('#volume-pop').classList.toggle('hidden') === false;
+    button('#btn-volume').setAttribute('aria-expanded', String(open));
+  };
+  document.addEventListener('click', (event) => {
+    if (!(event.target as Element).closest?.('.volume')) {
+      $('#volume-pop').classList.add('hidden');
+      button('#btn-volume').setAttribute('aria-expanded', 'false');
+    }
+  });
+
   /* ---------------- Web Audio cues ---------------- */
   let audioCtx: AudioContext | null = null;
   // Mobile browsers require audio to be unlocked during a user gesture.
@@ -111,7 +161,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       if (secondFreq) {
         osc.frequency.setValueAtTime(secondFreq, audioCtx.currentTime + durationMs / 2000);
       }
-      gain.gain.setValueAtTime(0.14, audioCtx.currentTime);
+      if (volume === 0) return;
+      gain.gain.setValueAtTime(0.14 * volume, audioCtx.currentTime);
       gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + durationMs / 1000);
       osc.connect(gain);
       gain.connect(audioCtx.destination);
@@ -331,10 +382,15 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     if (game.phase === 'lobby') phase.textContent = pack ? pack.name : 'Lobby';
     else if (game.phase === 'gameOver') phase.textContent = 'Game over';
     else if (game.round) {
-      phase.append(Object.assign(document.createElement('b'), { textContent: game.round.name }));
+      // Packs often name rounds "1", "2"…; "2 2/3" would repeat the number, so those read "Round 2 of 3".
+      const numbered = /^\d+$/.test(game.round.name.trim());
+      phase.append(Object.assign(document.createElement('b'), {
+        textContent: numbered ? `Round ${game.round.name.trim()}` : game.round.name,
+      }));
       if (pack?.rounds.length) {
         phase.append(Object.assign(document.createElement('span'), {
-          className: 'round-count', textContent: `${game.roundIndex + 1}/${pack.rounds.length}`,
+          className: 'round-count',
+          textContent: numbered ? `of ${pack.rounds.length}` : `${game.roundIndex + 1}/${pack.rounds.length}`,
         }));
       }
     }
@@ -989,6 +1045,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   }
   sideScoreboard.addEventListener('change', placeScoreboard);
   placeScoreboard();
+  applyVolume();
 
   // Popover menus close when the user clicks elsewhere, like any menu.
   document.addEventListener('click', (event) => {
@@ -1269,6 +1326,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
 
   /* ---------------- board & question ---------------- */
 
+  const isIntro = (game: RoomState['game']) => game.phase === 'reading' && game.timer?.name === 'intro';
+
   function renderBoard() {
     const state = activeState();
     const { game, you } = state;
@@ -1296,7 +1355,9 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       });
       return;
     }
-    if (game.phase !== 'board') {
+    // During the intro the board stays up with the chosen cell flashing, like the show.
+    const intro = isIntro(game);
+    if (game.phase !== 'board' && !intro) {
       // Between questions the table shows where the game stands instead of disappearing.
       if (game.current || !game.round) return;
       board.style.gridTemplateColumns = '1fr';
@@ -1314,7 +1375,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     board.style.setProperty('--cols', String(cols));
     board.style.setProperty('--rows', String(game.board.length));
     board.style.setProperty('--phone-cols', String(Math.min(cols, 5)));
-    const canPick = you.canModerate || you.id === game.chooserId;
+    const canPick = !intro && (you.canModerate || you.id === game.chooserId);
     game.board.forEach((theme, t) => {
       const title = Object.assign(document.createElement('div'), { className: 'theme', textContent: theme.name, title: theme.name });
       // Hyphenation needs the text's language; packs here are mostly Russian or English.
@@ -1323,7 +1384,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       for (let q = 0; q < cols; q++) {
         const cell = theme.questions[q];
         const el = document.createElement(cell?.available && canPick ? 'button' : 'div');
-        el.className = 'cell' + (cell?.available ? '' : ' used');
+        const chosen = intro && game.current?.themeIndex === t && game.current?.questionIndex === q;
+        el.className = 'cell' + (chosen ? ' chosen' : cell?.available ? '' : ' used');
         el.textContent = String(cell?.price ?? '');
         if (cell?.available && canPick) {
           el.setAttribute('type', 'button');
@@ -1343,6 +1405,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     const el = document.createElement(type);
     // Pack media starts with the question; show a tap button only if autoplay is blocked.
     el.preload = 'auto';
+    routeThroughVolume(el, url);
     el.autoplay = autoStart && state?.game.phase !== 'paused' &&
       state?.game.phase !== 'answering' && !previous?.paused;
     if (el instanceof HTMLVideoElement) {
@@ -1465,6 +1528,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   let presenterId: string | null = null;
   let presenterFinishedId: string | null = null;
   let presenterAckingId: string | null = null;
+  // Set when the question's last clip has played to the end on this device.
+  let mediaEndedId: string | null = null;
   let previousContentMedia = new Map<number, { paused: boolean; currentTime: number }>();
   // A tapped but unsent picture answer survives re-renders until the player submits it.
   let pendingPick: { presentationId: string; x: number; y: number } | null = null;
@@ -1532,9 +1597,11 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     if (!state?.you?.canModerate || state.game.phase !== 'reading' || !socket.connected) return;
     const current = state.game.current;
     if (!current || presenterFinishedId !== current.presentationId ||
-        presenterAckingId === current.presentationId ||
-        !current.content.some((item) =>
-          (item.type === 'audio' || item.type === 'video') && item.waitForFinish)) return;
+        presenterAckingId === current.presentationId) return;
+    // Blocking clips end the script themselves; other clips count once the last one has played out.
+    const isClip = (item: ContentItem) => item.type === 'audio' || item.type === 'video';
+    const blocking = current.content.some((item) => isClip(item) && item.waitForFinish);
+    if (!blocking && !(current.content.some(isClip) && mediaEndedId === current.presentationId)) return;
     presenterAckingId = current.presentationId;
     socket.emit('game:contentFinished', { presentationId: current.presentationId }, () => {
       presenterAckingId = null;
@@ -1549,6 +1616,15 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     if (active && isTextItem(item)) {
       // The presenter controls timing; updating one text node avoids restarting this item.
       return (visibleText: string) => { element.textContent = visibleText; fitText(slots.prompt); };
+    }
+    const clip = element.querySelector<HTMLMediaElement>('audio, video');
+    const content = activeState().game.current?.content ?? [];
+    const lastClip = content.reduce((last, entry, i) => entry.type === 'audio' || entry.type === 'video' ? i : last, -1);
+    if (active && clip && index === lastClip) {
+      const id = presenterId;
+      const ended = () => { mediaEndedId = id; acknowledgePresentedContent(); };
+      clip.addEventListener('ended', ended, { once: true });
+      clip.addEventListener('error', ended, { once: true });
     }
     if (active && (item.type === 'audio' || item.type === 'video') && item.waitForFinish) {
       const media = element.querySelector<HTMLMediaElement>('audio, video');
@@ -1631,7 +1707,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     const { game, you } = state;
     const c = game.current;
     const box = $('#question');
-    box.classList.toggle('hidden', !c);
+    box.classList.toggle('hidden', !c || isIntro(game));
+    if (c && isIntro(game)) return; // The card appears when reading starts, after the chosen-cell flash.
 
     // Update glowing border frame around question card to match stage
     box.classList.remove('frame-reading', 'frame-open', 'frame-answering');
@@ -1647,6 +1724,13 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       renderedQuestionKey = null;
       stageSlots = null;
       decorateStage = null;
+      // A hidden card keeps playing its clips, so Next must stop and drop them on every device.
+      box.querySelectorAll<HTMLMediaElement>('audio, video').forEach((media) => {
+        media.pause();
+        media.removeAttribute('src');
+        media.load();
+      });
+      box.replaceChildren();
       delete box.dataset.questionId;
       return;
     }
@@ -1825,7 +1909,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       $('#stage-progress-fill').style.width = `${pct}%`;
       // The table frame is the clock: its lit edge drains as the countdown runs.
       const stage = $('#game-stage');
-      stage.classList.toggle('timed', !!t && remMs > 0);
+      stage.classList.toggle('timed', !!t && remMs > 0 && t.name !== 'intro');
       stage.style.setProperty('--left', String(pct / 100));
       const chooser = game.chooserId === you.id ? 'You' : nameOf(game.chooserId);
       const canPick = you.canModerate || game.chooserId === you.id;
@@ -1956,6 +2040,58 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     if (!state?.game) return;
     updateOrientiers();
   }, 100);
+
+  /*
+   * While a question is read, its words light up in step with the reading clock (the same clock
+   * the table frame drains), so players see how far the host has got. A short fading edge runs
+   * ahead of the lit text every frame, so the sweep glides instead of stepping a letter at a time.
+   */
+  const READ_EDGE = 8;
+  function paintReadingProgress() {
+    const s = state;
+    if (!s?.game.current || !stageSlots || s.settings.partialText) return;
+    if (s.game.phase === 'paused') return; // Keep the highlight where the pause froze it.
+    const t = s.game.timer;
+    const reading = s.game.phase === 'reading' && t?.name === 'reading' && t.durationMs > 0;
+    const lines = [...stageSlots.prompt.querySelectorAll<HTMLElement>('.slot-item > p')];
+    const fullText = (p: HTMLElement) => (p.dataset.full ??= p.textContent ?? '');
+    const total = lines.reduce((sum, p) => sum + fullText(p).length, 0);
+    const done = reading && t ? Math.min(1, Math.max(0, 1 - (t.endsAt - nowServer()) / t.durationMs)) : 1;
+    // Stretch the sweep so the fading edge also finishes exactly when the clock does.
+    const progress = done * (total + READ_EDGE);
+    let offset = 0;
+    for (const p of lines) {
+      const full = fullText(p);
+      const local = progress - offset;
+      offset += full.length;
+      const finished = !reading || local >= full.length + READ_EDGE;
+      const key = finished ? 'full' : (Math.round(local * 8) / 8).toFixed(3);
+      if (p.dataset.lit === key) continue;
+      p.dataset.lit = key;
+      if (finished) {
+        p.textContent = full;
+        continue;
+      }
+      const lit = Math.max(0, Math.floor(local - READ_EDGE));
+      const parts: (string | HTMLElement)[] = [full.slice(0, lit)];
+      const edgeEnd = Math.min(full.length, Math.max(0, Math.ceil(local)));
+      for (let i = lit; i < edgeEnd; i++) {
+        // 1 at the lit side, falling to 0 at the reading point.
+        const k = Math.min(1, Math.max(0, (local - i) / READ_EDGE));
+        const char = Object.assign(document.createElement('span'), { textContent: full[i] });
+        char.style.color = `color-mix(in srgb, var(--paper) ${Math.round(36 + 64 * k)}%, transparent)`;
+        parts.push(char);
+      }
+      parts.push(Object.assign(document.createElement('span'), { className: 'unread', textContent: full.slice(edgeEnd) }));
+      p.replaceChildren(...parts);
+    }
+  }
+  const readingFrame = () => {
+    paintReadingProgress();
+    requestAnimationFrame(readingFrame);
+  };
+  requestAnimationFrame(readingFrame);
+
 
   /* ---------------- controls ---------------- */
 

@@ -27,7 +27,8 @@ function game(t) {
     return p;
   });
   room.setPack({ ...loaded, pack: structuredClone(loaded.pack) });
-  room.updateSettings(host.id, { gameMode: 'classic' });
+  // These cases check reading timers directly, so skip the chosen-cell intro.
+  room.updateSettings(host.id, { gameMode: 'classic', timeForQuestionIntro: 0 });
   room.engine.start();
   players.forEach((p) => { p.score = 600; });
   t.after(() => {
@@ -190,14 +191,15 @@ test('waitForFinish media advances only from the current presentation acknowledg
   assert.equal(engine.phase, 'buzzerOpen', 'manual host opening still works');
 });
 
-test('ordinary media retains automatic reading timer; for-all wait media opens answer slots on acknowledgment', (t) => {
+test('ordinary media keeps its reading timer but opens buzzers early once the clip ends; for-all wait media opens answer slots', (t) => {
   const { room, host } = game(t);
   const engine = room.engine;
   const questions = room.loadedPack.pack.rounds[0].themes[0].questions;
   questions[0].content = [{ type: 'audio', value: 'short', waitForFinish: false, duration: 1 }];
   engine.selectQuestion(host.id, true, 0, 0);
   assert.equal(engine.timer?.name, 'reading');
-  assert.deepEqual(engine.contentFinished(engine.current.presentationId), { advanced: false });
+  assert.deepEqual(engine.contentFinished(engine.current.presentationId), { advanced: true });
+  assert.equal(engine.phase, 'buzzerOpen');
   engine.next();
   questions[1].type = 'forAll';
   questions[1].content = [{ type: 'audio', value: 'long', waitForFinish: true }];

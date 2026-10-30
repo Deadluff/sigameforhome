@@ -498,7 +498,8 @@ export class GameEngine {
     this.roundEndsAt = saved.roundMs == null ? null : Date.now() + saved.roundMs;
     this.scheduleRoundEnd();
     if (saved.timerName && saved.timerMs != null) {
-      const onExpire = saved.timerName === 'reading' ? () =>
+      const onExpire = saved.timerName === 'intro' ? () => this.beginQuestion()
+        : saved.timerName === 'reading' ? () =>
         this.current?.type === 'forAll' ? this.openForAllAnswers() : this.openBuzzer()
         : saved.timerName === 'stake' ? () => this.passStake(this.auctionTurnId())
         : saved.timerName === 'forAll' ? () => this.closeForAllAnswers()
@@ -735,7 +736,16 @@ export class GameEngine {
     }
     this.phase = PHASES.READING;
     this.room.emitEvent({ type: 'questionSelected', themeIndex, questionIndex, price: question.price });
+    // Like the show, the chosen cell flashes on the board for a moment before the question is read.
+    if (this.settings.timeForQuestionIntro > 0) {
+      this.startTimer('intro', this.settings.timeForQuestionIntro, () => this.beginQuestion());
+    } else this.beginQuestion();
+  }
 
+  /** Starts reading (or opens buttons at once when false starts are off). */
+  beginQuestion(): void {
+    if (this.phase !== PHASES.READING || !this.current) return;
+    const question = this.current.question;
     if (!this.settings.falseStart && !this.hasWaitForFinishMedia(question)) {
       const totalSeconds = this.estimateReadingSeconds(question) + this.settings.timeForThinkingOnQuestion;
       this.openBuzzer(totalSeconds);
@@ -1022,10 +1032,11 @@ export class GameEngine {
       this.current?.type === 'forAll' ? this.openForAllAnswers() : this.openBuzzer());
   }
 
+  /** The host's device reports that the question's media ended; buzzers open then instead of on an estimate. */
   contentFinished(presentationId: string): { advanced: boolean } {
     if (this.phase !== PHASES.READING || !this.current ||
         this.current.presentationId !== presentationId ||
-        !this.hasWaitForFinishMedia(this.current.question)) return { advanced: false };
+        !this.current.question.content.some((item) => item.type === 'audio' || item.type === 'video')) return { advanced: false };
     if (this.current.type === 'forAll') this.openForAllAnswers();
     else this.openBuzzer();
     return { advanced: true };
@@ -1126,7 +1137,8 @@ export class GameEngine {
     if (!player || player.role !== ROLES.PLAYER) return { result: 'ignored' };
 
     if (this.phase === PHASES.READING) {
-      if (this.isAssignedQuestion()) return { result: 'ignored' };
+      // The question is not on screen during the intro, so a press then is not a false start.
+      if (this.isAssignedQuestion() || this.timer?.name === 'intro') return { result: 'ignored' };
       if (!this.settings.falseStart) {
         this.openBuzzer();
         return this.buzz(playerId, meta);

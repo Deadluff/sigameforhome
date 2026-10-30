@@ -58,6 +58,14 @@
             <button data-act="game:stop" id="btn-stop" type="button" class="quiet icon-only" data-icon="stop" title="Stop game"><span class="label">Stop game</span></button>
           </span>
         </span>
+        <!-- Volume is per device: the TV can be loud while phones stay quiet. -->
+        <span class="volume">
+          <button id="btn-volume" type="button" class="quiet icon-only" data-icon="volume" title="Sound volume" aria-expanded="false" aria-controls="volume-pop"><span class="label">Sound volume</span></button>
+          <span id="volume-pop" class="volume-pop hidden">
+            <input id="volume-range" type="range" min="0" max="100" step="5" aria-label="Sound volume" />
+            <output id="volume-value" for="volume-range"></output>
+          </span>
+        </span>
         <!-- Everyone should know who runs the game, including when nobody does yet. -->
         <span id="host-chip" class="host-chip"></span>
         <span id="me" class="me-chip"></span>

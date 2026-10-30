@@ -146,6 +146,9 @@ export function audioCue(media: () => HTMLMediaElement[]): HTMLButtonElement {
     const playing = media().some((item) => !item.paused && !item.ended);
     cue.classList.toggle('playing', playing);
     label.textContent = playing ? 'Listen' : 'Tap to play the sound';
+    // While sound plays the meter is just a picture; it is a control only when playback was blocked.
+    cue.tabIndex = playing ? -1 : 0;
+    cue.setAttribute('aria-disabled', String(playing));
   };
   cue.onclick = () => {
     for (const item of media()) if (item.paused && !item.ended) item.play().catch(() => {});

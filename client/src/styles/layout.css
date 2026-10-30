@@ -21,6 +21,14 @@
 .topbar-round .round-count { margin-left: 8px; color: var(--mist); font-variant-numeric: tabular-nums; }
 .topbar-round { flex: 0 1 auto; min-width: 0; color: var(--mist); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .topbar-round b { color: var(--paper); font-weight: 800; }
+.volume { position: relative; flex: none; }
+.volume-pop {
+  position: absolute; z-index: 25; top: calc(100% + 8px); right: 0; display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; border-radius: 999px; background: var(--set-sunk); border: 1px solid rgba(167, 177, 234, .45);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, .55);
+}
+.volume-pop input[type="range"] { width: 150px; accent-color: var(--lamp); }
+.volume-pop output { min-width: 3.5ch; color: var(--mist); font-weight: 700; font-variant-numeric: tabular-nums; }
 .host-tools { display: inline-flex; align-items: center; gap: 2px; flex: none; }
 .host-chip {
   display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 30vw;

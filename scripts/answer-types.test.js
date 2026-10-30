@@ -174,3 +174,12 @@ test('the host can award half or double the value for a correct answer', (t) => 
   second.room.engine.judge(true, 2);
   assert.equal(second.bob.score, 600);
 });
+
+test('a chosen question pauses on the board before reading, and early presses are not false starts', (t) => {
+  const { room, alice } = createRoom(t, { timeForQuestionIntro: 2 });
+  room.engine.selectQuestion(null, true, 0, 2);
+  assert.equal(room.engine.timer?.name, 'intro');
+  assert.equal(room.engine.buzz(alice.id).result, 'ignored');
+  room.engine.beginQuestion();
+  assert.equal(room.engine.timer?.name, 'reading');
+});
