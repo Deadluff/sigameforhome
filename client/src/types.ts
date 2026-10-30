@@ -49,6 +49,7 @@ export interface RoomState {
     timeOfRound: number;
     timeForMediaDelay: number;
     timeForQuestionIntro: number;
+    timeForQuestionReady: number;
     buzzSyncMode: 'server' | 'clientTimestamp';
     buzzSyncWindowMs: number;
     maxPlayers: number;

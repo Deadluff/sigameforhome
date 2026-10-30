@@ -513,6 +513,7 @@ export class GameEngine {
     this.scheduleRoundEnd();
     if (saved.timerName && saved.timerMs != null) {
       const onExpire = saved.timerName === 'intro' ? () => this.beginQuestion()
+        : saved.timerName === 'ready' ? () => this.startQuestionReading()
         : saved.timerName === 'reading' ? () =>
         this.current?.type === 'forAll' ? this.openForAllAnswers() : this.openBuzzer()
         : saved.timerName === 'stake' ? () => this.passStake(this.auctionTurnId())
@@ -750,7 +751,7 @@ export class GameEngine {
     if (!this.current || (this.phase !== PHASES.INTRO && this.phase !== PHASES.BOARD)) return;
     // A host skip arrives while the intro timer is still set; the next step starts its own timers.
     this.clearTimer();
-    const { themeIndex, questionIndex, question } = this.current;
+    const { themeIndex, questionIndex } = this.current;
     if (this.current.type === 'stake') {
       // Everyone may have left during the intro. Put the cell back instead of auctioning to nobody.
       if (!this.activePlayers().length) {
@@ -765,8 +766,7 @@ export class GameEngine {
       // Every player connected when the question starts gets a private answer slot.
       this.forAll = { eligibleIds: this.activePlayers().map((p) => p.id), answers: new Map(), judged: new Set() };
       this.drafts = new Map();
-      this.phase = PHASES.READING;
-      this.startReading(question);
+      this.presentQuestion();
       return;
     }
     if (this.isAssignedQuestion()) {
@@ -775,8 +775,30 @@ export class GameEngine {
       this.room.emitEvent({ type: 'specialSetup', themeIndex, questionIndex });
       return;
     }
+    this.presentQuestion();
+  }
+
+  /**
+   * Shows the question with a get-ready countdown so players can read ahead and settle on their
+   * buttons. Every question type comes here once its twist (auction, secret, gift) is settled.
+   */
+  presentQuestion(): void {
+    if (this.settings.timeForQuestionReady > 0) {
+      this.phase = PHASES.READY;
+      this.startTimer('ready', this.settings.timeForQuestionReady, () => this.startQuestionReading());
+    } else this.startQuestionReading();
+  }
+
+  /** Ends the countdown: reading starts, or buttons open at once when false starts are off. */
+  startQuestionReading(): void {
+    if (!this.current) return;
+    // A host skip arrives while the ready timer is still set; the next step starts its own timers.
+    this.clearTimer();
+    const { question } = this.current;
     this.phase = PHASES.READING;
-    if (!this.settings.falseStart && !this.hasWaitForFinishMedia(question)) {
+    // Only buzzer questions may skip reading; for-all and assigned questions always read first.
+    if (this.current.type !== 'forAll' && !this.isAssignedQuestion() &&
+        !this.settings.falseStart && !this.hasWaitForFinishMedia(question)) {
       const totalSeconds = this.estimateReadingSeconds(question) + this.settings.timeForThinkingOnQuestion;
       this.openBuzzer(totalSeconds);
     } else {
@@ -891,9 +913,8 @@ export class GameEngine {
     }
     this.current.price = auction.amount;
     this.current.assignedId = auction.leaderId;
-    this.phase = PHASES.READING;
     this.room.emitEvent({ type: 'stakeWon', playerId: auction.leaderId, amount: auction.amount });
-    this.startReading(this.current.question);
+    this.presentQuestion();
   }
 
   openForAllAnswers(): void {
@@ -995,8 +1016,7 @@ export class GameEngine {
       this.room.emitEvent({ type: 'giftAwarded', playerId, price });
       return;
     }
-    this.phase = PHASES.READING;
-    this.startReading(question);
+    this.presentQuestion();
   }
 
   setFinalWager(playerId: string, amount: number): void {
@@ -1397,10 +1417,12 @@ export class GameEngine {
   /**
    * The answerer gives up: no points lost, but they are out for this question and the others may
    * still buzz. An assigned question (cat, auction) must be answered, or a bidder could take a
-   * stake and walk away from it for free.
+   * stake and walk away from it for free. The host may pass for the answerer, e.g. when they say
+   * "pass" out loud in oral mode; the same rules apply.
    */
-  passAnswer(playerId: string): void {
-    this.assert(this.phase === PHASES.ANSWERING && this.buzzer.winnerId === playerId,
+  passAnswer(actorId: string, byModerator = false): void {
+    const playerId = this.buzzer.winnerId;
+    this.assert(this.phase === PHASES.ANSWERING && playerId && (byModerator || playerId === actorId),
       'Only the current answerer can pass');
     this.assert(!this.isAssignedQuestion(), 'This question must be answered');
     this.assert(this.buzzer.typedAnswer === null, 'Answer already submitted');
@@ -1566,6 +1588,8 @@ export class GameEngine {
     }
     // During the intro, Next is the host's "skip the pause", not "skip the question".
     if (this.phase === PHASES.INTRO) return this.beginQuestion();
+    // During the countdown, Next starts reading now instead of dropping a question already on screen.
+    if (this.phase === PHASES.READY) return this.startQuestionReading();
     this.assert(QUESTION_PHASES.has(this.phase) || this.phase === PHASES.SPECIAL_SETUP ||
       this.phase === PHASES.STAKE_AUCTION, 'Nothing to continue');
     this.returnToBoard();

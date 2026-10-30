@@ -113,7 +113,7 @@ export function registerSocketHandlers(io: Server, room: Room, limits: SocketLim
             throw new Error('Session is no longer active');
           }
           if (access === 'moderator' && !room.canModerate(pid)) throw new Error('Only the host can do that');
-          if (access === 'manager' && !room.canManage(pid)) throw new Error('Only the host or owner can do that');
+          if (access === 'manager' && !room.canManage(pid)) throw new Error('Only the host can do that');
           const result = await handler((payload ?? ({} as TPayload)), pid ?? '');
           // Ignored repeat buzzes and quiet commands (drafts) do not alter shared state, so no room-wide snapshot.
           if (event.startsWith('game:') &&
@@ -264,7 +264,7 @@ export function registerSocketHandlers(io: Server, room: Room, limits: SocketLim
           buzzer.pending.some((press) => press.playerId === pid)) return { result: 'ignored' };
       return room.engine.buzz(pid, payload);
     });
-    on('game:passAnswer', 'member', (_, pid) => room.engine.passAnswer(pid));
+    on('game:passAnswer', 'member', (_, pid) => room.engine.passAnswer(pid, room.canModerate(pid)));
     on<{ correct: boolean; factor?: number }>('game:judge', 'moderator', ({ correct, factor }) =>
       room.engine.judge(requireBoolean(correct), factor === undefined ? 1 : Number(factor)));
     on<{ presentationId: string; judgmentId: number }>('game:undoJudgment', 'moderator',

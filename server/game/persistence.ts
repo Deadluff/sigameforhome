@@ -71,7 +71,7 @@ export async function restoreRoom(room: Room, stateFile = file): Promise<void> {
       const restoredPhase: Phase = game.phase === PHASES.PAUSED ? game.paused?.phase ?? PHASES.BOARD : game.phase;
       // Replay an interrupted question from the board; scores and prior questions remain.
       if (([PHASES.SPECIAL_SETUP, PHASES.STAKE_AUCTION, PHASES.FOR_ALL_ANSWERING, PHASES.FOR_ALL_JUDGE,
-        PHASES.APPEAL_VOTE, PHASES.INTRO,
+        PHASES.APPEAL_VOTE, PHASES.INTRO, PHASES.READY,
         PHASES.READING, PHASES.BUZZER_OPEN, PHASES.ANSWERING,
         PHASES.FINAL_WAGER, PHASES.FINAL_QUESTION, PHASES.FINAL_JUDGE] as Phase[]).includes(restoredPhase) && game.current) {
         room.engine.played.delete(`${game.roundIndex}:${game.current.themeIndex}:${game.current.questionIndex}`);

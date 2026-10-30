@@ -30,7 +30,7 @@ function game(t) {
   pack.rounds[0].themes[0].questions[0].type = 'forAll';
   pack.rounds[0].themes[0].questions[1].type = 'forAll';
   room.setPack({ ...loaded, pack });
-  room.updateSettings(host.id, { gameMode: 'classic', timeForQuestionIntro: 0 });
+  room.updateSettings(host.id, { gameMode: 'classic', timeForQuestionIntro: 0, timeForQuestionReady: 0 });
   room.engine.start();
   room.engine.selectQuestion(host.id, true, 0, 0);
   t.after(() => {

@@ -71,7 +71,7 @@ function forAllAnswering(t) {
   const pack = structuredClone(loaded.pack);
   pack.rounds[0].themes[0].questions[0].type = 'forAll';
   room.setPack({ ...loaded, pack });
-  room.updateSettings(host.id, { gameMode: 'classic', timeForQuestionIntro: 0 });
+  room.updateSettings(host.id, { gameMode: 'classic', timeForQuestionIntro: 0, timeForQuestionReady: 0 });
   const engine = room.engine;
   engine.start();
   engine.selectQuestion(host.id, true, 0, 0);

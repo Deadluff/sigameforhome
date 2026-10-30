@@ -27,7 +27,7 @@ function table(t, scores) {
     return player;
   });
   room.setPack({ ...pack, pack: structuredClone(pack.pack) });
-  room.updateSettings(host.id, { gameMode: 'classic', timeForQuestionIntro: 0 });
+  room.updateSettings(host.id, { gameMode: 'classic', timeForQuestionIntro: 0, timeForQuestionReady: 0 });
   room.engine.start();
   scores.forEach((score, index) => { players[index].score = score; });
   t.after(() => {

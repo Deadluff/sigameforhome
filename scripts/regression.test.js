@@ -37,7 +37,7 @@ function createRoom(t, gameMode = 'simple', modifyPack = () => {}) {
   const pack = structuredClone(loaded.pack);
   modifyPack(pack);
   room.setPack({ ...loaded, pack });
-  room.updateSettings(host.id, { gameMode, timeForQuestionIntro: 0 });
+  room.updateSettings(host.id, { gameMode, timeForQuestionIntro: 0, timeForQuestionReady: 0 });
   room.engine.start();
   // Engine timers keep Node alive after an assertion unless explicitly cleared.
   t.after(() => {

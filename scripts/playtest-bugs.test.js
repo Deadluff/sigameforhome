@@ -26,7 +26,7 @@ function lobby(t) {
     return player;
   });
   room.setPack(loaded);
-  room.updateSettings(host.id, { gameMode: 'classic', timeForQuestionIntro: 0 });
+  room.updateSettings(host.id, { gameMode: 'classic', timeForQuestionIntro: 0, timeForQuestionReady: 0 });
   t.after(() => {
     room.engine.reset();
     for (const timer of room.removalTimers.values()) clearTimeout(timer);
@@ -133,6 +133,23 @@ test('the answerer passes: no penalty, out for this question, buttons reopen for
   assert.equal(room.players().every((p) => p.score === 0), true);
 });
 
+test('the host can pass for the answerer under the same rules', (t) => {
+  const { host, players: [alice, bob], engine } = lobby(t);
+  engine.start();
+  engine.selectQuestion(host.id, true, 0, 0);
+  engine.openBuzzer();
+  assert.throws(() => engine.passAnswer(host.id, true), /Only the current answerer/, 'nobody is answering yet');
+  engine.buzz(alice.id);
+  engine.passAnswer(host.id, true);
+  assert.equal(alice.score, 0);
+  assert.equal(engine.phase, 'buzzerOpen');
+  assert.equal(engine.buzz(alice.id).result, 'ignored', 'the passed player is out for this question');
+
+  engine.buzz(bob.id);
+  engine.current.type = 'secret';
+  assert.throws(() => engine.passAnswer(host.id, true), /must be answered/);
+});
+
 test('an assigned question cannot be passed', (t) => {
   const { host, players: [alice], engine } = lobby(t);
   engine.start();
@@ -141,4 +158,24 @@ test('an assigned question cannot be passed', (t) => {
   engine.buzz(alice.id);
   engine.current.type = 'secret';
   assert.throws(() => engine.passAnswer(alice.id), /must be answered/);
+});
+
+test('the admin panel (packs and settings) belongs to the host, not an owner who sits as a player', (t) => {
+  const room = new Room();
+  const owner = room.join('Owner').participant;
+  room.attach(owner.id, 'owner');
+  room.chooseInitialRole(owner.id, 'player');
+  const host = rejoin(room, 'Host', 'host');
+  t.after(() => {
+    room.engine.reset();
+    for (const timer of room.removalTimers.values()) clearTimeout(timer);
+  });
+  // With no host yet, the owner runs the room and picks the pack.
+  assert.equal(room.canManage(owner.id), true);
+  room.setRole(owner.id, host.id, 'host');
+
+  assert.equal(room.canManage(host.id), true);
+  assert.equal(room.canManage(owner.id), false);
+  assert.equal(room.snapshotFor(owner.id).you.canManage, false);
+  assert.throws(() => room.updateSettings(owner.id, { oral: true }), /Only the host/);
 });

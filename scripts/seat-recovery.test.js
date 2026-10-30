@@ -32,7 +32,7 @@ function lostPhone(t) {
   const alice = room.join('Alice').participant;
   room.attach(alice.id, 'alice-old');
   room.setPack(loaded);
-  room.updateSettings(host.id, { gameMode: 'classic', timeForQuestionIntro: 0 });
+  room.updateSettings(host.id, { gameMode: 'classic', timeForQuestionIntro: 0, timeForQuestionReady: 0 });
   room.engine.start();
   alice.score = 300;
   room.engine.chooserId = alice.id;

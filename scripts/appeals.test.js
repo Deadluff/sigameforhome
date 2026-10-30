@@ -27,7 +27,7 @@ function game(t, type = 'simple') {
   const pack = structuredClone(loaded.pack);
   pack.rounds[0].themes[0].questions[0].type = type;
   room.setPack({ ...loaded, pack });
-  room.updateSettings(host.id, { gameMode: 'classic', timeForQuestionIntro: 0 });
+  room.updateSettings(host.id, { gameMode: 'classic', timeForQuestionIntro: 0, timeForQuestionReady: 0 });
   room.engine.start();
   room.engine.selectQuestion(host.id, true, 0, 0);
   t.after(() => {

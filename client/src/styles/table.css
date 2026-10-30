@@ -180,6 +180,19 @@ button.btn-ready[aria-pressed="true"], button.btn-ready[aria-pressed="true"]:not
 }
 #question .q-meta .q-type { display: inline-block; margin-left: 8px; padding: 1px 10px; border-radius: 999px; background: var(--set-sunk); color: var(--paper); font-size: var(--t-xs); vertical-align: 1px; }
 #question p { margin: 0; }
+/* Get-ready strip: the question is already up, this counts down to reading. Its bar drains on the
+   server clock (set by script every tick), so every screen ends the countdown together. */
+#question .q-ready {
+  position: relative; display: flex; align-items: baseline; justify-content: center; gap: 12px;
+  margin: 0 auto; padding: 6px 22px 10px; border-radius: 999px; overflow: hidden;
+  background: var(--lamp); color: var(--on-lamp); font-weight: 800;
+}
+#question .q-ready-label { font-size: clamp(16px, 1.8vw, 26px); letter-spacing: .02em; }
+#question .q-ready-count { font-size: clamp(24px, 3vw, 44px); line-height: 1; font-variant-numeric: tabular-nums; min-width: 1ch; }
+#question .q-ready-bar {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: var(--on-lamp); opacity: .55;
+  transform-origin: left; transition: transform .1s linear;
+}
 
 /* The prompt is the headline of the screen: big, pinned at the top, shrunk by script only if it must. */
 .q-prompt {

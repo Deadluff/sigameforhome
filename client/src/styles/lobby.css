@@ -60,6 +60,8 @@
 .setting-toggle small { display: block; color: var(--mist); font-weight: 600; }
 /* A brief mark after the room accepts a change; settings otherwise save without any sign. */
 .field.saved > span:first-child::after, .setting-toggle.saved strong::after { content: " · Saved"; color: var(--ok-hover); }
+/* CSS text follows the page language that i18n.ts sets on <html>. */
+:root:lang(uk) .field.saved > span:first-child::after, :root:lang(uk) .setting-toggle.saved strong::after { content: " · Збережено"; }
 
 
 @media (max-width: 860px) {

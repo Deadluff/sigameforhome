@@ -116,10 +116,12 @@ export class Room extends EventEmitter {
     return pid === this.ownerId && (!host || (!host.connected && handoverReady(this, host.id)));
   }
 
-  /** Pack/settings management: moderators and the owner. */
+  /**
+   * Pack/settings management (the admin panel). Host only: an owner who sits as a player no longer
+   * gets it. The owner still manages while standing in for a missing host, because canModerate covers that.
+   */
   canManage(pid: string | null | undefined): boolean {
-    return !!pid && !this.participants.get(pid)?.displayOnly &&
-      (pid === this.ownerId || this.canModerate(pid));
+    return this.canModerate(pid);
   }
 
   /* ------------------------------------------------------------ sessions */
@@ -392,7 +394,7 @@ export class Room extends EventEmitter {
   /* ---------------------------------------------------- settings & packs */
 
   updateSettings(actorId: string, patch: Partial<Record<string, unknown>>): void {
-    if (!this.canManage(actorId)) throw new Error('Only the host or owner can change settings');
+    if (!this.canManage(actorId)) throw new Error('Only the host can change settings');
     const next = applySettingsPatch(this.settings, patch);
     // Switching answer input while a question is live would strand the current answerer.
     if (next.oral !== this.settings.oral &&

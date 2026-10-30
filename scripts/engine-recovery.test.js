@@ -28,7 +28,7 @@ function game(t) {
   });
   room.setPack({ ...loaded, pack: structuredClone(loaded.pack) });
   // These cases check reading timers directly, so skip the chosen-cell intro.
-  room.updateSettings(host.id, { gameMode: 'classic', timeForQuestionIntro: 0 });
+  room.updateSettings(host.id, { gameMode: 'classic', timeForQuestionIntro: 0, timeForQuestionReady: 0 });
   room.engine.start();
   players.forEach((p) => { p.score = 600; });
   t.after(() => {

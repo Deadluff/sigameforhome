@@ -51,6 +51,8 @@
 .player.tried > :not(.player-menu, .replic) { opacity: .7; }
 .player.off > :not(.player-menu) { opacity: .5; }
 .player.you b::after { content: " (you)"; color: var(--mist); font-weight: 600; }
+/* CSS text follows the page language that i18n.ts sets on <html>. */
+:root:lang(uk) .player.you b::after { content: " (ви)"; }
 
 /*
  * Scoreboard podiums lie flat (avatar beside name and score) so the row costs about half the

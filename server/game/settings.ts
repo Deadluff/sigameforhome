@@ -37,6 +37,7 @@ export interface GameSettings {
   timeForBlockingButton: number;
   timeForMediaDelay: number;
   timeForQuestionIntro: number;
+  timeForQuestionReady: number;
 }
 
 export interface BooleanSettingSchema {
@@ -118,6 +119,7 @@ export const SETTINGS_SCHEMA: Record<keyof GameSettings, SettingSchemaEntry> = O
   timeForBlockingButton: int(3, 0, 10, 'Button block after false start'),
   timeForMediaDelay: int(0, 0, 10, 'Delay before media playback'),
   timeForQuestionIntro: int(2, 0, 5, 'Pick reveal: seconds the chosen cell stays lit before the question'),
+  timeForQuestionReady: int(3, 0, 10, 'Get ready: seconds the question is shown with a countdown before reading'),
 });
 
 export function defaultSettings(): GameSettings {

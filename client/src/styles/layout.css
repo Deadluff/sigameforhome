@@ -85,6 +85,15 @@
 .host-banner[hidden], .connection-notice[hidden], #connection-reclaim[hidden] { display: none; }
 .keep-awake { display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 700; white-space: nowrap; }
 .keep-awake[hidden], #btn-fullscreen[hidden] { display: none; }
+/* Language switch (join card and sound menu): the active language carries the lamp underline. */
+.lang-switch { display: flex; gap: 4px; }
+.lang-switch button[aria-pressed="true"] { color: var(--paper); box-shadow: inset 0 -2px 0 var(--lamp); }
+.lang-switch button[aria-pressed="false"] { color: var(--mist); }
+/* The sound menu gains a second row for the language, so it becomes a grid: mute, range and level stay on one line. */
+.volume-pop { display: grid; grid-template-columns: auto auto auto; }
+.volume-pop .keep-awake, .volume-pop .lang-switch { grid-column: 1 / -1; }
+.volume-pop .lang-switch { justify-content: flex-end; }
+.entry-card .lang-switch { align-self: center; }
 #connection-status { padding: 10px 14px; border-radius: var(--r-control); background: var(--warn-bg); border: 1px solid var(--lamp); font-weight: 700; }
 
 .stage-layout { display: grid; grid-template-columns: 264px minmax(0, 1fr); gap: var(--gap); align-items: stretch; }

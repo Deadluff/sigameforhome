@@ -3,6 +3,7 @@
  * picture pins and the target ring, option tiles, text that shrinks to fit, and the audio cue.
  * They only build DOM; game state and sockets stay in app.ts.
  */
+import { t } from './i18n';
 import type { ContentItem } from './types';
 
 export interface Pin {
@@ -66,7 +67,7 @@ export function drawRing(frame: HTMLElement, target: { x: number; y: number }, d
 export function makePickable(frame: HTMLElement, onPick: (point: { x: number; y: number }) => void): void {
   frame.classList.add('pickable');
   frame.setAttribute('role', 'button');
-  frame.setAttribute('aria-label', 'Tap the picture where the answer is');
+  frame.setAttribute('aria-label', t('Tap the picture where the answer is'));
   frame.addEventListener('click', (event) => {
     const box = frame.getBoundingClientRect();
     if (!box.width || !box.height) return;
@@ -147,7 +148,7 @@ export function audioCue(media: () => HTMLMediaElement[]): HTMLButtonElement {
     cue.classList.toggle('playing', playing);
     // A muted clip still plays here when the room's sound comes from the host or TV screen.
     const muted = media().some((item) => item.muted);
-    label.textContent = playing ? (muted ? 'Listen to the host screen' : 'Listen') : 'Tap to play the sound';
+    label.textContent = playing ? (muted ? t('Listen to the host screen') : t('Listen')) : t('Tap to play the sound');
     // While sound plays the meter is just a picture; it is a control only when playback was blocked.
     cue.tabIndex = playing ? -1 : 0;
     cue.setAttribute('aria-disabled', String(playing));
