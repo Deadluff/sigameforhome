@@ -13,6 +13,15 @@
 .round-arrow { flex: none; min-width: 40px; min-height: 40px; padding: 4px 10px; font: 700 var(--t-l)/1 var(--font-display); }
 .topbar-round { flex: 0 1 auto; min-width: 0; color: var(--mist); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .topbar-round b { color: var(--paper); font-weight: 800; }
+.host-chip {
+  display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 30vw;
+  padding: 4px 12px 4px 4px; border-radius: 999px; background: var(--set); border: 1px solid var(--rule);
+  color: var(--mist); font-size: var(--t-xs); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.host-chip .avatar { width: 28px; height: 28px; font-size: 11px; }
+.host-chip.vacant { padding: 6px 12px; border-style: dashed; }
+.host-chip.vacant:has(button) { max-width: none; padding: 3px 3px 3px 12px; overflow: visible; }
+.host-chip button { min-height: 30px; padding: 4px 12px; border-radius: 999px; }
 .me-chip { display: inline-flex; align-items: center; gap: 8px; min-width: 0; font-weight: 800; white-space: nowrap; }
 .me-chip .role { padding: 2px 8px; border-radius: 999px; background: var(--set-raised); color: var(--mist); font-size: var(--t-xs); font-weight: 700; }
 #connection-status:empty { display: none; }
@@ -57,6 +66,9 @@
   .brand { font-size: var(--t-m); }
   .topbar-round { font-size: var(--t-xs); }
   .me-chip .role { display: none; }
+  .host-chip { max-width: 32vw; gap: 6px; padding-right: 8px; }
+  .host-chip .avatar { width: 22px; height: 22px; font-size: 9px; }
+  .host-chip .host-prefix { display: none; }
   #btn-leave { min-height: 36px; padding: 6px 10px; font-size: var(--t-xs); }
   .host-col { grid-template-columns: minmax(0, 1fr); }
   #host-seat { display: none; }

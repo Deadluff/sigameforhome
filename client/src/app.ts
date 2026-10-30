@@ -325,7 +325,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
 
   // Top bar answers "where are we" (round, step) and "who am I"; live timing lives in the status panel.
   function renderTopbar() {
-    const { you, game, pack } = activeState();
+    const { you, game, pack, participants } = activeState();
     const phase = $('#phase');
     phase.replaceChildren();
     if (game.phase === 'lobby') phase.textContent = pack ? pack.name : 'Lobby';
@@ -343,6 +343,23 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     prev.disabled = game.roundIndex <= 0 && game.phase !== 'gameOver';
     next.disabled = game.phase === 'gameOver';
     next.setAttribute('aria-label', pack && game.roundIndex >= pack.rounds.length - 1 ? 'Finish the game' : 'Next round');
+    const host = participants.find((p) => p.role === 'host');
+    const hostChip = $('#host-chip');
+    // Your own chip already says "Host", so the label names someone else or the empty seat.
+    hostChip.classList.toggle('hidden', host?.id === you.id);
+    hostChip.classList.toggle('vacant', !host);
+    hostChip.replaceChildren();
+    // Phones drop the "Hosted by" words but keep the avatar and name.
+    if (host) hostChip.append(avatar(host.id, host.name),
+      Object.assign(document.createElement('span'), { className: 'host-prefix', textContent: 'Hosted by ' }), host.name);
+    else hostChip.textContent = 'No host yet';
+    hostChip.title = host ? `Hosted by ${host.name}` : 'No host yet';
+    // The owner may take the empty seat themselves; the server already allows it in the lobby.
+    if (!host && you.isOwner && game.phase === 'lobby' && !tvMode) {
+      const take = Object.assign(document.createElement('button'), { type: 'button', className: 'small primary', textContent: 'Become host' });
+      take.onclick = () => send('role:set', { targetId: you.id, role: 'host' });
+      hostChip.append(take);
+    }
     const me = $('#me');
     me.replaceChildren();
     if (tvMode) me.textContent = 'TV view';
@@ -918,6 +935,18 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       }
       if (panel.children.length) el.append(actions);
       (hostInColumn && p.role === 'host' ? hostSeat : seats).append(el);
+    }
+    // Before the game, open seats show how many more people can still join as players.
+    if (game.phase === 'lobby') {
+      const free = state.settings.maxPlayers - participants.filter((p) => p.role === 'player').length;
+      for (let i = 0; i < free; i++) {
+        const seat = Object.assign(document.createElement('div'), { className: 'player empty-seat' });
+        seat.setAttribute('aria-label', 'Free player seat');
+        seat.append(Object.assign(document.createElement('span'), { className: 'avatar', textContent: '+' }),
+          Object.assign(document.createElement('b'), { textContent: 'Free seat' }),
+          Object.assign(document.createElement('span'), { className: 'role-label', textContent: 'Scan the code to join' }));
+        seats.append(seat);
+      }
     }
   }
 

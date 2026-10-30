@@ -1,5 +1,6 @@
 /* Contestant podiums: avatar on top, name, lit score window — a desk under the board. */
-.players { display: flex; flex-wrap: nowrap; justify-content: center; gap: 8px; margin: 0; padding-top: 16px; }
+/* Each podium keeps its own height; a taller spectator chip must not stretch the whole row. */
+.players { display: flex; flex-wrap: nowrap; justify-content: center; align-items: flex-start; gap: 8px; margin: 0; padding-top: 16px; }
 @media (max-width: 1100px) { .players { flex-wrap: wrap; } }
 
 .player {
@@ -56,13 +57,13 @@
   justify-items: start; align-items: center; column-gap: 10px; row-gap: 2px;
   width: 240px; padding: 8px 34px 8px 10px; text-align: left;
 }
-.players .player .avatar { grid-area: avatar; width: 44px; height: 44px; font-size: var(--t-s); }
-.players .player .avatar::after { width: 11px; height: 11px; box-shadow: 0 0 0 2px var(--set); }
-.players .player b { grid-area: name; }
-.players .player .score { grid-area: score; justify-self: stretch; width: auto; padding: 3px 8px; font-size: 19px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.players .player .role-label { grid-area: score; }
-.players .player .badge-slot { grid-area: badge; min-height: 0; justify-self: end; max-width: 100%; overflow: hidden; }
-.players .player .badge { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.players .player:not(.role-spectator) .avatar { grid-area: avatar; width: 44px; height: 44px; font-size: var(--t-s); }
+.players .player:not(.role-spectator) .avatar::after { width: 11px; height: 11px; box-shadow: 0 0 0 2px var(--set); }
+.players .player:not(.role-spectator) b { grid-area: name; }
+.players .player:not(.role-spectator) .score { grid-area: score; justify-self: stretch; width: auto; padding: 3px 8px; font-size: 19px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.players .player:not(.role-spectator) .role-label { grid-area: score; }
+.players .player:not(.role-spectator) .badge-slot { grid-area: badge; min-height: 0; justify-self: end; max-width: 100%; overflow: hidden; }
+.players .player:not(.role-spectator) .badge { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Offline seats fade and drop the chip; the grey dot already says it. */
 .players .player.off .off-badge { display: none; }
 .players .player.answering { transform: translateY(-2px); }
@@ -76,8 +77,15 @@
 .verdict-buttons { display: flex; gap: 6px; }
 .verdict-buttons button { min-width: 48px; min-height: 40px; padding: 6px 10px; font-size: var(--t-l); }
 
-/* Spectators are listed, but compact: they are not on the scoreboard. */
-.player.role-spectator { width: auto; min-width: 140px; align-self: end; grid-template-columns: auto minmax(0, 1fr); justify-items: start; align-items: center; padding: 8px 40px 8px 12px; background: transparent; border: 1px dashed var(--rule); text-align: left; }
+/* Open seats keep the podium shape but stay quiet: a dashed outline and a plus. */
+.player.empty-seat { order: 1; background: transparent; border: 2px dashed var(--rule); }
+.player.empty-seat .avatar { background: var(--set-sunk); color: var(--mist); font-size: var(--t-l); }
+.player.empty-seat .avatar::after { display: none; }
+.player.empty-seat b { color: var(--mist); }
+.player.empty-seat .role-label { font-weight: 600; }
+
+/* Spectators are listed, but compact and last: they are not on the scoreboard. */
+.player.role-spectator { order: 2; width: auto; min-width: 140px; align-self: center; grid-template-columns: auto minmax(0, 1fr); justify-items: start; align-items: center; padding: 8px 40px 8px 12px; background: transparent; border: 1px dashed var(--rule); text-align: left; }
 .player.role-spectator .avatar { width: 28px; height: 28px; font-size: 10px; }
 .player.role-spectator .avatar::after { width: 8px; height: 8px; box-shadow: 0 0 0 2px var(--studio); }
 .player.role-spectator .role-label { grid-column: 2; }
@@ -125,9 +133,12 @@
   .players { flex-wrap: nowrap; justify-content: flex-start; overflow-x: auto; padding: 30px 2px 4px; scroll-snap-type: x proximity; }
   .player { flex: none; scroll-snap-align: start; }
   .players .player:not(.role-spectator) { width: 150px; padding: 6px 30px 6px 8px; column-gap: 8px; grid-template-areas: "avatar name" "avatar score"; grid-template-columns: auto minmax(0, 1fr); }
-  .players .player .badge-slot { display: none; }
-  .players .player .avatar { width: 32px; height: 32px; font-size: var(--t-xs); }
-  .players .player .score { font-size: var(--t-m); min-width: 0; padding: 2px 6px; }
+  .players .player:not(.role-spectator) .badge-slot { display: none; }
+  /* On a phone an open seat is just a plus and two words; the join hint would wrap to three lines. */
+  .players .player.empty-seat { width: 124px; }
+  .player.empty-seat .role-label { display: none; }
+  .players .player:not(.role-spectator) .avatar { width: 32px; height: 32px; font-size: var(--t-xs); }
+  .players .player:not(.role-spectator) .score { font-size: var(--t-m); min-width: 0; padding: 2px 6px; }
   .players .player.judging { width: 240px; grid-template-areas: "avatar name" "avatar score" "verdict verdict"; }
   /* On a phone your own score comes first; everyone else scrolls. */
   .player.you { order: -1; }
