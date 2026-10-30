@@ -557,6 +557,8 @@ export class GameEngine {
       'This pack contains special or final questions; choose Simple game mode');
     }
     this.reset();
+    // Readiness is for this start only; back in the lobby everyone confirms again.
+    for (const p of this.room.participants.values()) delete p.ready;
     for (const p of this.room.players()) p.score = 0;
     this.enterRound(0);
   }
@@ -1389,7 +1391,28 @@ export class GameEngine {
     this.recordJudgment(this.buzzer.winnerId, false, delta, price, delta);
     this.buzzer.attempted.add(this.buzzer.winnerId);
     this.room.emitEvent({ type: 'answerJudged', playerId: this.buzzer.winnerId, correct: false, delta });
+    this.continueAfterMiss();
+  }
 
+  /**
+   * The answerer gives up: no points lost, but they are out for this question and the others may
+   * still buzz. An assigned question (cat, auction) must be answered, or a bidder could take a
+   * stake and walk away from it for free.
+   */
+  passAnswer(playerId: string): void {
+    this.assert(this.phase === PHASES.ANSWERING && this.buzzer.winnerId === playerId,
+      'Only the current answerer can pass');
+    this.assert(!this.isAssignedQuestion(), 'This question must be answered');
+    this.assert(this.buzzer.typedAnswer === null, 'Answer already submitted');
+    // A missed written deadline waits for the host's verdict; passing then would dodge the penalty.
+    this.assert(!this.buzzer.typedAnswerClosed, 'Answer time has ended');
+    this.buzzer.attempted.add(playerId);
+    this.room.emitEvent({ type: 'answerPassed', playerId });
+    this.continueAfterMiss();
+  }
+
+  /** After a wrong answer or a pass: reopen the buttons, or end the question when nobody is left. */
+  continueAfterMiss(): void {
     const someoneLeft = this.activePlayers().some((p) => !this.buzzer.attempted.has(p.id));
     if (someoneLeft && !this.isAssignedQuestion()) this.openBuzzer();
     // Nobody can still answer: end the question and show what the answer was.

@@ -170,6 +170,7 @@ export function registerSocketHandlers(io: Server, room: Room, limits: SocketLim
     on<{ targetId?: string; role: Role }>('role:set', 'member', ({ targetId, role }, pid) =>
       room.setRole(pid, targetId ?? pid, role),
     );
+    on<{ ready: boolean }>('player:ready', 'member', ({ ready }, pid) => room.setReady(pid, requireBoolean(ready)));
     on<{ targetId: string }>('participant:kick', 'moderator', ({ targetId }, pid) => room.kick(pid, targetId));
     // The newcomer's socket now speaks for the old seat; Room.giveSeat already broadcast the change.
     on<{ seatId: string; newcomerId: string }>('seat:give', 'moderator', ({ seatId, newcomerId }, pid) => {
@@ -263,6 +264,7 @@ export function registerSocketHandlers(io: Server, room: Room, limits: SocketLim
           buzzer.pending.some((press) => press.playerId === pid)) return { result: 'ignored' };
       return room.engine.buzz(pid, payload);
     });
+    on('game:passAnswer', 'member', (_, pid) => room.engine.passAnswer(pid));
     on<{ correct: boolean; factor?: number }>('game:judge', 'moderator', ({ correct, factor }) =>
       room.engine.judge(requireBoolean(correct), factor === undefined ? 1 : Number(factor)));
     on<{ presentationId: string; judgmentId: number }>('game:undoJudgment', 'moderator',

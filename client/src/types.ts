@@ -5,6 +5,7 @@ export interface Participant {
   score: number;
   connected: boolean;
   displayOnly: boolean;
+  ready: boolean;
   isOwner: boolean;
 }
 
@@ -161,13 +162,14 @@ export type NoPayloadCommand =
   | 'session:leave' | 'packs:list' | 'game:start' | 'game:stop' | 'game:pause' | 'game:resume'
   | 'game:openFinal' | 'game:closeFinal' | 'game:openBuzzer'
   | 'game:reveal' | 'game:next' | 'game:prevRound' | 'game:nextRound' | 'game:stakePass' | 'game:closeForAll'
-  | 'game:appealClose';
+  | 'game:appealClose' | 'game:passAnswer';
 
 export interface CommandPayloads {
   'game:undoJudgment': { presentationId: string; judgmentId: number };
   'game:answer': { answer: string };
   'participant:kick': { targetId: string };
   'participant:rename': { targetId: string; name: string };
+  'player:ready': { ready: boolean };
   'role:choose': { role: 'host' | 'player' };
   'role:set': { targetId: string; role: 'host' | 'player' | 'spectator' };
   'score:adjust': { targetId: string; delta: number };
@@ -197,7 +199,7 @@ export type CommandEvent = NoPayloadCommand | keyof CommandPayloads;
 export type GameEvent =
   | { type: 'answerJudged'; correct: boolean; playerId?: string | null; delta?: number }
   | { type: 'buzzAccepted'; playerId: string; assigned?: boolean }
-  | { type: 'falseStart' | 'stakePass'; playerId: string }
+  | { type: 'falseStart' | 'stakePass' | 'answerPassed'; playerId: string }
   | { type: 'stakeBid'; playerId: string; amount: number; allIn: boolean }
   | { type: 'stakeWon'; playerId: string; amount: number }
   | { type: 'giftAwarded'; playerId: string; price: number }

@@ -40,6 +40,8 @@
 .badge.tried-badge { background: var(--set-sunk); color: var(--mist); }
 .badge.chooser-badge { background: var(--lamp); color: var(--on-lamp); }
 .badge.off-badge { background: var(--set-sunk); color: var(--mist); }
+.badge.ready-badge { background: var(--go); color: var(--on-go); }
+.badge.unready-badge { background: var(--set-sunk); color: var(--mist); }
 
 /* The "picks" badge carries the amber; the outline only marks the seat. */
 .player.chooser { border-color: var(--paper); }

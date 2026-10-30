@@ -136,6 +136,12 @@
 .lobby-table { display: grid; align-content: center; gap: 14px; padding: clamp(20px, 3vw, 40px); border-radius: calc(var(--r-table) - 4px); background: var(--board); text-align: center; }
 .lobby-table h2 { font: 700 clamp(22px, 2.6vw, 38px)/1.2 var(--font-display); text-wrap: balance; }
 .lobby-table > p { max-width: 60ch; margin: 0 auto; color: var(--mist); font-size: var(--t-m); }
+/* The ready toggle sits above the rules so a player sees it first; pressed it turns green. */
+.btn-ready { justify-self: center; min-height: 52px; padding: 12px 32px; font-size: var(--t-m); }
+/* Outranks button.primary and its hover, so the pressed state stays green under the pointer. */
+button.btn-ready[aria-pressed="true"], button.btn-ready[aria-pressed="true"]:not(:disabled):hover {
+  background: var(--go); border-color: var(--go); color: var(--on-go);
+}
 .lobby-table .invite { display: grid; gap: 8px; justify-items: center; margin-top: 6px; }
 .lobby-table .invite > span { color: var(--mist); font-weight: 700; font-size: var(--t-xs); }
 .lobby-table .invite .row { justify-content: center; align-items: center; }

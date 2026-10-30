@@ -13,6 +13,11 @@ export function betweenQuestions(game: Pick<RoomState['game'], 'phase' | 'paused
   return CALM_PHASES.has(game.phase) || (game.phase === 'paused' && CALM_PHASES.has(game.pausedPhase ?? ''));
 }
 
+/** Connected players who have not marked themselves ready; the host is asked before starting without them. */
+export function unreadyPlayers<T extends Pick<RoomState['participants'][number], 'role' | 'connected' | 'ready'>>(participants: T[]): T[] {
+  return participants.filter((p) => p.role === 'player' && p.connected && !p.ready);
+}
+
 /** The remove confirmation names the score, so the host can restore it on the player's new seat. */
 export function removeConfirmBody(p: { name: string; role: string; score: number }): string {
   if (p.role !== 'player') return 'They leave the game right away.';

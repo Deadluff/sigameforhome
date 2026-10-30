@@ -33,6 +33,8 @@ export interface Participant {
   joinedAt: number;
   autoSpectator?: boolean;
   displayOnly?: boolean;
+  /** Lobby only: the player said they are ready to start. Cleared by a role change or a game start. */
+  ready?: boolean;
 }
 
 export interface RoomSnapshot {
@@ -53,6 +55,7 @@ export interface RoomSnapshot {
     connected: boolean;
     isOwner: boolean;
     displayOnly: boolean;
+    ready: boolean;
   }>;
   settings: GameSettings;
   pack: {
@@ -91,6 +94,12 @@ export class Room extends EventEmitter {
 
   host(): Participant | null {
     return [...this.participants.values()].find((p) => p.role === ROLES.HOST) ?? null;
+  }
+
+  /** No live answer, wager or bid: also true for a pause taken at such a moment. */
+  betweenQuestions(): boolean {
+    const phase = this.engine.phase === PHASES.PAUSED ? this.engine.paused?.phase : this.engine.phase;
+    return !!phase && CALM_PHASES.has(phase);
   }
 
   hasFreePlayerSlot(): boolean {
@@ -291,8 +300,9 @@ export class Room extends EventEmitter {
       throw new Error('Invalid role');
     }
     if (target.role === role) return;
-    if (this.engine.phase !== PHASES.LOBBY && role === ROLES.HOST && target.role === ROLES.PLAYER) {
-      throw new Error('A player cannot become host during a game');
+    // A player leaving their seat mid-question would cut into a live answer, wager or bid.
+    if (role === ROLES.HOST && target.role === ROLES.PLAYER && !this.betweenQuestions()) {
+      throw new Error('Wait until the question is over');
     }
 
     const self = actorId === targetId;
@@ -301,7 +311,9 @@ export class Room extends EventEmitter {
     if (role === ROLES.HOST) {
       const host = this.host();
       if (host && host.id !== targetId) throw new Error('The host seat is taken');
-      if (!moderator && !(self && actorId === this.ownerId)) throw new Error('Only the owner can claim the host seat');
+      // An empty host seat is open to anyone. Only the owner could claim it before, so a host who
+      // pressed Leave came back as a plain player and could not get the seat back.
+      if (!moderator && !self) throw new Error('Only the host can appoint a host');
     } else {
       if (!self && !moderator) throw new Error('You cannot change other participants');
       if (role === ROLES.PLAYER && !moderator && this.settings.lockRoom) throw new Error('The room is locked');
@@ -312,14 +324,26 @@ export class Room extends EventEmitter {
       this.engine.auctionTurnId() === targetId;
     target.role = role;
     delete target.autoSpectator;
+    delete target.ready;
     // A released host seat ends that host's wait; an offline new host starts one, or the owner could
     // never moderate (the seat is kept for the whole game and only a moderator can release it).
     if (role === ROLES.HOST && !target.connected) startHandover(this, targetId);
     else clearHandover(this, targetId);
     this.promoteSpectators();
+    // A player who took the host seat mid-game may have held the next pick.
+    if (this.engine.phase !== PHASES.LOBBY) this.engine.ensureConnectedChooser();
     // A reseated bidder cannot act, so let the next eligible player bid immediately.
     if (wasAuctionTurn && role !== ROLES.PLAYER) this.engine.advanceStakeAuction();
     this.engine.advanceForAllAfterRosterChange();
+    this.changed();
+  }
+
+  /** A player marks themselves ready (or not) in the lobby; the host sees it before starting. */
+  setReady(pid: string, ready: boolean): void {
+    const p = this.participants.get(pid);
+    if (p?.role !== ROLES.PLAYER) throw new Error('Only players can mark themselves ready');
+    if (this.engine.phase !== PHASES.LOBBY) throw new Error('The game has already started');
+    p.ready = ready;
     this.changed();
   }
 
@@ -339,9 +363,8 @@ export class Room extends EventEmitter {
     if (seat.connected) throw new Error('That seat is still connected');
     if (newcomer.role === ROLES.HOST || newcomerId === actorId) throw new Error('The host cannot take a player seat');
     if (!newcomer.connected || !newcomer.socketId) throw new Error('The new device is not connected');
+    if (!this.betweenQuestions()) throw new Error('Wait until the question is over');
     const engine = this.engine;
-    const phase = engine.phase === PHASES.PAUSED ? engine.paused?.phase : engine.phase;
-    if (!phase || !CALM_PHASES.has(phase)) throw new Error('Wait until the question is over');
 
     const socketId = newcomer.socketId;
     clearTimeout(this.removalTimers.get(newcomerId));
@@ -503,6 +526,7 @@ export class Room extends EventEmitter {
           connected: p.connected,
           isOwner: p.id === this.ownerId,
           displayOnly: !!p.displayOnly,
+          ready: !!p.ready,
         })),
       settings: this.settings,
       pack: pack && loadedPack ? {

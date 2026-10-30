@@ -7,7 +7,7 @@ import { audioCue, drawPins, drawRing, fitText, imageFrame, makePickable, option
 import { buzzerView, createPressTracker, phaseLabel } from './buzzerFeedback';
 import { createConnectionMonitor, noticeText } from './connection';
 import { fullscreenSupported, toggleFullscreen } from './fullscreen';
-import { betweenQuestions, giveSeatForm, removeConfirmBody, renameForm } from './seatActions';
+import { betweenQuestions, giveSeatForm, removeConfirmBody, renameForm, unreadyPlayers } from './seatActions';
 import { inviteChoices, resultsText } from './sharing';
 import { setupKeepAwake } from './wakeLock';
 import { releasePointerFocus } from './pointerFocus';
@@ -397,6 +397,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       }
       case 'stakeBid': return [evt.playerId, evt.allIn ? `All in: ${formatScore(evt.amount)}` : `Bid ${formatScore(evt.amount)}`, 'lamp'];
       case 'stakePass': return [evt.playerId, 'Pass', 'plain'];
+      case 'answerPassed': return [evt.playerId, 'Pass', 'plain'];
       case 'stakeWon': return [evt.playerId, `Takes it for ${formatScore(evt.amount)}`, 'lamp'];
       case 'giftAwarded': return [evt.playerId, `Gift +${formatScore(evt.price)}`, 'go'];
       default: return null;
@@ -460,6 +461,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     renderBoard();
     renderQuestion();
     renderTypedAnswer();
+    renderAnswerPass();
     renderStakeAuction();
     renderForAll();
     renderAppeals();
@@ -510,8 +512,9 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       Object.assign(document.createElement('span'), { className: 'host-prefix', textContent: 'Hosted by ' }), host.name);
     else hostChip.textContent = 'No host yet';
     hostChip.title = host ? `Hosted by ${host.name}` : 'No host yet';
-    // The owner may take the empty seat themselves; the server already allows it in the lobby.
-    if (!host && you.isOwner && game.phase === 'lobby' && !tvMode) {
+    // Anyone may take the empty seat, so a host who pressed Leave can come back to it.
+    // A player waits for a calm moment; the server refuses mid-question.
+    if (!host && !tvMode && (you.role !== 'player' || betweenQuestions(game))) {
       const take = Object.assign(document.createElement('button'), { type: 'button', className: 'small primary', textContent: 'Become host' });
       take.onclick = () => send('role:set', { targetId: you.id, role: 'host' });
       hostChip.append(take);
@@ -1174,6 +1177,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       else if (isBlocked) badge('blocked-badge', `Blocked ${Math.max(1, Math.ceil((blockedUntil - now) / 1000))}s`);
       else if (hasTried) badge('tried-badge', 'Answered');
       else if (isChooser) badge('chooser-badge', game.phase === 'finalThemes' ? 'Removes' : 'Picks');
+      else if (game.phase === 'lobby' && p.role === 'player') badge(p.ready ? 'ready-badge' : 'unready-badge', p.ready ? 'Ready' : 'Not ready');
       el.append(slot);
       // Final answers are judged on each podium, next to the answer and wager they belong to.
       // The server sends them to the host while judging and to everyone once the final is revealed.
@@ -1568,13 +1572,17 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     // A checklist says exactly what is missing instead of one vague disabled button.
     const hasHost = state.participants.some((p) => p.role === 'host' && p.connected);
     const playerCount = state.participants.filter((p) => p.role === 'player' && p.connected).length;
+    const waitingCount = unreadyPlayers(state.participants).length;
     const checks: [boolean, string][] = [
       [!!state.pack, state.pack ? 'Pack loaded' : 'Load a pack'],
       [hasHost, hasHost ? 'Host connected' : 'Appoint a connected host'],
-      [playerCount > 0, playerCount ? `${playerCount} player${playerCount === 1 ? '' : 's'} ready` : 'Wait for a player'],
+      [playerCount > 0, playerCount ? `${playerCount} player${playerCount === 1 ? '' : 's'} joined` : 'Wait for a player'],
     ];
+    // Readiness is advice, not a gate: the host may start anyway after a confirmation.
+    const readyCheck: [boolean, string] = [waitingCount === 0,
+      waitingCount ? `${playerCount - waitingCount} of ${playerCount} ready` : 'Everyone ready'];
     const checklist = $('#start-checklist');
-    checklist.replaceChildren(...checks.map(([done, text]) =>
+    checklist.replaceChildren(...[...checks, ...(playerCount ? [readyCheck] : [])].map(([done, text]) =>
       Object.assign(document.createElement('li'), { className: done ? 'done' : '', textContent: text })));
     const ready = checks.every(([done]) => done);
     button('#btn-start').disabled = !ready;
@@ -1693,7 +1701,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
 
   function renderBoard() {
     const state = activeState();
-    const { game, you } = state;
+    const { game, you, participants } = state;
     const board = $('#board');
     board.innerHTML = '';
     noteRoundChange(game);
@@ -1704,6 +1712,11 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     const wave = (el: HTMLElement, step: number) => { el.style.setProperty('--d', `${520 + step * 28}ms`); };
     const lobby = game.phase === 'lobby';
     $('#lobby-table').classList.toggle('hidden', !lobby);
+    const readyButton = button('#btn-ready');
+    const meReady = !!participants.find((p) => p.id === you.id)?.ready;
+    readyButton.classList.toggle('hidden', !lobby || tvMode || you.role !== 'player');
+    readyButton.setAttribute('aria-pressed', String(meReady));
+    readyButton.textContent = meReady ? 'Ready ✓ (tap to undo)' : "I'm ready";
     if (lobby && !inviteLoaded) void loadInvite();
     board.classList.toggle('final-themes', game.phase === 'finalThemes');
     if (game.phase === 'finalThemes') {
@@ -2283,6 +2296,15 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
             : `Waiting for ${winnerName} to submit an answer.`;
   }
 
+  // Mirrors GameEngine.passAnswer: only the buzzed-in answerer, never on an assigned question.
+  function renderAnswerPass() {
+    const { game, you } = activeState();
+    const typed = game.buzzer.typedAnswer;
+    const visible = !tvMode && game.phase === 'answering' && game.buzzer.winnerId === you.id &&
+      !game.current?.assignedId && !typed?.submitted && !typed?.closed;
+    $('#answer-pass').classList.toggle('hidden', !visible);
+  }
+
   $('#typed-answer-form').addEventListener('submit', async (event) => {
     event.preventDefault();
     const field = textarea('#typed-answer-input');
@@ -2678,7 +2700,20 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     });
   }
 
-  $('#btn-start').addEventListener('click', () => send('game:start'));
+  $('#btn-start').addEventListener('click', async () => {
+    const waiting = state ? unreadyPlayers(state.participants) : [];
+    if (waiting.length && !(await askConfirm({
+      title: 'Start without everyone ready?',
+      body: `Not ready yet: ${waiting.map((p) => p.name).join(', ')}.`,
+      confirmLabel: 'Start anyway',
+    }))) return;
+    send('game:start');
+  });
+  $('#btn-ready').addEventListener('click', () => {
+    const me = state?.participants.find((p) => p.id === state?.you?.id);
+    if (me) send('player:ready', { ready: !me.ready });
+  });
+  $('#btn-pass-answer').addEventListener('click', () => send('game:passAnswer'));
 
   $('#steam-form').addEventListener('submit', (e) => {
     e.preventDefault();

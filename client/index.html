@@ -225,6 +225,8 @@
         <div id="game-stage">
           <!-- Lobby table: the rules and the invite link sit where questions will appear. -->
           <div id="lobby-table" class="lobby-table hidden">
+            <!-- Players confirm they are ready; the host's start checklist counts them. -->
+            <button id="btn-ready" type="button" class="primary btn-ready hidden" aria-pressed="false">I'm ready</button>
             <h2>Press your button after the frame lights up</h2>
             <p>The host picks a question and reads it. When the table glows green, the first press answers. A wrong answer costs the question's value.</p>
             <div class="invite">
@@ -247,6 +249,11 @@
       </div>
 
       <div class="dock">
+        <!-- The answerer may give up without losing points; others can still buzz. -->
+        <section id="answer-pass" class="card hidden">
+          <p>Don't know it? Pass and lose nothing; the others can still buzz.</p>
+          <button id="btn-pass-answer" type="button">Pass</button>
+        </section>
         <section id="typed-answer" class="card hidden" aria-labelledby="typed-answer-title">
           <h3 id="typed-answer-title">Written answer</h3>
           <p id="typed-answer-status" role="status" aria-live="polite"></p>

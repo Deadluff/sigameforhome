@@ -27,6 +27,8 @@
 .dock .card h3 { font-size: var(--t-m); }
 .dock .card form { display: grid; gap: 8px; }
 .dock .card form.row { display: flex; }
+#answer-pass { grid-template-columns: 1fr auto; align-items: center; }
+#answer-pass p { margin: 0; color: var(--mist); }
 #stake-auction, #final-wager { border-top: 4px solid var(--lamp); }
 #stake-auction-status { font-size: var(--t-l); font-weight: 800; }
 #stake-bid-form .field { flex: 1 1 160px; }
