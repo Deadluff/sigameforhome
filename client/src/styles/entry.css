@@ -6,7 +6,7 @@
   display: grid; place-items: center; height: 52px; border-radius: var(--r-cell);
   background: var(--board); color: var(--lamp); font: 600 var(--t-s) var(--font-display);
 }
-.lamp-strip .lit { background: var(--lamp); color: #1d1400; }
+.lamp-strip .lit { background: var(--lamp); color: var(--on-lamp); }
 .entry-brand { font: 700 var(--t-3xl)/1 var(--font-display); letter-spacing: -.02em; }
 .entry-brand small { font: 600 var(--t-s) var(--font-ui); color: var(--mist); letter-spacing: 0; }
 .entry-title { font-size: var(--t-xl); }

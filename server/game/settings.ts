@@ -111,7 +111,7 @@ export const SETTINGS_SCHEMA: Record<keyof GameSettings, SettingSchemaEntry> = O
   timeForShowmanDecisions: int(30, 1, 300, 'Host decision time'),
   timeForBlockingButton: int(3, 0, 10, 'Button block after false start'),
   timeForMediaDelay: int(0, 0, 10, 'Delay before media playback'),
-  timeForQuestionIntro: int(2, 0, 5, 'Pause on the chosen cell before reading'),
+  timeForQuestionIntro: int(2, 0, 5, 'Pick reveal: seconds the chosen cell stays lit before the question'),
 });
 
 export function defaultSettings(): GameSettings {

@@ -79,7 +79,7 @@
 #results-list li::before { content: counter(rank); color: var(--mist); font: 700 var(--t-s) var(--font-display); }
 #results-list .name { font-weight: 800; overflow-wrap: anywhere; }
 #results-list .pts { color: var(--lamp); font: 600 var(--t-l) var(--font-display); font-variant-numeric: tabular-nums; }
-#results-list li.winner { background: var(--lamp); color: #1d1400; }
-#results-list li.winner::before, #results-list li.winner .pts { color: #1d1400; }
+#results-list li.winner { background: var(--lamp); color: var(--on-lamp); }
+#results-list li.winner::before, #results-list li.winner .pts { color: var(--on-lamp); }
 .results-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
 #results-hint { color: var(--mist); }

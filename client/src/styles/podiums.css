@@ -14,7 +14,7 @@
 }
 .avatar {
   position: relative; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; flex: none;
-  background: hsl(var(--hue, 230) 62% 58%); color: #0d1240; font: 700 var(--t-xs) var(--font-display);
+  background: hsl(var(--hue, 230) 62% 58%); color: var(--avatar-ink); font: 700 var(--t-xs) var(--font-display);
 }
 .player .avatar { width: 56px; height: 56px; font-size: var(--t-m); }
 /* Online dot, like a "ready" tick on the desk. */
@@ -34,14 +34,15 @@
 .badge-slot { min-height: 22px; }
 .role-spectator .badge-slot:empty, #screen-game[data-phase="lobby"] .badge-slot:empty { display: none; }
 .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: var(--t-xs); font-weight: 800; }
-.badge.answering-badge { background: var(--talk); color: #04263a; }
-.badge.blocked-badge { background: var(--stop); color: #2a0610; }
+.badge.answering-badge { background: var(--talk); color: var(--on-talk); }
+.badge.blocked-badge { background: var(--stop); color: var(--on-stop); }
 .badge.tried-badge { background: var(--set-sunk); color: var(--mist); }
-.badge.chooser-badge { background: var(--lamp); color: #1d1400; }
+.badge.chooser-badge { background: var(--lamp); color: var(--on-lamp); }
 .badge.off-badge { background: var(--set-sunk); color: var(--mist); }
 
-.player.chooser { border-color: var(--lamp); }
-.player.answering { border-color: var(--talk); background: #173a8f; transform: translateY(-3px); }
+/* The "picks" badge carries the amber; the outline only marks the seat. */
+.player.chooser { border-color: var(--paper); }
+.player.answering { border-color: var(--talk); background: var(--talk-deep); transform: translateY(-3px); }
 .player.blocked { border-color: var(--stop); }
 /* Dim the seat, not its menu: the host still needs a readable menu to manage offline people. */
 .player.tried > :not(.player-menu, .replic) { opacity: .7; }
@@ -107,8 +108,9 @@
 .host-col .players .player:not(.role-spectator), .host-col .players .player.judging { width: auto; }
 .host-col .players .player.role-spectator { align-self: stretch; }
 /* Speech bubbles sit at the podium's top edge instead of floating over the one above. */
-.host-col .replic { left: 8px; right: auto; bottom: calc(100% - 14px); transform: none; animation-name: replic-side; }
-.host-col .replic::after { left: 16px; margin-left: 0; }
+.host-col .replic { left: auto; right: 40px; top: 8px; bottom: auto; transform: none; animation-name: replic-side; }
+/* Inside the podium there is nothing to point at, so the bubble drops its tail. */
+.host-col .replic::after { display: none; }
 @keyframes replic-side { from { opacity: 0; transform: translateY(6px); } }
 /* In the column a menu opens beside its podium, over the table, instead of over the status. */
 .host-col .players .player-menu-panel { top: -6px; bottom: auto; left: calc(100% + 12px); right: auto; }
@@ -122,9 +124,9 @@
   animation: replic-in .25s ease-out;
 }
 .replic::after { content: ""; position: absolute; left: 50%; top: 100%; margin-left: -6px; border: 6px solid transparent; border-top-color: var(--paper); }
-.replic.go { background: var(--go); color: #062915; } .replic.go::after { border-top-color: var(--go); }
-.replic.stop { background: var(--stop); color: #2a0610; } .replic.stop::after { border-top-color: var(--stop); }
-.replic.lamp { background: var(--lamp); color: #1d1400; } .replic.lamp::after { border-top-color: var(--lamp); }
+.replic.go { background: var(--go); color: var(--on-go); } .replic.go::after { border-top-color: var(--go); }
+.replic.stop { background: var(--stop); color: var(--on-stop); } .replic.stop::after { border-top-color: var(--stop); }
+.replic.lamp { background: var(--lamp); color: var(--on-lamp); } .replic.lamp::after { border-top-color: var(--lamp); }
 @keyframes replic-in { from { opacity: 0; transform: translate(-50%, 6px); } }
 
 /* Moderator menu: a corner button opens a popover, so the podium never changes shape. */
@@ -139,7 +141,7 @@
   position: absolute; z-index: 8; right: 0; bottom: calc(100% + 6px); display: grid; gap: 6px; width: 220px;
   padding: 8px; border-radius: var(--r-panel); text-align: left;
   /* Darker than the board and lifted by a shadow, so it reads as a menu and not as more board. */
-  background: var(--set-sunk); border: 1px solid rgba(167, 177, 234, .45); box-shadow: 0 14px 36px rgba(0, 0, 0, .6);
+  background: var(--set-sunk); border: 1px solid var(--rule-strong); box-shadow: 0 14px 36px rgba(0, 0, 0, .6);
 }
 .player-menu .menu-title { padding: 2px 2px 0; color: var(--mist); font-size: var(--t-xs); font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The host seat sits high on the page, so its menu opens downward. */
@@ -151,7 +153,10 @@
 .score-form button { width: auto; }
 
 @media (max-width: 600px) {
-  .players { flex-wrap: nowrap; justify-content: flex-start; overflow-x: auto; padding: 30px 2px 4px; scroll-snap-type: x proximity; }
+  /* Replics sit inside the podium on phones too, so the row needs no 30 px gutter above it. */
+  .players { flex-wrap: nowrap; justify-content: flex-start; overflow-x: auto; padding: 4px 2px; scroll-snap-type: x proximity; }
+  .players .replic { left: auto; right: 4px; top: 4px; bottom: auto; transform: none; padding: 3px 8px; animation-name: replic-side; }
+  .players .replic::after { display: none; }
   .player { flex: none; scroll-snap-align: start; }
   .players .player:not(.role-spectator) { width: 150px; padding: 6px 30px 6px 8px; column-gap: 8px; grid-template-areas: "avatar name" "avatar score"; grid-template-columns: auto minmax(0, 1fr); }
   .players .player:not(.role-spectator) .badge-slot { display: none; }
@@ -159,7 +164,8 @@
   .players .player.empty-seat { width: 124px; }
   .player.empty-seat .role-label { display: none; }
   .players .player:not(.role-spectator) .avatar { width: 32px; height: 32px; font-size: var(--t-xs); }
-  .players .player:not(.role-spectator) .score { font-size: var(--t-m); min-width: 0; padding: 2px 6px; }
+  /* Four- and five-digit scores must fit: smaller digits, no ellipsis. */
+  .players .player:not(.role-spectator) .score { font-size: var(--t-s); min-width: 0; padding: 2px 6px; text-overflow: clip; }
   .players .player.judging { width: 240px; grid-template-areas: "avatar name" "avatar score" "verdict verdict"; }
   /* On a phone your own score comes first; everyone else scrolls. */
   .player.you { order: -1; }

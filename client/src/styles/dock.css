@@ -5,7 +5,10 @@
   display: flex; flex-direction: column; justify-content: space-between; gap: 14px; flex: 1; min-width: 0;
   padding: 16px; border-radius: var(--r-panel); background: var(--set); border-top: 4px solid var(--tone);
 }
-.stage-banner.state-reading { --tone: var(--lamp); }
+/* Reading, intro, pauses and setup are calm; amber is kept for the money steps (auction, wager). */
+.stage-banner.state-reading { --tone: var(--mist); }
+.stage-banner.state-money { --tone: var(--lamp); }
+.stage-banner.state-reading .stage-countdown { color: var(--lamp); }
 .stage-banner.state-open { --tone: var(--go); }
 .stage-banner.state-answering { --tone: var(--talk); }
 .stage-banner.state-reveal { --tone: var(--go); }
@@ -50,9 +53,18 @@
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px;
   border-radius: var(--r-panel); background: var(--set); border: 1px solid var(--rule);
 }
-#host-controls > button[data-act="judge-ok"], #host-controls > button[data-act="judge-bad"] { min-width: 132px; font-size: var(--t-m); }
-/* Partial and double credit sit between the two verdicts as smaller variants of "correct". */
-#host-controls > button.reward { min-width: 52px; padding: 10px 12px; background: #157a4b; font: 700 var(--t-m)/1 var(--font-display); }
+/*
+ * One filled button per moment (set by renderHostControls). Verdicts stay neutral and equal in size:
+ * the tick and cross carry the colour, with a matching bottom edge, so the pair still reads in grayscale.
+ */
+#host-controls > .verdict { --edge: var(--go); min-width: 132px; font-size: var(--t-m); box-shadow: inset 0 -3px 0 var(--edge); }
+#host-controls > .verdict-bad { --edge: var(--stop); }
+#host-controls > .verdict::before { background: var(--edge); }
+/* Partial and double credit are one segment attached to Correct, quieter than the verdicts. */
+#host-controls > button.reward { min-width: 48px; padding: 10px 12px; color: var(--mist); font: 700 var(--t-m)/1 var(--font-display); }
+#host-controls > .verdict-ok:has(+ .reward:not(.hidden)) { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+#host-controls > .verdict-ok + .reward, #host-controls > .reward + .reward { margin-left: -8px; border-radius: 0; border-left-color: var(--rule); }
+#host-controls > .reward:has(+ .verdict-bad) { border-top-right-radius: var(--r-control); border-bottom-right-radius: var(--r-control); }
 .controls-spacer { flex: 1; }
 
 
@@ -64,11 +76,12 @@
 #buzzer-main { font: 700 var(--t-xl)/1.1 var(--font-display); }
 #buzzer-sub { font-size: var(--t-s); font-weight: 700; opacity: .85; }
 .buzzer:active:not(.buzz-blocked) { transform: scale(.985); }
-.buzzer.buzz-reading { background: #3a2c08; color: var(--lamp); box-shadow: inset 0 0 0 3px var(--lamp); }
-.buzzer.buzz-open { background: var(--go); color: #062915; }
-.buzzer.buzz-open:not(:disabled):hover { background: #5af0a3; }
-.buzzer.buzz-blocked { background: repeating-linear-gradient(45deg, #4a1424 0 14px, #5d1a2d 14px 28px); color: #ffc2cb; box-shadow: inset 0 0 0 3px var(--stop); cursor: not-allowed; }
-.buzzer.buzz-you-answering { background: var(--talk); color: #04263a; }
+/* "Wait" is neutral: nothing to press yet, so it must not look like a lit lamp. */
+.buzzer.buzz-reading { background: var(--set-raised); color: var(--mist); box-shadow: inset 0 0 0 2px var(--rule-strong); }
+.buzzer.buzz-open { background: var(--go); color: var(--on-go); }
+.buzzer.buzz-open:not(:disabled):hover { background: var(--go-hover); }
+.buzzer.buzz-blocked { background: repeating-linear-gradient(45deg, var(--stop-deep) 0 14px, var(--stop-deeper) 14px 28px); color: var(--stop-soft); box-shadow: inset 0 0 0 3px var(--stop); cursor: not-allowed; }
+.buzzer.buzz-you-answering { background: var(--talk); color: var(--on-talk); }
 .buzzer.buzz-idle { background: var(--set); color: var(--mist); }
 
 @media (max-width: 860px) {
@@ -80,7 +93,8 @@
   .stage-progress-track { flex-basis: 100%; height: 4px; }
 }
 @media (max-width: 600px) {
-  .stage-subtitle { font-size: var(--t-xs); }
+  /* One line on phones: the buzzer already states the pressing rule in full. */
+  .stage-subtitle { font-size: var(--t-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #host-controls { padding: 8px; gap: 6px; }
   #host-controls > button { flex: 1 1 auto; }
   #host-controls > button[data-act="judge-ok"], #host-controls > button[data-act="judge-bad"] { min-width: 0; flex: 1 1 40%; }

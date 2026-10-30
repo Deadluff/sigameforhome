@@ -55,7 +55,7 @@ function createRoom(t, settings = {}) {
   const bob = room.join('Bob').participant;
   room.attach(bob.id, 'bob-socket');
   room.setPack({ ...loaded, pack: structuredClone(loaded.pack) });
-  room.updateSettings(host.id, { gameMode: 'classic', oral: true, falseStart: true, ...settings });
+  room.updateSettings(host.id, { gameMode: 'classic', oral: true, falseStart: true, timeForQuestionIntro: 0, ...settings });
   room.engine.start();
   t.after(() => {
     room.engine.reset();
@@ -175,11 +175,4 @@ test('the host can award half or double the value for a correct answer', (t) => 
   assert.equal(second.bob.score, 600);
 });
 
-test('a chosen question pauses on the board before reading, and early presses are not false starts', (t) => {
-  const { room, alice } = createRoom(t, { timeForQuestionIntro: 2 });
-  room.engine.selectQuestion(null, true, 0, 2);
-  assert.equal(room.engine.timer?.name, 'intro');
-  assert.equal(room.engine.buzz(alice.id).result, 'ignored');
-  room.engine.beginQuestion();
-  assert.equal(room.engine.timer?.name, 'reading');
-});
+// The pick intro has its own suite: scripts/question-intro.test.js.

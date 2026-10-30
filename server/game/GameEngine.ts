@@ -717,12 +717,33 @@ export class GameEngine {
       this.phase = PHASES.FINAL_WAGER;
       return;
     }
+    this.room.emitEvent({ type: 'questionSelected', themeIndex, questionIndex, price: question.price });
+    // Like the show, the chosen cell is lit on every screen before the question (or its twist) starts.
+    // The intro is its own phase, so commands that accept READING refuse it without extra guards.
+    if (this.settings.timeForQuestionIntro > 0) {
+      this.phase = PHASES.INTRO;
+      this.startTimer('intro', this.settings.timeForQuestionIntro, () => this.beginQuestion());
+    } else this.beginQuestion();
+  }
+
+  /** Ends the intro: starts the auction, the special setup, or reading for the chosen question. */
+  beginQuestion(): void {
+    if (!this.current || (this.phase !== PHASES.INTRO && this.phase !== PHASES.BOARD)) return;
+    // A host skip arrives while the intro timer is still set; the next step starts its own timers.
+    this.clearTimer();
+    const { themeIndex, questionIndex, question } = this.current;
     if (this.current.type === 'stake') {
+      // Everyone may have left during the intro. Put the cell back instead of auctioning to nobody.
+      if (!this.activePlayers().length) {
+        this.played.delete(`${this.roundIndex}:${themeIndex}:${questionIndex}`);
+        this.returnToBoard();
+        return;
+      }
       this.startStakeAuction();
       return;
     }
     if (this.current.type === 'forAll') {
-      // Every connected player at selection gets a private answer slot.
+      // Every player connected when the question starts gets a private answer slot.
       this.forAll = { eligibleIds: this.activePlayers().map((p) => p.id), answers: new Map(), judged: new Set() };
       this.phase = PHASES.READING;
       this.startReading(question);
@@ -735,17 +756,6 @@ export class GameEngine {
       return;
     }
     this.phase = PHASES.READING;
-    this.room.emitEvent({ type: 'questionSelected', themeIndex, questionIndex, price: question.price });
-    // Like the show, the chosen cell flashes on the board for a moment before the question is read.
-    if (this.settings.timeForQuestionIntro > 0) {
-      this.startTimer('intro', this.settings.timeForQuestionIntro, () => this.beginQuestion());
-    } else this.beginQuestion();
-  }
-
-  /** Starts reading (or opens buttons at once when false starts are off). */
-  beginQuestion(): void {
-    if (this.phase !== PHASES.READING || !this.current) return;
-    const question = this.current.question;
     if (!this.settings.falseStart && !this.hasWaitForFinishMedia(question)) {
       const totalSeconds = this.estimateReadingSeconds(question) + this.settings.timeForThinkingOnQuestion;
       this.openBuzzer(totalSeconds);
@@ -1137,8 +1147,7 @@ export class GameEngine {
     if (!player || player.role !== ROLES.PLAYER) return { result: 'ignored' };
 
     if (this.phase === PHASES.READING) {
-      // The question is not on screen during the intro, so a press then is not a false start.
-      if (this.isAssignedQuestion() || this.timer?.name === 'intro') return { result: 'ignored' };
+      if (this.isAssignedQuestion()) return { result: 'ignored' };
       if (!this.settings.falseStart) {
         this.openBuzzer();
         return this.buzz(playerId, meta);
@@ -1441,8 +1450,15 @@ export class GameEngine {
       }
       return;
     }
+    // During the intro, Next is the host's "skip the pause", not "skip the question".
+    if (this.phase === PHASES.INTRO) return this.beginQuestion();
     this.assert(QUESTION_PHASES.has(this.phase) || this.phase === PHASES.SPECIAL_SETUP ||
       this.phase === PHASES.STAKE_AUCTION, 'Nothing to continue');
+    this.returnToBoard();
+  }
+
+  /** Clears the finished question and returns to the board, or ends the round when nothing is left. */
+  returnToBoard(): void {
     this.judgmentUndo = [];
     this.clearTimer();
     this.current = null;
@@ -1462,6 +1478,17 @@ export class GameEngine {
   }
 
   /* ------------------------------------------------------------------ views */
+
+  /**
+   * True while nobody may see the question yet: the intro, special setup, an auction or a final wager
+   * (also while paused in one of them), and always for a gift. The view and media access share it.
+   */
+  contentHidden(): boolean {
+    if (!this.current || this.current.type === 'secretNoQuestion') return true;
+    const phase = this.phase === PHASES.PAUSED ? this.paused?.phase : this.phase;
+    return ([PHASES.INTRO, PHASES.SPECIAL_SETUP, PHASES.STAKE_AUCTION, PHASES.FINAL_WAGER] as Phase[])
+      .includes(phase ?? PHASES.PAUSED);
+  }
 
   getView(viewer: Participant | null, canModerate: boolean): GameView {
     const round = this.round;
@@ -1491,11 +1518,7 @@ export class GameEngine {
         themeName: c.type === 'secretNoQuestion' ? 'Gift' : c.themeName,
         price: c.price,
         type: c.type,
-        content: c.type === 'secretNoQuestion' ||
-          ([PHASES.SPECIAL_SETUP, PHASES.STAKE_AUCTION, PHASES.FINAL_WAGER] as Phase[]).includes(this.phase) ||
-          (this.phase === PHASES.PAUSED &&
-            ([PHASES.SPECIAL_SETUP, PHASES.STAKE_AUCTION, PHASES.FINAL_WAGER] as Phase[]).includes(this.paused?.phase ?? PHASES.PAUSED))
-          ? [] : c.question.content,
+        content: this.contentHidden() ? [] : c.question.content,
         assignedId: c.assignedId,
         priceRange: this.phase === PHASES.SPECIAL_SETUP ? c.question.typeParams?.price ?? null : null,
         answerShown: c.answerShown,
@@ -1505,7 +1528,8 @@ export class GameEngine {
         comments: showAnswer && c.type !== 'secretNoQuestion' ? c.question.info.comments : null,
         sources: showAnswer && c.type !== 'secretNoQuestion' && this.settings.displaySources ? c.question.info.sources : null,
         answerType: c.type === 'secretNoQuestion' ? 'text' : c.question.answerType,
-        answerOptions: c.type === 'secretNoQuestion' ? [] : c.question.answerOptions,
+        // Options carry text and media, so they follow the same gate as the question itself.
+        answerOptions: this.contentHidden() ? [] : c.question.answerOptions,
         answerDeviation: c.question.answerDeviation,
         showmanComments: viewer?.role === ROLES.HOST ? c.question.info.showmanComments || null : null,
         selectionMode: c.question.typeParams?.selectionMode ?? null,

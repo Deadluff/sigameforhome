@@ -9,7 +9,8 @@
 .tv-mode .stage-layout { grid-template-columns: clamp(260px, 22vw, 420px) minmax(0, 1fr); flex: 1; }
 .tv-mode #game-stage { min-height: 62dvh; }
 .tv-mode .board .theme { font-size: clamp(18px, 1.6vw, 34px); min-height: clamp(80px, 10vh, 140px); }
-.tv-mode .board .cell { font-size: clamp(24px, 2.6vw, 52px); min-height: clamp(80px, 10vh, 140px); }
+/* Price size follows the cell (as on other screens), so a 10-column board never clips four digits. */
+.tv-mode .board .cell { font-size: clamp(18px, min(calc(100cqw * .3 / (var(--cols) + 1.8)), calc(100cqh * .45 / var(--rows))), 52px); min-height: clamp(80px, 10vh, 140px); }
 .tv-mode .q-prompt { font-size: clamp(28px, 3.4vw, 72px); }
 .tv-mode #question:not(.has-media) .q-prompt { font-size: clamp(36px, 5vw, 96px); }
 .tv-mode .stage-title { font-size: clamp(22px, 2vw, 40px); }

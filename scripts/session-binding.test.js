@@ -31,6 +31,7 @@ class FakeSocket extends EventEmitter {
 
 test('room size bounds spectators as well as player seats', () => {
   const room = new Room();
+  room.settings.timeForQuestionIntro = 0;
   for (let index = 0; index < MAX_ROOM_PARTICIPANTS; index++) room.join(`Guest ${index}`);
   assert.throws(() => room.join('One too many'), /room is full/);
   room.remove([...room.participants.keys()][0]);
@@ -39,6 +40,7 @@ test('room size bounds spectators as well as player seats', () => {
 
 test('manual score changes retain safe whole-number totals', () => {
   const room = new Room();
+  room.settings.timeForQuestionIntro = 0;
   const host = room.join('Host').participant;
   room.attach(host.id, 'host-score');
   room.chooseInitialRole(host.id, 'host');
@@ -52,6 +54,7 @@ test('manual score changes retain safe whole-number totals', () => {
 
 test('new join attempts are throttled by source address while resume stays available', async () => {
   const room = new Room();
+  room.settings.timeForQuestionIntro = 0;
   let onConnection;
   const io = {
     sockets: { sockets: new Map() },
@@ -83,6 +86,7 @@ test('new join attempts are throttled by source address while resume stays avail
 
 test('typed answer socket event accepts only the winner and keeps text private', async (t) => {
   const room = new Room();
+  room.settings.timeForQuestionIntro = 0;
   let onConnection;
   const io = {
     sockets: { sockets: new Map() },
@@ -125,6 +129,7 @@ test('typed answer socket event accepts only the winner and keeps text private',
 
 test('one socket cannot flood commands while clock sync stays available', async () => {
   const room = new Room();
+  room.settings.timeForQuestionIntro = 0;
   let onConnection;
   const io = {
     sockets: { sockets: new Map() },
@@ -151,6 +156,7 @@ test('one socket cannot flood commands while clock sync stays available', async 
 
 test('a repeated false start is ignored without extending its penalty', async () => {
   const room = new Room();
+  room.settings.timeForQuestionIntro = 0;
   let onConnection;
   const io = {
     sockets: { sockets: new Map() },
@@ -185,6 +191,7 @@ test('a repeated false start is ignored without extending its penalty', async ()
 
 test('a joined socket cannot switch seats and a replaced socket loses access', async () => {
   const room = new Room();
+  room.settings.timeForQuestionIntro = 0;
   let onConnection;
   const io = {
     sockets: { sockets: new Map() },
@@ -227,6 +234,7 @@ test('a joined socket cannot switch seats and a replaced socket loses access', a
 
 test('only the current moderator can finish media after host recovery', async (t) => {
   const room = new Room();
+  room.settings.timeForQuestionIntro = 0;
   let onConnection;
   const io = {
     sockets: { sockets: new Map() },
@@ -276,6 +284,7 @@ test('only the current moderator can finish media after host recovery', async (t
 
 test('revoked manager cannot finish a pending pack load', async () => {
   const room = new Room();
+  room.settings.timeForQuestionIntro = 0;
   let onConnection;
   const io = {
     sockets: { sockets: new Map() },
@@ -300,6 +309,7 @@ test('revoked manager cannot finish a pending pack load', async () => {
 
 test('only the moderator can undo the current exact judgment', async (t) => {
   const room = new Room();
+  room.settings.timeForQuestionIntro = 0;
   let onConnection;
   const io = {
     sockets: { sockets: new Map() },
@@ -342,6 +352,7 @@ test('only the moderator can undo the current exact judgment', async (t) => {
 
 test('verdict events reject non-boolean values', async () => {
   const room = new Room();
+  room.settings.timeForQuestionIntro = 0;
   let onConnection;
   const io = {
     sockets: { sockets: new Map() },

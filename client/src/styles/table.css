@@ -18,7 +18,8 @@
  * and only a faint outline stays, so time is read at the edge of the eye, not in a panel.
  */
 #game-stage.timed { --signal: var(--mist); }
-#game-stage:has(.frame-reading) { --signal: var(--lamp); }
+/* The frame lights only for "buzz now" and "answering"; reading stays calm. */
+#game-stage:has(.frame-reading) { --signal: var(--mist); }
 #game-stage:has(.frame-open) { --signal: var(--go); }
 #game-stage:has(.frame-answering) { --signal: var(--talk); }
 /* The glow fades with the time left, so a nearly spent clock looks spent at a glance. */
@@ -53,7 +54,7 @@
 .board:empty { display: none; }
 .board .theme, .board .cell { min-height: 0; min-width: 0; border-radius: var(--r-cell); overflow: hidden; }
 .board .theme {
-  display: flex; align-items: center; padding: 6px clamp(6px, 1cqw, 16px); background: var(--set);
+  display: flex; align-items: center; padding: 6px clamp(6px, 1cqw, 16px); background: var(--theme-cell);
   font-size: clamp(11px, min(calc(100cqw * .2 / (var(--cols) + 1.8)), calc(100cqh * .24 / var(--rows))), 19px);
   font-weight: 800; line-height: 1.2;
   /* Break between syllables, never between letters of a word that fits. */
@@ -67,14 +68,15 @@
 .board button.cell { width: 100%; cursor: pointer; }
 .board button.cell:not(:disabled):hover { background: var(--board-lit); color: var(--lamp-soft); }
 .board button.cell:focus-visible { outline: 3px solid var(--paper); outline-offset: -3px; }
-.board .cell.used { background: transparent; color: transparent; }
+/* Played cells stay on the board, faint but readable, so the grid reads as "played", not holes. */
+.board .cell.used { background: var(--cell-played); color: var(--ghost); }
 /* Round entrance wave: each cell rises in on its diagonal; --elapsed keeps rebuilt cells in step. */
 .board.round-enter .theme, .board.round-enter .cell { animation: cell-in .45s cubic-bezier(.2, .8, .2, 1) both; animation-delay: calc(var(--d, 0ms) - var(--elapsed, 0ms)); }
 @keyframes cell-in { from { opacity: 0; transform: translateY(10px) scale(.92); filter: brightness(1.8); } }
 .round-splash {
   display: none; place-self: center; z-index: 6; pointer-events: none; padding: .2em .6em; text-align: center;
   font: 700 clamp(34px, 6vw, 96px)/1.05 var(--font-display); color: var(--lamp); letter-spacing: -.02em;
-  text-shadow: 0 0 40px color-mix(in srgb, var(--lamp) 55%, transparent), 0 6px 0 rgba(4, 10, 40, .45);
+  text-shadow: 0 0 40px color-mix(in srgb, var(--lamp) 55%, transparent), 0 6px 0 rgb(var(--shade-rgb) / .45);
 }
 .round-splash.show { display: block; animation: splash 1.1s cubic-bezier(.2, .8, .2, 1) forwards; }
 @keyframes splash {
@@ -85,8 +87,20 @@
 }
 @media (prefers-reduced-motion: reduce) { .round-splash { display: none !important; } }
 /* The picked question flashes for the intro before its card opens. */
-.board .cell.chosen { animation: chosen-flash .32s steps(1, end) infinite; }
-@keyframes chosen-flash { 0% { background: var(--lamp); color: #1d1400; } 50% { background: var(--board-lit); color: var(--lamp-soft); } }
+/*
+ * The pick: the chosen cell blinks three times like a board lamp (2.5 Hz, well under the flash limit),
+ * then holds lit. --pick-elapsed (server time since the pick) keeps rebuilt boards and other screens in step.
+ */
+.board .cell.chosen {
+  background: var(--lamp); color: var(--on-lamp);
+  animation: chosen-blink 400ms steps(1, end) 3 both; animation-delay: calc(-1 * var(--pick-elapsed, 0ms));
+}
+@keyframes chosen-blink { 0% { background: var(--lamp); color: var(--on-lamp); } 50% { background: var(--board-lit); color: var(--lamp-soft); } }
+.board .theme.chosen-theme { color: var(--lamp-soft); }
+.board.has-pick > :not(.chosen, .chosen-theme) { opacity: .45; transition: opacity .2s; }
+/* The lit cell and the question card are one object across the grow and shrink transitions. */
+.board .cell.chosen, .board .cell.pick-target, #question { view-transition-name: pick; }
+::view-transition-group(pick) { animation-duration: 360ms; animation-timing-function: cubic-bezier(.2, .8, .2, 1); }
 /* Viewers who cannot pick still read the board, but it must not look clickable. */
 .board div.cell:not(.used) { cursor: default; }
 
@@ -166,11 +180,13 @@
 .q-media .media-wrap { position: relative; width: 100%; height: 100%; display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); place-items: center; }
 .q-media video { display: block; width: 100%; height: 100%; object-fit: contain; }
 .q-media .media-status { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); }
+/* Pack HTML expects a white page; the mask gradients above use #000/#fff as alpha, not colour. */
 .question-html { width: 100%; height: 100%; border: 0; border-radius: var(--r-control); background: #fff; }
 /* Background sound plays unseen; the audio cue stands in for it. */
 .q-background { display: none; }
 .media-status { margin-top: 8px; }
-.media-tap-btn { background: var(--lamp); color: #1d1400; border-color: transparent; font-weight: 800; }
+/* Neutral: the host bar already holds the one amber button on screen. */
+.media-tap-btn { background: var(--set-raised); color: var(--paper); border-color: var(--rule-strong); font-weight: 800; }
 
 .audio-cue { flex-direction: column; gap: 14px; min-height: 0; background: transparent; border: 0; color: var(--mist); font-size: var(--t-m); }
 .audio-cue:not(:disabled):hover { background: transparent; color: var(--paper); }
@@ -190,7 +206,7 @@
 .pin {
   position: absolute; z-index: 2; display: grid; place-items: center; width: 26px; height: 26px; transform: translate(-50%, -50%);
   border-radius: 50%; border: 2px solid var(--paper); box-shadow: 0 2px 8px rgba(0, 0, 0, .6);
-  font: 700 12px/1 var(--font-display); color: #06102e; pointer-events: none;
+  font: 700 12px/1 var(--font-display); color: var(--avatar-ink); pointer-events: none;
 }
 .pin.go { background: var(--go); }
 .pin.stop { background: var(--stop); }
@@ -198,9 +214,9 @@
 .target-ring {
   position: absolute; z-index: 1; min-width: 18px; aspect-ratio: 1; transform: translate(-50%, -50%);
   border: 3px solid var(--go); border-radius: 50%; pointer-events: none;
-  box-shadow: 0 0 0 3px rgba(4, 10, 40, .7), 0 0 28px var(--go);
+  box-shadow: 0 0 0 3px rgb(var(--shade-rgb) / .7), 0 0 28px var(--go);
 }
-.target-ring.preview { border-style: dashed; opacity: .6; box-shadow: 0 0 0 2px rgba(4, 10, 40, .6); }
+.target-ring.preview { border-style: dashed; opacity: .6; box-shadow: 0 0 0 2px rgb(var(--shade-rgb) / .6); }
 
 /* Option tiles: the letter comes from the pack, so it carries real meaning. */
 .q-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); gap: 8px; }
@@ -212,7 +228,7 @@
 .option b { color: var(--lamp); font: 700 var(--t-m)/1 var(--font-display); }
 .option img { max-height: 44px; border-radius: 4px; }
 button.option:not(:disabled):hover { background: var(--set-raised); border-color: var(--talk); }
-.option.right { background: #0d4a35; border-color: var(--go); }
+.option.right { background: var(--go-deep); border-color: var(--go); }
 .option.right b { color: var(--go); }
 .option.wrong { border-color: var(--stop); color: var(--mist); text-decoration: line-through; }
 .q-actions { display: flex; justify-content: center; }
@@ -234,7 +250,11 @@ button.option:not(:disabled):hover { background: var(--set-raised); border-color
 
 @media (max-width: 600px) {
   #game-stage { min-height: 36dvh; padding: 4px; border-radius: var(--r-panel); }
-  #game-stage:has(> #question:not(.hidden)) { height: clamp(300px, 60dvh, 560px); }
+  /*
+   * A question fits the phone without scrolling: the table takes what is left after the top bar (44),
+   * banner (~68), podium row (~65), buzzer or host bar (~96), gaps and page padding (~57).
+   */
+  #game-stage:has(> #question:not(.hidden)) { height: max(220px, calc(100dvh - 325px)); }
   /* A wager or answer form on a phone must stay in view next to the question. */
   #screen-game:has(.dock > .card:not(.hidden)) #game-stage:has(> #question:not(.hidden)) { height: clamp(240px, 44dvh, 420px); }
   /* Phones stack each theme over its prices, so four-digit values keep a readable size. */

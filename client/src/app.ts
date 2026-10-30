@@ -292,10 +292,38 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
 
   /* ---------------- state & events ---------------- */
 
+  /*
+   * The pick's signature move: the lit cell grows into the question card, and after the reveal the card
+   * shrinks back into the played cell. Only these two changes animate. It is skipped when buttons open
+   * at once (the transition overlay would eat early taps), with reduced motion, or without the API.
+   */
+  let lastPick: { round: number; theme: number; question: number } | null = null;
+  let pickTransitionRunning = false;
+  function pickTransition(prev: RoomState | null, next: RoomState): boolean {
+    if (!prev?.game || !('startViewTransition' in document) || pickTransitionRunning) return false;
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return false;
+    const from = prev.game.phase, to = next.game.phase;
+    if (from === 'intro' && to === 'reading') return true;
+    return from === 'reveal' && to === 'board' && lastPick?.round === next.game.roundIndex;
+  }
+
+  // Host shortcuts pause briefly whenever the step changes (see the keydown handler below).
+  let stepKey = '';
+  let stepChangedAt = 0;
   socket.on('room:state', (s: RoomState) => {
+    const prev = state;
     state = s;
+    const key = `${s.game?.phase}:${s.game?.timer?.name ?? ''}:${s.game?.current?.presentationId ?? ''}`;
+    if (key !== stepKey) { stepKey = key; stepChangedAt = Date.now(); }
     if (!Number.isFinite(bestRtt)) clockOffset = s.serverTime - Date.now();
-    render();
+    const c = s.game?.current;
+    if (c && ['intro', 'reading'].includes(s.game.phase)) {
+      lastPick = { round: s.game.roundIndex, theme: c.themeIndex, question: c.questionIndex };
+    }
+    if (!pickTransition(prev, s)) return render();
+    pickTransitionRunning = true;
+    const transition = document.startViewTransition(() => render());
+    void transition.finished.finally(() => { pickTransitionRunning = false; });
   });
 
   // A short line over the podium shows what just happened to whom, like the show's speech bubbles.
@@ -324,8 +352,12 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       sayReplic(replic[0], replic[1], replic[2], () => { if (hasActivePlayer(state)) renderPlayers(); });
       if (hasActivePlayer(state)) renderPlayers();
     }
-    if (evt.type === 'buzzerOpen') {
+    if (evt.type === 'questionSelected') {
+      playTone(440, 160, 'triangle', 660);
+    } else if (evt.type === 'buzzerOpen') {
       playTone(660, 220, 'triangle', 880);
+      // A short buzz in the hand on Android; iPhones ignore it.
+      if (state?.you?.role === 'player') navigator.vibrate?.(30);
     } else if (evt.type === 'buzzAccepted') {
       playTone(520, 260, 'square', 780);
     } else if (evt.type === 'falseStart') {
@@ -423,8 +455,48 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     const me = $('#me');
     me.replaceChildren();
     if (tvMode) me.textContent = 'TV view';
-    else me.append(avatar(you.id, you.name), you.name,
-      Object.assign(document.createElement('span'), { className: 'role', textContent: roleLabels[you.role] ?? you.role }));
+    else {
+      // Phones show your own score here, so it is visible without scrolling to the podium row.
+      const score = you.role === 'player' && game.phase !== 'lobby' ? participants.find((p) => p.id === you.id)?.score : undefined;
+      me.append(avatar(you.id, you.name), Object.assign(document.createElement('span'), { className: 'me-name', textContent: you.name }),
+        Object.assign(document.createElement('span'), { className: 'role', textContent: roleLabels[you.role] ?? you.role }));
+      if (score != null) me.append(Object.assign(document.createElement('span'), {
+        className: 'me-score' + (score < 0 ? ' negative' : ''), textContent: formatScore(score),
+      }));
+    }
+    renderHostMenu();
+  }
+
+  /*
+   * Phone host menu: the round arrows and the host pill do not fit a 375 px bar next to the round name,
+   * so below 600 px they hide and this menu offers the same actions. Each item presses the real button,
+   * so labels, confirmations and disabled states stay in one place.
+   */
+  function renderHostMenu() {
+    const menu = $('#host-menu') as HTMLDetailsElement;
+    const tools = $('#host-tools');
+    const roundNav = !button('#btn-prev-round').classList.contains('hidden');
+    menu.classList.toggle('hidden', !roundNav && tools.classList.contains('hidden'));
+    const panel = $('#host-menu-panel');
+    panel.replaceChildren();
+    for (const id of ['btn-prev-round', 'btn-next-round', 'btn-pause', 'btn-resume', 'btn-settings', 'btn-stop']) {
+      const real = button(`#${id}`);
+      if (real.classList.contains('hidden') || (id !== 'btn-prev-round' && id !== 'btn-next-round' && tools.classList.contains('hidden'))) continue;
+      const item = Object.assign(document.createElement('button'), {
+        type: 'button', className: 'quiet', disabled: real.disabled,
+        textContent: real.getAttribute('aria-label') ?? real.title ?? real.textContent ?? '',
+      });
+      if (real.dataset.icon) item.dataset.icon = real.dataset.icon;
+      item.onclick = () => { menu.open = false; real.click(); };
+      panel.append(item);
+    }
+  }
+
+  /** The host action that is the obvious next step in this phase, or null when there is none. */
+  function hostPrimaryAct(game: RoomState['game']): string | null {
+    if (game.phase === 'reading' && game.current?.type !== 'forAll') return 'game:openBuzzer';
+    if (game.phase === 'reveal' || game.phase === 'roundEnd') return 'game:next';
+    return null;
   }
 
   function renderHostControls() {
@@ -433,7 +505,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     const mod = you.canModerate && game.phase !== 'lobby';
     $('#host-controls').classList.toggle('hidden', !mod);
     $('#host-tools').classList.toggle('hidden', !mod || tvMode);
-    if (!mod) return;
+    if (!mod) return renderHostMenu();
     button('#btn-pause').classList.toggle('hidden', game.phase === 'paused');
     button('#btn-pause').disabled = game.phase === 'gameOver';
     button('#btn-resume').classList.toggle('hidden', game.phase !== 'paused');
@@ -447,13 +519,15 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       if (action === 'game:reveal') button.disabled = game.current?.type === 'forAll' ||
         !(['reading', 'buzzerOpen', 'answering'].includes(game.phase) ||
           (game.phase === 'reveal' && !game.current?.answerShown));
-      if (action === 'game:next') button.disabled = !['reveal', 'roundEnd', 'specialSetup', 'stakeAuction'].includes(game.phase);
+      if (action === 'game:next') button.disabled = !['intro', 'reveal', 'roundEnd', 'specialSetup', 'stakeAuction'].includes(game.phase);
       if (action === 'game:next') {
         const finalReveal = game.phase === 'reveal' && game.round?.type === 'final';
         const moreFinalThemes = game.board.some((theme) => theme.questions[0]?.available);
         button.textContent = finalReveal && state.settings.playAllQuestionsInFinalRound
           ? moreFinalThemes ? 'Next final theme' : 'Finish game'
-          : game.phase === 'specialSetup' ? 'Skip question' : 'Next';
+          : game.phase === 'specialSetup' ? 'Skip question'
+            // During the pick intro Next only shortens the pause; the question still plays.
+            : game.phase === 'intro' ? 'Skip' : 'Next';
       }
     }
 
@@ -461,6 +535,14 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     openBtn.classList.toggle('hidden', game.phase !== 'reading' || game.current?.type === 'forAll');
     openBtn.disabled = game.phase !== 'reading' || game.current?.type === 'forAll';
     openBtn.textContent = 'Open buzzer now';
+    // One filled button per moment: the step the host is expected to take next. Verdicts are a pair, so
+    // answering has none; the special-setup form and final controls bring their own primary button.
+    const primaryAct = hostPrimaryAct(game);
+    for (const control of $('#host-controls').querySelectorAll<HTMLButtonElement>(':scope > button[data-act]')) {
+      control.classList.toggle('primary', control.dataset.act === primaryAct);
+    }
+    // During the intro "Skip" only shortens the pause, so it stays quiet.
+    button('#host-controls [data-act="game:next"]').classList.toggle('quiet', game.phase === 'intro');
     // Keep unavailable phase actions out of the primary control strip.
     for (const control of $('#host-controls').querySelectorAll<HTMLButtonElement>(':scope > button[data-act]')) {
       control.classList.toggle('hidden', control.disabled);
@@ -468,6 +550,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     // An empty bar is just a blue strip; hide it until this step has something to press.
     const busy = [...$('#host-controls').children].some((el) => !el.classList.contains('hidden'));
     $('#host-controls').classList.toggle('hidden', !busy);
+    renderHostMenu();
   }
 
   button('#btn-undo-judgment').onclick = () => {
@@ -729,6 +812,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
           const judgeButton = document.createElement('button');
           judgeButton.type = 'button';
           judgeButton.className = correct ? 'ok' : 'bad';
+          judgeButton.dataset.icon = correct ? 'check' : 'cross';
           judgeButton.textContent = label;
           judgeButton.setAttribute('aria-label', `${player.name}: mark answer ${correct ? 'correct' : 'wrong'}`);
           judgeButton.disabled = game.phase !== 'forAllJudge';
@@ -973,6 +1057,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       if (you.canModerate && p.id !== you.id) {
         const kick = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Remove from room' });
         kick.className = 'bad';
+        kick.dataset.icon = 'cross';
         kick.setAttribute('aria-label', `Remove ${p.name} from the room`);
         kick.onclick = () => {
           if (confirm(`Remove ${p.name} from the room?`)) send('participant:kick', { targetId: p.id });
@@ -1057,7 +1142,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   const numberSettingKeys = [
     'maxPlayers', 'timeForBlockingButton', 'buzzSyncWindowMs', 'readingSpeed', 'timeForThinkingOnQuestion',
     'timeForPrintingAnswer', 'timeForMakingStake', 'timeForThinkingOnSpecial',
-    'timeForFinalThinking', 'timeOfRound',
+    'timeForFinalThinking', 'timeOfRound', 'timeForQuestionIntro',
   ] as const;
   let packsLoaded = false;
   let knownPacks: PackListItem[] = [];
@@ -1324,7 +1409,9 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
 
   /* ---------------- board & question ---------------- */
 
-  const isIntro = (game: RoomState['game']) => game.phase === 'reading' && game.timer?.name === 'intro';
+  // The pick intro is a phase of its own; while it is paused the board must keep the lit cell too.
+  const isIntro = (game: RoomState['game']) => game.phase === 'intro' ||
+    (game.phase === 'paused' && game.pausedPhase === 'intro');
   const roundTitle = (name: string) => /^\d+$/.test(name.trim()) ? `Round ${name.trim()}` : name;
 
   /*
@@ -1402,8 +1489,16 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     board.style.setProperty('--rows', String(game.board.length));
     board.style.setProperty('--phone-cols', String(Math.min(cols, 5)));
     const canPick = !intro && (you.canModerate || you.id === game.chooserId);
+    // The pick blink is timed from the server's intro start, so a rebuilt board continues it instead of
+    // restarting, and every screen blinks in step. A paused intro shows the steady lit cell.
+    const t0 = game.timer?.name === 'intro' ? game.timer.endsAt - game.timer.durationMs : null;
+    board.style.setProperty('--pick-elapsed', `${t0 == null ? 60000 : Math.max(0, nowServer() - t0)}ms`);
+    board.classList.toggle('has-pick', intro);
+    const pickLabel = intro && game.current ? questionTypeLabel(game.current.type) : '';
+    const shrinkInto = game.phase === 'board' && lastPick?.round === game.roundIndex ? lastPick : null;
     game.board.forEach((theme, t) => {
       const title = Object.assign(document.createElement('div'), { className: 'theme', textContent: theme.name, title: theme.name });
+      if (intro && game.current?.themeIndex === t) title.classList.add('chosen-theme');
       // Hyphenation needs the text's language; packs here are mostly Russian or English.
       title.lang = /[А-Яа-яЁё]/.test(theme.name) ? 'ru' : 'en';
       wave(title, t);
@@ -1413,8 +1508,11 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
         const el = document.createElement(cell?.available && canPick ? 'button' : 'div');
         const chosen = intro && game.current?.themeIndex === t && game.current?.questionIndex === q;
         el.className = 'cell' + (chosen ? ' chosen' : cell?.available ? '' : ' used');
+        if (shrinkInto?.theme === t && shrinkInto.question === q) el.classList.add('pick-target');
         wave(el, t + q + 1);
-        el.textContent = String(cell?.price ?? '');
+        // A special question names its twist on the lit cell, so the room hears it before the question.
+        el.textContent = chosen && pickLabel ? pickLabel : String(cell?.price ?? '');
+        if (cell && !cell.available && !chosen) el.setAttribute('aria-label', `${theme.name}, ${cell.price}, played`);
         if (cell?.available && canPick) {
           el.setAttribute('type', 'button');
           el.setAttribute('aria-label', `${theme.name}, ${cell.price} points`);
@@ -1763,7 +1861,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       return;
     }
     // Avoid restarting media on every state update.
-    const hiddenPhases = ['specialSetup', 'stakeAuction', 'finalWager'];
+    const hiddenPhases = ['intro', 'specialSetup', 'stakeAuction', 'finalWager'];
     const contentVisible = !hiddenPhases.includes(game.phase) &&
       !(game.phase === 'paused' && hiddenPhases.includes(game.pausedPhase ?? ''));
     const presenting = contentVisible && !c.answerShown &&
@@ -1909,10 +2007,10 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
 
   // Tablets and phones have no Space bar to suggest.
   const touchOnly = matchMedia('(pointer: coarse)').matches && !matchMedia('(any-pointer: fine)').matches;
-  type StageTone = 'reading' | 'open' | 'answering' | 'reveal' | 'idle';
+  type StageTone = 'reading' | 'money' | 'open' | 'answering' | 'reveal' | 'idle';
   function setStage(tone: StageTone, title: string, subtitle: string) {
     const banner = $('#stage-banner');
-    banner.classList.remove('state-reading', 'state-open', 'state-answering', 'state-reveal', 'state-idle');
+    banner.classList.remove('state-reading', 'state-money', 'state-open', 'state-answering', 'state-reveal', 'state-idle');
     banner.classList.add(`state-${tone}`);
     $('#stage-title').textContent = title;
     $('#stage-subtitle').textContent = subtitle;
@@ -1948,6 +2046,22 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
         setStage('idle', 'Waiting to start', you.canManage
           ? 'Load a pack and check the settings below, then press Start game.'
           : `${players} player${players === 1 ? '' : 's'} in. ${host ? `${host.name} starts the game` : 'A host starts the game'} when everyone is here.`);
+      } else if (game.phase === 'intro' && game.current) {
+        // The pick is announced the same way on every screen; the twist of a special question is named here.
+        const c = game.current;
+        const theme = game.board[c.themeIndex]?.name ?? c.themeName;
+        const withPrice = `${theme} for ${formatScore(c.price)}`;
+        const intro: Record<string, [string, string]> = {
+          secret: [theme, 'Secret question. The host picks who answers.'],
+          secretPublicPrice: [withPrice, 'Secret question. The host picks who answers.'],
+          secretNoQuestion: [theme, 'Gift question.'],
+          stake: [withPrice, 'Auction. Players bid for the question.'],
+          noRisk: [withPrice, 'No risk. A wrong answer costs nothing.'],
+          forAll: [withPrice, 'Everyone answers in private.'],
+        };
+        const [title, subtitle] = intro[c.type] ?? [withPrice, 'Get ready.'];
+        setStage('reading', title, subtitle);
+        $('#stage-countdown').textContent = '';
       } else if (game.phase === 'paused') {
         setStage('reading', 'Game paused', you.canModerate ? 'Press Resume to continue.' : 'Waiting for the host to resume.');
       } else if (game.phase === 'board') {
@@ -1961,10 +2075,10 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       } else if (game.phase === 'roundEnd') {
         setStage('idle', 'Round complete', you.canModerate ? 'Press Next to continue.' : 'The next round starts soon.');
       } else if (game.phase === 'finalWager') {
-        setStage('reading', 'Place your final wager', you.role === 'player'
+        setStage('money', 'Place your final wager', you.role === 'player'
           ? 'Your wager is private until the answers are judged.' : 'Players are placing private wagers.');
       } else if (game.phase === 'stakeAuction') {
-        setStage('reading', 'Question auction', 'Players bid in turn for the right to answer.');
+        setStage('money', 'Question auction', 'Players bid in turn for the right to answer.');
       } else if (game.phase === 'forAllAnswering') {
         setStage('reading', 'Everyone answers', 'Submit a private answer before time runs out.');
       } else if (game.phase === 'forAllJudge') {
@@ -1972,7 +2086,10 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       } else if (game.phase === 'appealVote') {
         setStage('answering', 'Appeal vote', 'Eligible players are reviewing the verdict.');
       } else if (game.phase === 'reading') {
-        setStage('reading', 'Listen to the question', game.current?.type === 'forAll'
+        // The host reads the question; players get the rule for pressing.
+        if (you.role === 'host') setStage('reading', 'Read the question', game.current?.type === 'forAll'
+          ? 'Private answers open when reading ends.' : 'Open the buzzer when you finish.');
+        else setStage('reading', 'Listen to the question', game.current?.type === 'forAll'
           ? 'Private answers open after reading.'
           : !settings.falseStart ? 'You can buzz while the question plays.'
             : `Wait for the green signal. An early press blocks you for ${settings.timeForBlockingButton} s.`);
@@ -2008,8 +2125,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
         setStage('answering', 'Final judging', 'The host is checking every answer.');
       } else if (game.phase === 'reveal') {
         if (game.current?.answerShown) {
-          const right = (game.current?.right ?? []).join(' / ');
-          setStage('reveal', right ? `Answer: ${right}` : 'Answer shown',
+          // The answer itself is on the table; saying it here too would print it twice.
+          setStage('reveal', 'Answer shown',
             t ? 'Back to the board in a moment.' : you.canModerate ? 'Press Next to continue.' : 'Waiting for the host.');
           if (!t) $('#stage-progress-fill').style.width = '100%';
         } else {
@@ -2025,7 +2142,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
 
     // 2. Player Buzzer Button Orientier
     // Keep the fixed buzzer off finished phases so it cannot cover mobile appeal controls.
-    const showBuzzer = you.role === 'player' && ['reading', 'buzzerOpen', 'answering'].includes(game.phase) &&
+    const showBuzzer = you.role === 'player' && ['intro', 'reading', 'buzzerOpen', 'answering'].includes(game.phase) &&
       (settings.oral || game.phase !== 'answering') &&
       game.current?.type !== 'forAll' && game.round?.type !== 'final';
     buzzerBtn.classList.toggle('hidden', !showBuzzer);
@@ -2046,6 +2163,10 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       setBuzzer('buzz-blocked', `Blocked ${((blockedUntil - now) / 1000).toFixed(1)} s`, 'You pressed before the signal.');
     } else if (alreadyTried && (game.phase === 'buzzerOpen' || game.phase === 'answering')) {
       setBuzzer('buzz-idle', 'You already answered', 'Waiting for the others.');
+    } else if (game.phase === 'intro') {
+      // Nothing can be pressed until the question appears, whatever the false-start rule says.
+      setBuzzer('buzz-reading', 'Wait', settings.falseStart
+        ? `An early press blocks you for ${settings.timeForBlockingButton} s.` : 'Opens after the question.');
     } else if (game.phase === 'reading') {
       if (settings.falseStart) setBuzzer('buzz-reading', 'Wait for green', `An early press blocks you for ${settings.timeForBlockingButton} s.`);
       else setBuzzer('buzz-open', 'Buzz', 'Press now to answer.');
@@ -2058,8 +2179,9 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     } else {
       setBuzzer('buzz-idle', 'Waiting for a question', 'The button opens after a question is chosen.');
     }
-    // A button that cannot be pressed only covers the podiums; the status panel already says why.
-    buzzerBtn.classList.toggle('hidden', buzzerBtn.classList.contains('buzz-reading') || buzzerBtn.classList.contains('buzz-idle'));
+    // "Wait" stays on screen from the pick until the buttons open, so the thumb has a home and nothing jumps.
+    // Other idle states (already answered, someone else answering) only cover the podiums, so they hide.
+    buzzerBtn.classList.toggle('hidden', buzzerBtn.classList.contains('buzz-idle'));
   }
 
   /* ---------------- fast tick for smooth countdown bars ---------------- */
@@ -2142,10 +2264,42 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     }
   });
 
+  /*
+   * Host shortcuts: Space runs the highlighted step (Skip during the intro), Y and N give a verdict.
+   * Keys use e.code so a Russian layout works. A step that just changed ignores keys for 700 ms, so a
+   * double press cannot skip the intro and then open the buttons before anyone has read the question.
+   */
+  const HOST_KEYS_KEY = 'sigame.hostKeys';
+  let hostKeys = true;
+  try { hostKeys = localStorage.getItem(HOST_KEYS_KEY) !== 'off'; } catch { /* Keep the default. */ }
+  input('#pref-hostKeys').checked = hostKeys;
+  input('#pref-hostKeys').addEventListener('change', () => {
+    hostKeys = input('#pref-hostKeys').checked;
+    try { localStorage.setItem(HOST_KEYS_KEY, hostKeys ? 'on' : 'off'); } catch { /* Not saved. */ }
+  });
+  document.addEventListener('keydown', (e) => {
+    if (!hostKeys || tvMode || settingsOpen || state?.you?.role !== 'host') return;
+    if (e.repeat || e.metaKey || e.ctrlKey || e.altKey || Date.now() - stepChangedAt < 700) return;
+    const focused = document.activeElement;
+    if (focused instanceof HTMLElement &&
+      (focused.isContentEditable || focused.closest('input, textarea, select, button, a, [role="button"], #manage'))) return;
+    const bar = $('#host-controls');
+    const usable = (el: HTMLButtonElement | null) => el && !el.disabled && !el.classList.contains('hidden') ? el : null;
+    const target = e.code === 'Space'
+      ? usable(bar.querySelector<HTMLButtonElement>(state.game.phase === 'intro' ? '[data-act="game:next"]' : ':scope > button.primary'))
+      : e.code === 'KeyY' ? usable(bar.querySelector<HTMLButtonElement>('[data-act="judge-ok"]'))
+        : e.code === 'KeyN' ? usable(bar.querySelector<HTMLButtonElement>('[data-act="judge-bad"]')) : null;
+    if (!target || bar.classList.contains('hidden')) return;
+    e.preventDefault();
+    target.click();
+  });
+
   for (const b of document.querySelectorAll<HTMLElement>('[data-act]')) {
-    b.addEventListener('click', () => {
+    b.addEventListener('click', (event) => {
       const act = b.dataset.act;
       if (!act) return;
+      // A mouse click leaves focus on the button, and Space would then press it again natively.
+      if (event.detail > 0 && b.closest('#host-controls')) b.blur();
       if (act === 'game:stop' && !confirm('Stop this game? Scores and progress will be reset.')) return;
       if (act === 'game:next' && state?.game?.phase === 'specialSetup' &&
           !confirm('Skip this special question?')) return;

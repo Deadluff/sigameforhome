@@ -1,27 +1,59 @@
 /*
- * Studio palette: a TV quiz set. Ultramarine panels, amber "lamp" digits on the board and score
- * windows, and three signal colours that match the question frame the show uses (read / buzz / answer).
+ * Studio palette "Plum studio": a TV quiz set lit warm violet around a blue board. The board is the
+ * only blue object, so it is the brightest thing in the room. Amber "lamp" marks money and numbers,
+ * the picked cell, and at most one filled button; three signal colours match the question frame
+ * (buzz now / someone answers / wrong). Every colour in the other stylesheets comes from here.
  */
 :root {
   color-scheme: dark;
 
-  --studio: #0f1656;        /* page background */
-  --set: #18227a;           /* panels */
-  --set-raised: #222e94;    /* controls on panels */
-  --set-sunk: #0b1147;      /* inset windows: score, inputs */
-  --board: #1f30a8;         /* live board cell */
-  --board-lit: #3249d9;     /* hovered board cell */
-  --board-spent: #131c66;   /* played cell and table bed */
+  --studio: #1a0f2e;        /* page background */
+  --set: #2a1946;           /* panels, podiums */
+  --set-raised: #3a2560;    /* neutral buttons and menus on panels */
+  --set-hover: #45306e;     /* hovered neutral button */
+  --set-sunk: #120a22;      /* inset windows: score, inputs */
+  --board: #2a3fd4;         /* live board cell */
+  --board-lit: #4258ec;     /* hovered cell; off-phase of the pick blink */
+  --board-spent: #1f1640;   /* table bed behind the cells */
+  --theme-cell: #33215a;    /* theme names on the board */
+  --cell-played: #35265e;   /* played cell: visible on the bed, clearly spent */
+  --ghost: #5a4a8a;         /* price on a played cell */
+  --studio-light: #3a2160;  /* the warm light from above the set */
 
-  --lamp: #ffc24b;          /* prices, scores, primary actions */
+  --lamp: #ffc24b;          /* prices, scores, the picked cell, the single primary action */
   --lamp-soft: #ffe2a1;
+  --on-lamp: #2a1a00;       /* text on amber */
   --go: #3be38e;            /* buzzer open, correct */
+  --go-hover: #5af0a3;
+  --on-go: #062915;
+  --go-deep: #0d4a35;       /* a correct option tile */
   --talk: #5ccbff;          /* someone is answering */
-  --stop: #ff5c6f;          /* wrong, blocked, destructive */
+  --on-talk: #04263a;
+  --talk-deep: #1f3a80;     /* the answering podium */
+  --stop: #ff6b8a;          /* wrong, blocked, destructive */
+  --on-stop: #2a0612;
+  --stop-soft: #ffc2cb;     /* text on dark red surfaces */
+  --stop-deep: #4a1424;     /* blocked buzzer stripes, destructive hover */
+  --stop-deeper: #5d1a2d;
 
-  --paper: #f2f4ff;
-  --mist: #a7b1ea;
-  --rule: rgba(167, 177, 234, .22);
+  /* Filled verdict buttons outside the host bar (appeals, for-all judging, kick). */
+  --ok-fill: #1c9a5e;
+  --ok-hover: #22b06c;
+  --bad-fill: #c43a50;
+  --bad-hover: #d9475e;
+
+  --warn-bg: #4a2a12;       /* connection banner, under an amber border */
+  --toast-bg: #3d1433;      /* error toast */
+  --error-text: #ffb3bd;
+  --avatar-ink: #1a0f2e;    /* initials on avatars and picture pins */
+
+  --paper: #f7f2ff;
+  --mist: #b8a6d9;
+  /* Channel triplets, so hairlines and shades can take any alpha: rgb(var(--rule-rgb) / .22). */
+  --rule-rgb: 184 166 217;
+  --shade-rgb: 18 10 34;
+  --rule: rgb(var(--rule-rgb) / .22);
+  --rule-strong: rgb(var(--rule-rgb) / .45);
 
   --font-display: 'Unbounded Variable', 'Arial Black', system-ui, sans-serif;
   --font-ui: 'Manrope Variable', 'Segoe UI', system-ui, sans-serif;

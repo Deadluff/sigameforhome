@@ -16,7 +16,7 @@
 .host-tools button.primary { padding: 0 14px; border-radius: 999px; }
 /* A hairline splits navigation from pause and stop inside the same pill. */
 .round-nav .host-tools:not(.hidden) { margin-left: 2px; padding-left: 4px; border-left: 1px solid var(--rule); }
-#btn-stop:not(:disabled):hover { background: #5a1d2b; color: #ffb3bd; }
+#btn-stop:not(:disabled):hover { background: var(--stop-deep); color: var(--error-text); }
 .round-arrow:disabled { opacity: .3; }
 .topbar-round .round-count { margin-left: 8px; color: var(--mist); font-variant-numeric: tabular-nums; }
 .topbar-round { flex: 0 1 auto; min-width: 0; color: var(--mist); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -24,7 +24,7 @@
 .volume { position: relative; flex: none; }
 .volume-pop {
   position: absolute; z-index: 25; top: calc(100% + 8px); right: 0; display: flex; align-items: center; gap: 10px;
-  padding: 10px 14px; border-radius: 999px; background: var(--set-sunk); border: 1px solid rgba(167, 177, 234, .45);
+  padding: 10px 14px; border-radius: 999px; background: var(--set-sunk); border: 1px solid var(--rule-strong);
   box-shadow: 0 12px 30px rgba(0, 0, 0, .55);
 }
 .volume-pop input[type="range"] { width: 150px; accent-color: var(--lamp); }
@@ -40,9 +40,11 @@
 .host-chip.vacant:has(button) { max-width: none; padding: 3px 3px 3px 12px; overflow: visible; }
 .host-chip button { min-height: 30px; padding: 4px 12px; border-radius: 999px; }
 .me-chip { display: inline-flex; align-items: center; gap: 8px; min-width: 0; font-weight: 800; white-space: nowrap; }
+.host-menu { display: none; position: relative; flex: none; }
+.me-chip .me-score { display: none; }
 .me-chip .role { padding: 2px 8px; border-radius: 999px; background: var(--set-raised); color: var(--mist); font-size: var(--t-xs); font-weight: 700; }
 #connection-status:empty { display: none; }
-#connection-status { padding: 10px 14px; border-radius: var(--r-control); background: #5a3300; border: 1px solid var(--lamp); font-weight: 700; }
+#connection-status { padding: 10px 14px; border-radius: var(--r-control); background: var(--warn-bg); border: 1px solid var(--lamp); font-weight: 700; }
 
 .stage-layout { display: grid; grid-template-columns: 264px minmax(0, 1fr); gap: var(--gap); align-items: stretch; }
 .host-col { display: flex; flex-direction: column; gap: var(--gap); min-width: 0; }
@@ -91,6 +93,28 @@
   #btn-leave { padding-left: 10px; padding-right: 10px; }
   #btn-leave .label { display: none; }
   #btn-leave { min-height: 36px; padding: 6px 10px; font-size: var(--t-xs); }
+  /*
+   * In a game the phone bar is one row: round name, the host menu (moderators), your chip with your
+   * score, sound and leave. The logo and the host chip only show in the lobby.
+   */
+  #screen-game:not([data-phase="lobby"]) .brand, #screen-game:not([data-phase="lobby"]) .host-chip { display: none; }
+  #screen-game:not([data-phase="lobby"]) .me-chip .me-name { display: none; }
+  .round-nav { flex: 1 1 auto; }
+  .round-nav .round-arrow, .round-nav .host-tools { display: none !important; }
+  .round-nav:has(.round-arrow:not(.hidden)) { padding: 0; background: none; border: 0; }
+  .host-menu:not(.hidden) { display: block; }
+  .host-menu > summary {
+    display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 6px 10px; list-style: none;
+    border-radius: var(--r-control); background: var(--set-raised); border: 1px solid var(--rule); font-size: var(--t-xs);
+  }
+  .host-menu > summary::-webkit-details-marker { display: none; }
+  .host-menu-panel {
+    position: absolute; z-index: 30; top: calc(100% + 6px); right: 0; display: grid; gap: 4px; min-width: 210px; padding: 6px;
+    border-radius: var(--r-panel); background: var(--set-raised); border: 1px solid var(--rule-strong); box-shadow: 0 14px 36px rgba(0, 0, 0, .6);
+  }
+  .host-menu-panel button { justify-content: flex-start; width: 100%; }
+  .me-chip .me-score { display: inline; color: var(--lamp); font: 600 var(--t-m)/1 var(--font-display); font-variant-numeric: tabular-nums; }
+  .me-chip .me-score.negative { color: var(--stop); }
   .host-col { grid-template-columns: minmax(0, 1fr); }
   #host-seat { display: none; }
   /* When a phone user must act (bid, wager, written answer), the panel comes right under the table. */

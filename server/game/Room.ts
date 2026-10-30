@@ -406,9 +406,8 @@ export class Room extends EventEmitter {
     };
     if (allowed(this.loadedPack.pack.logo)) return true;
     if (!current || current.type === 'secretNoQuestion') return false;
-    const hiddenPhases = ['specialSetup', 'finalWager', 'stakeAuction'];
-    const visible = !hiddenPhases.includes(this.engine.phase) &&
-      !(this.engine.phase === 'paused' && hiddenPhases.includes(this.engine.paused?.phase ?? ''));
+    // Same gate as the state view, so a file never loads before its question is on screen.
+    const visible = !this.engine.contentHidden();
     if (visible && current.question.content.some(allowed)) return true;
     if (visible && (current.question.answerOptions ?? []).some((option) => option.content.some(allowed))) return true;
     const canSeeAnswer = viewer.role === ROLES.HOST || current.answerShown;
