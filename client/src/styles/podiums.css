@@ -40,6 +40,10 @@
 .badge.tried-badge { background: var(--set-sunk); color: var(--mist); }
 .badge.chooser-badge { background: var(--lamp); color: var(--on-lamp); }
 .badge.off-badge { background: var(--set-sunk); color: var(--mist); }
+.badge.ping-badge { background: var(--set-sunk); color: var(--mist); font-variant-numeric: tabular-nums; font-weight: 700; }
+.badge.ping-badge.ping-good { color: var(--go); }
+.badge.ping-badge.ping-fair { color: var(--lamp); }
+.badge.ping-badge.ping-poor { color: var(--stop); }
 
 /* The "picks" badge carries the amber; the outline only marks the seat. */
 .player.chooser { border-color: var(--paper); }

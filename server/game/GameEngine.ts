@@ -73,6 +73,10 @@ export interface CurrentQuestionState {
   judgments: Judgment[];
   /** Option letters and picture clicks, kept so the reveal can show every attempt. */
   picks: AnswerPick[];
+  /** Synchronized server timestamp (ms) when all clients reveal the question simultaneously. */
+  revealAt: number | null;
+  /** Connected players who have acknowledged preloading the locked question. */
+  readyPlayerIds: Set<string>;
 }
 
 export interface AnswerPick {
@@ -177,9 +181,12 @@ export interface GameView {
     showmanComments: string | null;
     selectionMode: string | null;
     picks: AnswerPick[];
+    revealAt: number | null;
+    readyPlayerIds: string[];
   } | null;
   undoJudgment: { presentationId: string; judgmentId: number; playerId: string } | null;
   buzzer: {
+    openedAt: number | null;
     winnerId: string | null;
     winnerInfo: WinnerInfo | null;
     attempted: string[];
@@ -257,7 +264,8 @@ export class GameEngine {
 
   reset(): void {
     this.clearTimer();
-    clearTimeout(this.roundTimeout);
+    if (this.roundTimeout) clearTimeout(this.roundTimeout);
+    this.roundTimeout = undefined;
     this.phase = PHASES.LOBBY;
     this.roundIndex = -1;
     this.played = new Set<string>();
@@ -278,7 +286,8 @@ export class GameEngine {
   }
 
   resetBuzzer(): void {
-    clearTimeout(this.buzzWindowHandle);
+    if (this.buzzWindowHandle) clearTimeout(this.buzzWindowHandle);
+    this.buzzWindowHandle = undefined;
     this.buzzWindowEndsAt = null;
     this.buzzer = {
       winnerId: null,
@@ -712,6 +721,8 @@ export class GameEngine {
       chooserBeforeQuestion: this.chooserId,
       judgments: [],
       picks: [],
+      revealAt: null,
+      readyPlayerIds: new Set<string>(),
     };
     if (round.type === 'final') {
       this.finalWagers = new Map();
@@ -1036,13 +1047,35 @@ export class GameEngine {
   }
 
   startReading(question: Question): void {
+    const syncLeadMs = this.room.hasMeasuredPing()
+      ? Math.min(1000, this.room.maxConnectedPingMs() + 40)
+      : 0;
+    if (this.current) {
+      this.current.revealAt = Date.now() + syncLeadMs;
+    }
     // A media completion signal, not an estimated duration, ends a waitForFinish script.
     if (this.hasWaitForFinishMedia(question)) {
       this.clearTimer();
       return;
     }
-    this.startTimer('reading', this.estimateReadingSeconds(question), () =>
+    this.startTimer('reading', this.estimateReadingSeconds(question) + syncLeadMs / 1000, () =>
       this.current?.type === 'forAll' ? this.openForAllAnswers() : this.openBuzzer());
+  }
+
+  /** Clients acknowledge they have received the locked question and are ready for synchronized reveal. */
+  markQuestionReady(pid: string, presentationId: string): { ready: boolean; readyCount: number; expectedCount: number } {
+    const current = this.current;
+    if (!current || current.presentationId !== presentationId) {
+      return { ready: false, readyCount: 0, expectedCount: 0 };
+    }
+    current.readyPlayerIds.add(pid);
+    const expected = this.activePlayers();
+    // If we are in the intro and every active player is ready and has measured ping, we know everyone is synced.
+    return {
+      ready: true,
+      readyCount: current.readyPlayerIds.size,
+      expectedCount: expected.length,
+    };
   }
 
   /** The host's device reports that the question's media ended; buzzers open then instead of on an estimate. */
@@ -1124,25 +1157,35 @@ export class GameEngine {
     this.buzzer.typedAnswer = null;
     this.buzzer.typedAnswerClosed = false;
     this.buzzer.pending = [];
-    this.buzzer.openedAt = Date.now();
-    const seconds =
+    const unlockLeadMs = this.room.hasMeasuredPing(true)
+      ? Math.min(1000, this.room.maxConnectedPingMs(true) + 30)
+      : 0;
+    this.buzzer.openedAt = Date.now() + unlockLeadMs;
+    if (this.current && this.current.revealAt === null) {
+      this.current.revealAt = this.buzzer.openedAt;
+    }
+    const baseSeconds =
       overrideSeconds != null
         ? overrideSeconds
         : this.buzzer.remainingMs != null
           ? this.buzzer.remainingMs / 1000
           : this.settings.timeForThinkingOnQuestion;
-    this.startTimer('buzzer', seconds, () => this.expireBuzzer());
+    this.startTimer('buzzer', baseSeconds + unlockLeadMs / 1000, () => this.expireBuzzer());
     this.room.emitEvent({ type: 'buzzerOpen', openedAt: this.buzzer.openedAt });
   }
 
-  resolvePressTimestamp(serverNow: number, rawClientAt?: unknown): number {
+  resolvePressTimestamp(serverNow: number, rawClientAt?: unknown, playerId?: string): number {
     const openedAt = this.buzzer.openedAt ?? serverNow;
     const num = Number(rawClientAt);
-    if (!Number.isFinite(num)) return serverNow;
-    // A player's clock is trusted only a little way back, so a skewed or forged clientAt cannot
-    // jump the queue by seconds (audit SEC-4).
-    const minAllowed = Math.max(openedAt, serverNow - CLIENT_CLOCK_TRUST_MS);
-    const maxAllowed = serverNow + 20;
+    if (!Number.isFinite(num)) return Math.max(openedAt, serverNow);
+    const player = playerId ? this.room.participants.get(playerId) : undefined;
+    const measuredAllowance = player?.pingMs != null
+      ? player.pingMs + (player.jitterMs ?? 0) * 2 + 100
+      : 0;
+    const trustMs = Math.min(1200, Math.max(CLIENT_CLOCK_TRUST_MS, measuredAllowance));
+    // A player's clock is trusted only a little way back (500 ms default, or up to measured RTT) and never before openedAt.
+    const minAllowed = Math.max(openedAt, serverNow - trustMs);
+    const maxAllowed = Math.max(openedAt, serverNow + 20);
     return Math.min(maxAllowed, Math.max(minAllowed, num));
   }
 
@@ -1167,6 +1210,18 @@ export class GameEngine {
     if (this.buzzer.attempted.has(playerId)) return { result: 'ignored' };
     if ((this.buzzer.blockedUntil.get(playerId) ?? 0) > now) return { result: 'ignored' };
 
+    // Validate that no synchronized press timestamp predates the scheduled unlock time (openedAt).
+    if (this.buzzer.openedAt != null && Number.isFinite(meta?.clientAt) &&
+        Number(meta.clientAt) < this.buzzer.openedAt && now < this.buzzer.openedAt) {
+      if (this.settings.falseStart) {
+        this.buzzer.blockedUntil.set(playerId, now + this.settings.timeForBlockingButton * 1000);
+        this.room.emitEvent({ type: 'falseStart', playerId });
+        this.room.changed();
+        return { result: 'falseStart' };
+      }
+      return { result: 'ignored' };
+    }
+
     if (this.buzzer.pending[0]?.mode === 'random' ||
         (!this.buzzer.pending.length && this.settings.buttonPressMode === 'randomWithinInterval' && this.settings.buttonPressIntervalMs > 0)) {
       const firstPress = this.buzzer.pending.length === 0;
@@ -1179,9 +1234,13 @@ export class GameEngine {
       return { result: 'queued' };
     }
 
+    const usePingReconciliation = this.room.hasMeasuredPing(true) && Number.isFinite(meta?.clientAt);
     if (this.buzzer.pending[0]?.mode === 'clientTimestamp' ||
-        (!this.buzzer.pending.length && this.settings.buzzSyncMode === 'clientTimestamp' && this.settings.buzzSyncWindowMs > 0)) {
-      const effectiveAt = this.resolvePressTimestamp(now, meta?.clientAt);
+        (!this.buzzer.pending.length && (
+          (this.settings.buzzSyncMode === 'clientTimestamp' && this.settings.buzzSyncWindowMs > 0) ||
+          usePingReconciliation
+        ))) {
+      const effectiveAt = this.resolvePressTimestamp(now, meta?.clientAt, playerId);
       const firstPress = this.buzzer.pending.length === 0;
       if (!this.buzzer.pending.some((p) => p.playerId === playerId)) {
         this.buzzer.pending.push({
@@ -1193,7 +1252,14 @@ export class GameEngine {
         });
       }
       if (firstPress) {
-        this.scheduleBuzzWindow(this.settings.buzzSyncWindowMs);
+        const maxPing = this.room.maxConnectedPingMs(true);
+        const pingWindowMs = this.room.hasMeasuredPing(true)
+          ? Math.min(1000, Math.max(40, maxPing + 25))
+          : 0;
+        const windowMs = this.settings.buzzSyncMode === 'clientTimestamp'
+          ? Math.max(this.settings.buzzSyncWindowMs, pingWindowMs)
+          : pingWindowMs;
+        this.scheduleBuzzWindow(windowMs);
       }
       return { result: 'queued' };
     }
@@ -1543,6 +1609,8 @@ export class GameEngine {
         showmanComments: viewer?.role === ROLES.HOST ? c.question.info.showmanComments || null : null,
         selectionMode: c.question.typeParams?.selectionMode ?? null,
         picks: c.answerShown ? c.picks : [],
+        revealAt: c.revealAt,
+        readyPlayerIds: [...c.readyPlayerIds],
       },
       undoJudgment: canModerate && this.canUndoJudgment() && c ? {
         presentationId: c.presentationId,
@@ -1550,6 +1618,7 @@ export class GameEngine {
         playerId: c.judgments.at(-1)!.playerId,
       } : null,
       buzzer: {
+        openedAt: this.buzzer.openedAt,
         winnerId: this.buzzer.winnerId,
         winnerInfo: this.buzzer.winnerInfo,
         attempted: [...this.buzzer.attempted],

@@ -118,7 +118,8 @@ export function registerSocketHandlers(io: Server, room: Room, limits: SocketLim
           // Ignored repeat buzzes do not alter state and should not trigger room-wide snapshots.
           if (event.startsWith('game:') &&
               !(event === 'game:buzz' && (result as { result?: string } | null)?.result === 'ignored') &&
-              !(event === 'game:contentFinished' && (result as { advanced?: boolean } | null)?.advanced === false)) room.changed();
+              !(event === 'game:contentFinished' && (result as { advanced?: boolean } | null)?.advanced === false) &&
+              !(event === 'game:questionReady' && (result as { ready?: boolean } | null)?.ready === false)) room.changed();
           reply({ ok: true, ...(typeof result === 'object' && result !== null ? result : {}) });
         } catch (err) {
           reply({ ok: false, error: (err as Error).message });
@@ -136,7 +137,15 @@ export function registerSocketHandlers(io: Server, room: Room, limits: SocketLim
 
     /* ---- clock sync ---- */
 
-    on('clock:ping', 'none', () => ({ serverTime: Date.now() }));
+    on<{ rttMs?: number }>('clock:ping', 'none', (payload) => {
+      if (socket.data.pid && payload?.rttMs !== undefined) {
+        room.recordPing(socket.data.pid as string, payload.rttMs);
+      }
+      return {
+        serverTime: Date.now(),
+        maxPingMs: room.maxConnectedPingMs(),
+      };
+    });
 
     /* ---- session ---- */
 
@@ -245,6 +254,8 @@ export function registerSocketHandlers(io: Server, room: Room, limits: SocketLim
     on('game:openBuzzer', 'moderator', () => room.engine.openBuzzer());
     on<{ presentationId: string }>('game:contentFinished', 'moderator', ({ presentationId }) =>
       room.engine.contentFinished(presentationId));
+    on<{ presentationId: string }>('game:questionReady', 'member', ({ presentationId }, pid) =>
+      room.engine.markQuestionReady(pid, String(presentationId ?? '')));
     on<{ clientAt?: number }>('game:buzz', 'member', (payload, pid) => {
       const buzzer = room.engine.buzzer;
       // Once this player's press is pending, penalized, or spent, repeats cannot improve it.

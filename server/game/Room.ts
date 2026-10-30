@@ -30,6 +30,10 @@ export interface Participant {
   joinedAt: number;
   autoSpectator?: boolean;
   displayOnly?: boolean;
+  pingMs?: number | null;
+  oneWayMs?: number | null;
+  jitterMs?: number | null;
+  rttSamples?: number[];
 }
 
 export interface RoomSnapshot {
@@ -50,6 +54,9 @@ export interface RoomSnapshot {
     connected: boolean;
     isOwner: boolean;
     displayOnly: boolean;
+    pingMs: number | null;
+    oneWayMs: number | null;
+    jitterMs: number | null;
   }>;
   settings: GameSettings;
   pack: {
@@ -108,6 +115,53 @@ export class Room extends EventEmitter {
   canManage(pid: string | null | undefined): boolean {
     return !!pid && !this.participants.get(pid)?.displayOnly &&
       (pid === this.ownerId || this.canModerate(pid));
+  }
+
+  /** Records a client's measured RTT sample (ms) and updates its filtered ping, one-way latency, and jitter. */
+  recordPing(pid: string | null | undefined, rawRttMs: unknown): void {
+    if (!pid) return;
+    const p = this.participants.get(pid);
+    if (!p || !p.connected) return;
+    const rtt = Number(rawRttMs);
+    if (!Number.isFinite(rtt) || rtt < 0 || rtt > 5000) return;
+    const sample = Math.round(rtt);
+    p.rttSamples ??= [];
+    p.rttSamples.push(sample);
+    if (p.rttSamples.length > 8) p.rttSamples.shift();
+    const sorted = [...p.rttSamples].sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)]!;
+    const mean = sorted.reduce((acc, v) => acc + v, 0) / sorted.length;
+    const mad = sorted.reduce((acc, v) => acc + Math.abs(v - mean), 0) / sorted.length;
+    const prevPing = p.pingMs ?? null;
+    p.pingMs = Math.round(median);
+    p.oneWayMs = Math.round(median / 2);
+    p.jitterMs = Math.round(mad);
+    if (prevPing === null || Math.abs(prevPing - p.pingMs) >= 4) {
+      this.changed();
+    }
+  }
+
+  /** True if at least one connected participant (or player) has reported a live RTT measurement. */
+  hasMeasuredPing(onlyPlayers = false): boolean {
+    for (const p of this.participants.values()) {
+      if (!p.connected) continue;
+      if (onlyPlayers && p.role !== ROLES.PLAYER) continue;
+      if (typeof p.pingMs === 'number' && Number.isFinite(p.pingMs)) return true;
+    }
+    return false;
+  }
+
+  /** Maximum RTT (ms) across all connected participants (or connected players). */
+  maxConnectedPingMs(onlyPlayers = false): number {
+    let maxPing = 0;
+    for (const p of this.participants.values()) {
+      if (!p.connected) continue;
+      if (onlyPlayers && p.role !== ROLES.PLAYER) continue;
+      if (typeof p.pingMs === 'number' && p.pingMs > maxPing) {
+        maxPing = p.pingMs;
+      }
+    }
+    return maxPing;
   }
 
   /* ------------------------------------------------------------ sessions */
@@ -169,7 +223,8 @@ export class Room extends EventEmitter {
     this.promoteSpectators();
     if (this.ownerId && !this.participants.get(this.ownerId)?.connected &&
         !this.removalTimers.has(this.ownerId)) this.reassignOwner();
-    clearTimeout(this.removalTimers.get(pid));
+    const removalTimer = this.removalTimers.get(pid);
+    if (removalTimer) clearTimeout(removalTimer);
     this.removalTimers.delete(pid);
     takeGraceMode(this, pid); // a reconnect ends any restore grace; later drops follow live rules
     clearHandover(this, pid);
@@ -465,6 +520,9 @@ export class Room extends EventEmitter {
           connected: p.connected,
           isOwner: p.id === this.ownerId,
           displayOnly: !!p.displayOnly,
+          pingMs: p.pingMs ?? null,
+          oneWayMs: p.oneWayMs ?? null,
+          jitterMs: p.jitterMs ?? null,
         })),
       settings: this.settings,
       pack: pack && loadedPack ? {

@@ -73,36 +73,56 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   let state: RoomState | null = null;
   let clockOffset = 0; // serverTime - Date.now()
   let bestRtt = Infinity;
+  let lastRttMs = Infinity;
+  const clockSamples: Array<{ rtt: number; offset: number }> = [];
+  let readyAckedId: string | null = null;
+  let revealScheduleTimer: ReturnType<typeof setTimeout> | null = null;
+  let unlockScheduleTimer: ReturnType<typeof setTimeout> | null = null;
   let actionUncertain = false;
   const uncertainActionMessage = 'Action outcome unknown. It may still have applied; check the game state before retrying.';
   const unsentActionMessage = 'Action was not sent. Reconnect before trying again.';
 
-  // Lowest-latency samples give client timestamps a stable server clock estimate.
+  // Lowest-latency samples give client timestamps a stable server clock estimate and report RTT telemetry.
   function syncClockSample() {
     if (!socket.connected) return;
     const sentAt = Date.now();
-    socket.emit('clock:ping', {}, (res) => {
+    const payload = Number.isFinite(lastRttMs) ? { rttMs: Math.round(lastRttMs) } : {};
+    socket.emit('clock:ping', payload, (res) => {
       if (!res?.ok || !Number.isFinite(res.serverTime)) return;
       const receivedAt = Date.now();
-      const rtt = receivedAt - sentAt;
+      const rtt = Math.max(0, receivedAt - sentAt);
       const sampleOffset = res.serverTime + rtt / 2 - receivedAt;
-      if (rtt <= bestRtt) {
-        bestRtt = rtt;
-        clockOffset = sampleOffset;
-      } else {
-        clockOffset = clockOffset * 0.8 + sampleOffset * 0.2;
-      }
+      clockSamples.push({ rtt, offset: sampleOffset });
+      if (clockSamples.length > 8) clockSamples.shift();
+      const sorted = [...clockSamples].sort((a, b) => a.rtt - b.rtt);
+      const bestHalf = sorted.slice(0, Math.max(1, Math.ceil(sorted.length / 2)));
+      bestRtt = sorted[0]!.rtt;
+      lastRttMs = bestHalf.reduce((sum, s) => sum + s.rtt, 0) / bestHalf.length;
+      clockOffset = bestHalf.reduce((sum, s) => sum + s.offset, 0) / bestHalf.length;
     });
   }
 
   async function calibrateClockBurst() {
     bestRtt = Infinity;
+    clockSamples.length = 0;
     for (let i = 0; i < 4; i++) {
       syncClockSample();
       await new Promise((resolve) => setTimeout(resolve, 120));
     }
   }
-  setInterval(syncClockSample, 8000);
+  setInterval(syncClockSample, 3000);
+
+  /** Schedules a callback at an exact server timestamp using setTimeout + requestAnimationFrame. */
+  function scheduleAtServerTime(targetServerMs: number, fn: () => void): ReturnType<typeof setTimeout> {
+    const delayMs = Math.max(0, targetServerMs - (Date.now() + clockOffset));
+    return setTimeout(() => {
+      const spin = () => {
+        if (Date.now() + clockOffset >= targetServerMs) fn();
+        else requestAnimationFrame(spin);
+      };
+      requestAnimationFrame(spin);
+    }, Math.max(0, delayMs - 14));
+  }
 
   /* ---------------- Volume ---------------- */
   // Each device keeps its own level, so a loud TV and a quiet phone can share one room.
@@ -253,15 +273,19 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     if (!token) {
       if (tvMode) {
         socket.emit('session:join', { nickname: `TV ${Math.floor(Math.random() * 10000)}`, asSpectator: true }, (res: JoinAck) => {
-          if (res.ok) localStorage.setItem(TOKEN_KEY, res.token);
-          else { show('screen-join'); $('#join-error').textContent = res.error; }
+          if (res.ok) {
+            localStorage.setItem(TOKEN_KEY, res.token);
+            syncClockSample();
+          } else { show('screen-join'); $('#join-error').textContent = res.error; }
         });
         return;
       }
       return show('screen-join');
     }
     socket.emit('session:resume', { token }, (res: { resumed?: boolean }) => {
-      if (!res?.resumed) {
+      if (res?.resumed) {
+        syncClockSample();
+      } else {
         localStorage.removeItem(TOKEN_KEY);
         actionUncertain = false;
         $('#connection-status').textContent = '';
@@ -306,6 +330,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       if (err) return ($('#join-error').textContent = 'No reply from the game. Check the connection and try again.');
       if (!res.ok) return ($('#join-error').textContent = res.error);
       localStorage.setItem(TOKEN_KEY, res.token);
+      syncClockSample();
     });
   });
 
@@ -373,6 +398,10 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     const c = s.game?.current;
     if (c && ['intro', 'reading'].includes(s.game.phase)) {
       lastPick = { round: s.game.roundIndex, theme: c.themeIndex, question: c.questionIndex };
+      if (s.you && readyAckedId !== c.presentationId) {
+        readyAckedId = c.presentationId;
+        socket.emit('game:questionReady', { presentationId: c.presentationId }, () => {});
+      }
     }
     if (!pickTransition(prev, s)) return render();
     pickTransitionRunning = true;
@@ -1122,6 +1151,15 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       else if (isBlocked) badge('blocked-badge', `Blocked ${Math.max(1, Math.ceil((blockedUntil - now) / 1000))}s`);
       else if (hasTried) badge('tried-badge', 'Answered');
       else if (isChooser) badge('chooser-badge', game.phase === 'finalThemes' ? 'Removes' : 'Picks');
+      else if (typeof p.pingMs === 'number' && (you.canModerate || p.id === you.id)) {
+        const quality = p.pingMs <= 25 ? 'ping-good' : p.pingMs <= 70 ? 'ping-fair' : 'ping-poor';
+        const pingSpan = Object.assign(document.createElement('span'), {
+          className: `badge ping-badge ${quality}`,
+          textContent: `${p.pingMs} ms`,
+          title: `RTT: ${p.pingMs} ms · One-way: ${p.oneWayMs ?? Math.round(p.pingMs / 2)} ms · Jitter: ±${p.jitterMs ?? 0} ms`,
+        });
+        slot.append(pingSpan);
+      }
       el.append(slot);
       // Final answers are judged on each podium, next to the answer and wager they belong to.
       // The server sends them to the host while judging and to everyone once the final is revealed.
@@ -1143,7 +1181,10 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       // Menu items live in a popover panel so opening one never reshapes the podium row.
       const panel = Object.assign(document.createElement('div'), { className: 'player-menu-panel' });
       // Naming the person keeps the menu readable when it floats over the board.
-      panel.append(Object.assign(document.createElement('strong'), { className: 'menu-title', textContent: p.name }));
+      const titleText = typeof p.pingMs === 'number' && p.connected
+        ? `${p.name} · ${p.pingMs} ms (±${p.jitterMs ?? 0})`
+        : p.name;
+      panel.append(Object.assign(document.createElement('strong'), { className: 'menu-title', textContent: titleText }));
       actions.append(summary, panel);
       if (you.canModerate && p.role === 'player') {
         const row = document.createElement('div');
@@ -2070,7 +2111,17 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     }
     // Avoid restarting media on every state update.
     const hiddenPhases = ['intro', 'specialSetup', 'stakeAuction', 'finalWager'];
-    const contentVisible = !hiddenPhases.includes(game.phase) &&
+    const now = nowServer();
+    const awaitingSyncReveal = c.revealAt != null && now < c.revealAt && game.phase === 'reading';
+    if (awaitingSyncReveal) {
+      if (revealScheduleTimer) clearTimeout(revealScheduleTimer);
+      revealScheduleTimer = scheduleAtServerTime(c.revealAt!, () => {
+        revealScheduleTimer = null;
+        renderQuestion();
+        updateOrientiers();
+      });
+    }
+    const contentVisible = !awaitingSyncReveal && !hiddenPhases.includes(game.phase) &&
       !(game.phase === 'paused' && hiddenPhases.includes(game.pausedPhase ?? ''));
     const presenting = contentVisible && !c.answerShown &&
       (game.phase === 'reading' || (game.phase === 'paused' && game.pausedPhase === 'reading'));
@@ -2361,11 +2412,22 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       }
     }
 
-    // 2. Player Buzzer Button Orientier
+     // 2. Player Buzzer Button Orientier
+    // Hold the green unlock until the scheduled buzzer.openedAt timestamp so 0ms and Wi-Fi players see it together.
+    const awaitingUnlock = game.phase === 'buzzerOpen' && game.buzzer.openedAt != null && now < game.buzzer.openedAt;
+    if (awaitingUnlock) {
+      if (unlockScheduleTimer) clearTimeout(unlockScheduleTimer);
+      unlockScheduleTimer = scheduleAtServerTime(game.buzzer.openedAt!, () => {
+        unlockScheduleTimer = null;
+        renderQuestion();
+        updateOrientiers();
+      });
+    }
+    const effectiveGame = awaitingUnlock ? { ...game, phase: 'reading' } : game;
     // Keep the fixed buzzer off finished phases so it cannot cover mobile appeal controls.
-    const showBuzzer = you.role === 'player' && ['intro', 'reading', 'buzzerOpen', 'answering'].includes(game.phase) &&
-      (settings.oral || game.phase !== 'answering') &&
-      game.current?.type !== 'forAll' && game.round?.type !== 'final';
+    const showBuzzer = you.role === 'player' && ['intro', 'reading', 'buzzerOpen', 'answering'].includes(effectiveGame.phase) &&
+      (settings.oral || effectiveGame.phase !== 'answering') &&
+      effectiveGame.current?.type !== 'forAll' && effectiveGame.round?.type !== 'final';
     buzzerBtn.classList.toggle('hidden', !showBuzzer);
     buzzerBtn.classList.toggle('moderator-buzzer', !!you?.canModerate);
     if (!showBuzzer) return;
@@ -2373,8 +2435,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     buzzerBtn.classList.remove('buzz-reading', 'buzz-open', 'buzz-blocked', 'buzz-you-answering', 'buzz-idle',
       'offline', 'sent', 'not-sent');
     // Labels, offline state and press feedback live in buzzerFeedback.ts (audit UX-3).
-    buzzPress.follow(`${game.current?.presentationId ?? ''}:${game.phase}`);
-    const view = buzzerView(phaseLabel({ game, youId: you.id, settings, now, touchOnly, nameOf }), socket.connected, buzzPress.state);
+    buzzPress.follow(`${effectiveGame.current?.presentationId ?? ''}:${effectiveGame.phase}`);
+    const view = buzzerView(phaseLabel({ game: effectiveGame, youId: you.id, settings, now, touchOnly, nameOf }), socket.connected, buzzPress.state);
     buzzerBtn.classList.add(view.tone, ...view.flags);
     (buzzerBtn as HTMLButtonElement).disabled = view.disabled;
     $('#buzzer-main').textContent = view.main;
@@ -2437,7 +2499,10 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     if (!reading || lines[0] !== readFirstLine) readFloor = 0;
     readFirstLine = lines[0];
     const total = lines.reduce((sum, p) => sum + lettersOf(p).length, 0);
-    const done = reading && t ? Math.min(1, Math.max(0, 1 - (t.endsAt - nowServer()) / t.durationMs)) : 1;
+    const revealAt = s.game.current.revealAt;
+    const startAt = t ? (revealAt != null ? revealAt : t.endsAt - t.durationMs) : 0;
+    const effectiveDuration = t ? Math.max(1, t.endsAt - startAt) : 1;
+    const done = reading && t ? Math.min(1, Math.max(0, (nowServer() - startAt) / effectiveDuration)) : 1;
     // Stretch the sweep so the fading edge also finishes exactly when the clock does.
     const progress = readFloor = Math.max(readFloor, done * (total + READ_EDGE));
     const finished = !reading || progress >= total + READ_EDGE;
@@ -2472,16 +2537,20 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
 
   /* ---------------- controls ---------------- */
 
-  function triggerBuzz() {
+  function triggerBuzz(eventTimeStamp?: number) {
     // An offline press would be flushed unjoined on reconnect and silently rejected (audit CONN-2).
     if (!socket.connected) return;
     navigator.vibrate?.(15);
-    socket.emit('game:buzz', { clientAt: Math.round(nowServer()) }, buzzPress.press());
+    const eventAgeMs = typeof eventTimeStamp === 'number' && eventTimeStamp > 0
+      ? Math.max(0, Math.min(200, performance.now() - eventTimeStamp))
+      : 0;
+    const clientAt = Math.round(nowServer() - eventAgeMs);
+    socket.emit('game:buzz', { clientAt }, buzzPress.press());
   }
-  $('#buzzer').addEventListener('pointerdown', triggerBuzz);
+  $('#buzzer').addEventListener('pointerdown', (event) => triggerBuzz(event.timeStamp));
   // Keyboard and assistive clicks have no pointerdown; pointer clicks already buzz above.
   $('#buzzer').addEventListener('click', (event) => {
-    if (event.detail === 0) triggerBuzz();
+    if (event.detail === 0) triggerBuzz(event.timeStamp);
   });
   document.addEventListener('keydown', (e) => {
     const focused = document.activeElement;
@@ -2490,7 +2559,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       (focused.isContentEditable || !!focused.closest('input, textarea, select, button, a, [role="button"]'));
     if (e.code === 'Space' && state?.you?.role === 'player' && state.game.current?.type !== 'forAll' && !otherControl) {
       e.preventDefault();
-      if (!e.repeat) triggerBuzz();
+      if (!e.repeat) triggerBuzz(e.timeStamp);
     }
   });
 

@@ -6,6 +6,9 @@ export interface Participant {
   connected: boolean;
   displayOnly: boolean;
   isOwner: boolean;
+  pingMs?: number | null;
+  oneWayMs?: number | null;
+  jitterMs?: number | null;
 }
 
 export interface ContentItem {
@@ -88,8 +91,11 @@ export interface RoomState {
       showmanComments: string | null;
       selectionMode: string | null;
       picks: { playerId: string; value: string; correct: boolean }[];
+      revealAt?: number | null;
+      readyPlayerIds?: string[];
     } | null;
     buzzer: {
+      openedAt?: number | null;
       winnerId: string | null;
       typedAnswer: { text: string | null; submitted: boolean; closed: boolean } | null;
       winnerInfo: { mode: 'server' | 'clientTimestamp' | 'random'; reactionMs: number; transitMs?: number; contenders?: number } | null;
@@ -184,6 +190,7 @@ export interface CommandPayloads {
   'game:appealRequest': { judgmentId: number };
   'game:appealVote': { support: boolean };
   'game:contentFinished': { presentationId: string };
+  'game:questionReady': { presentationId: string };
 }
 
 export type CommandEvent = NoPayloadCommand | keyof CommandPayloads;
@@ -220,5 +227,5 @@ export type ClientToServerEvents = {
   'session:join': (payload: { nickname: string; asSpectator?: boolean }, ack: (result: JoinAck) => void) => void;
   'session:resume': (payload: { token: string }, ack: (result: { ok: boolean; resumed?: boolean }) => void) => void;
   'game:buzz': (payload: { clientAt: number }, ack: (result: Ack) => void) => void;
-  'clock:ping': (payload: Record<string, never>, ack: (result: { ok: boolean; serverTime: number }) => void) => void;
+  'clock:ping': (payload: { rttMs?: number }, ack: (result: { ok: boolean; serverTime: number; maxPingMs?: number }) => void) => void;
 };
