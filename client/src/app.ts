@@ -1578,8 +1578,11 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       Object.assign(document.createElement('li'), { className: done ? 'done' : '', textContent: text })));
     const ready = checks.every(([done]) => done);
     button('#btn-start').disabled = !ready;
-    $('#start-hint').textContent = !hasHost
-      ? 'Open a participant’s Manage menu and choose Make host.' : '';
+    // An offline host still holds the seat; Make host appears only once that seat is released.
+    const offlineHost = state.participants.some((p) => p.role === 'host' && !p.connected);
+    $('#start-hint').textContent = hasHost ? ''
+      : offlineHost ? 'The host is offline. Choose Release host seat in their Manage menu, then Make host.'
+        : 'Open a participant’s Manage menu and choose Make host.';
 
     // Sync settings inputs
     const s = state.settings;
