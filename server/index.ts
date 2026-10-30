@@ -54,13 +54,8 @@ app.get('/api/invite.svg', (req: Request, res: Response) => {
   res.type('image/svg+xml').set('Cache-Control', 'no-store').send(qrSvg(url));
 });
 
-app.get('/api/packs', async (_req: Request, res: Response, next: NextFunction) => {
-  try {
-    res.json(await listPacks());
-  } catch (err) {
-    next(err);
-  }
-});
+// No unauthenticated pack listing (audit SEC-2): the client lists packs over the socket
+// (`packs:list`), and an open GET let anyone on the LAN re-parse every broken pack on demand.
 
 /** Hosts and room owners may add a pack without exposing an unfinished archive to players. */
 app.post('/api/packs/upload', async (req, res) => {
@@ -150,13 +145,30 @@ app.use((err: Error & { status?: number }, _req: Request, res: Response, _next: 
 
 /* --------------------------------------------------------------- startup */
 
+/** The launcher never restarts on this code: a taken port stays taken until the user acts. */
+const EXIT_PORT_IN_USE = 78;
+
 server.on('error', (err: NodeJS.ErrnoException) => {
   if (err.code === 'EADDRINUSE') {
     console.error(`\n  Port ${config.port} is already in use. Close the other app or set PORT=3001 before starting again.\n`);
-  } else {
-    console.error(err);
+    process.exit(EXIT_PORT_IN_USE);
   }
+  console.error(err);
   process.exit(1);
+});
+
+/*
+ * Last-resort crash handling (audit CONN-1). A stray rejected promise is logged and the game
+ * goes on. A synchronous throw may have left state half-updated, so save what we have and exit;
+ * the launcher restarts the server and players resume from the saved room.
+ */
+process.on('unhandledRejection', (reason) => {
+  console.error('[server] Unhandled promise rejection (game continues):', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[server] Uncaught exception, saving the room and exiting:', err);
+  setTimeout(() => process.exit(1), 2000).unref();
+  flushRoomState().catch(() => {}).finally(() => process.exit(1));
 });
 
 server.listen(config.port, config.host, () => {

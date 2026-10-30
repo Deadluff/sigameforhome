@@ -17,6 +17,7 @@ import type { AnswerOption, AnswerType, ContentItem, Package, Question, Question
 import { PHASES, type Phase, ROLES } from './constants.ts';
 import type { Participant, Room } from './Room.ts';
 import type { GameSettings } from './settings.ts';
+import { safeTimeout } from '../utils/safeTimer.ts';
 
 /** Host verdict multipliers for a correct answer: half credit, full, or double. */
 const REWARD_FACTORS = [0.5, 1, 2];
@@ -626,14 +627,14 @@ export class GameEngine {
   scheduleRoundEnd(): void {
     clearTimeout(this.roundTimeout);
     if (!this.roundEndsAt) return;
-    this.roundTimeout = setTimeout(() => {
+    this.roundTimeout = safeTimeout('round end', () => {
       if (this.phase === PHASES.BOARD || this.phase === PHASES.FINAL_THEMES) {
         this.clearTimer();
         this.phase = PHASES.ROUND_END;
         this.room.emitEvent({ type: 'roundEnd', roundIndex: this.roundIndex, outOfTime: true });
         this.room.changed();
       }
-    }, Math.max(0, this.roundEndsAt - Date.now()));
+    }, Math.max(0, this.roundEndsAt - Date.now()), () => this.room.changed());
   }
 
   startChoosingTimer(): void {
@@ -1084,7 +1085,7 @@ export class GameEngine {
 
   scheduleBuzzWindow(delayMs: number): void {
     this.buzzWindowEndsAt = Date.now() + delayMs;
-    this.buzzWindowHandle = setTimeout(() => {
+    this.buzzWindowHandle = safeTimeout('buzz window', () => {
       this.buzzWindowEndsAt = null;
       const pool = this.buzzer.pending;
       this.buzzer.pending = [];
@@ -1092,7 +1093,7 @@ export class GameEngine {
         this.grantPendingBuzz(pool);
         this.room.changed();
       }
-    }, delayMs);
+    }, delayMs, () => this.room.changed());
   }
 
   expireBuzzer(): void {

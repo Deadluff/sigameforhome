@@ -567,6 +567,22 @@ function findContentEntry(zip: AdmZip): IZipEntry | null {
   return zip.getEntries().find((e) => !e.isDirectory && e.entryName.toLowerCase() === 'content.xml') ?? null;
 }
 
+/**
+ * Reads an entry without trusting a declared size of 0 (audit SEC-1).
+ * Our size limits check only the declared size. adm-zip <=0.6.0 capped inflation only when that
+ * size was above 0, so a crafted 0-byte entry could inflate to ~4 GB. The pinned 0.6.1 throws on
+ * such an entry instead, which would still fail the whole pack. Skipping the read keeps the pack
+ * playable and stays safe if the library version drifts. A genuinely empty file loses nothing.
+ */
+function readEntry(entry: IZipEntry): Buffer {
+  return entry.header.size === 0 ? Buffer.alloc(0) : entry.getData();
+}
+
+function readContentXml(entry: IZipEntry): string {
+  if (entry.header.size === 0) throw new Error('content.xml is empty');
+  return readEntry(entry).toString('utf8');
+}
+
 export function isSiqArchive(filePath: string): boolean {
   try {
     return findContentEntry(new AdmZip(filePath)) != null;
@@ -583,7 +599,7 @@ export function readPackHeader(filePath: string): PackHeader {
   if (!entry) throw new Error('content.xml not found');
   // Listing is allowed before loading, so it needs the same XML bound as parseSiq.
   if (entry.header.size > MAX_CONTENT_XML_BYTES) throw new Error('Pack content.xml exceeds 10 MB');
-  const root = xmlParser.parse(entry.getData().toString('utf8'));
+  const root = xmlParser.parse(readContentXml(entry));
   const pkg = root.package;
   if (!pkg) throw new Error('content.xml has no <package> root element');
   validateQuestionNumbers(pkg);
@@ -603,7 +619,7 @@ async function extractMedia(zip: AdmZip, destDir: string): Promise<void> {
     if (segments.length < 2 || !Object.values(MEDIA_FOLDERS).includes(segments[0].toLowerCase())) continue;
     const target = safeJoin(destDir, ...segments);
     await ensureDir(path.dirname(target));
-    await fsp.writeFile(target, e.getData());
+    await fsp.writeFile(target, readEntry(e));
   }
 }
 
@@ -624,7 +640,7 @@ export async function parseSiq(
   if (!contentEntry) throw new Error(`"${path.basename(filePath)}" is not a valid .siq (content.xml missing)`);
   if (contentEntry.header.size > MAX_CONTENT_XML_BYTES) throw new Error('Pack content.xml exceeds 10 MB');
 
-  const xml = contentEntry.getData().toString('utf8').replace(/^\uFEFF/, '');
+  const xml = readContentXml(contentEntry).replace(/^\uFEFF/, '');
   const resolver = createMediaResolver(zip.getEntries(), mediaBaseUrl);
   const pack = normalizePackage(xmlParser.parse(xml), resolver);
 

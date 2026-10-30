@@ -294,6 +294,12 @@ test('restart preserves seats and replays an interrupted question', async (t) =>
   assert.equal(restored.participants.get(player.id).connected, false);
   assert.equal(restored.participants.get(host.id).role, 'host');
   restored.attach(player.id, 'reconnected-player');
+  // CONN-4: the restored owner is in reconnect grace, so reconnecting first must not take ownership.
+  assert.equal(restored.ownerId, host.id);
+  assert.ok(restored.removalTimers.has(host.id));
+  // Once the owner's grace runs out, the connected player inherits ownership and moderation.
+  clearTimeout(restored.removalTimers.get(host.id));
+  restored.expire(host.id);
   assert.equal(restored.ownerId, player.id);
   assert.equal(restored.canModerate(player.id), true);
 });
@@ -358,6 +364,15 @@ test('restart preserves seats and scores when the selected pack is missing', asy
   assert.equal(restored.participants.get(player.id).score, 300);
   assert.equal(restored.participants.get(host.id).role, 'host');
   restored.attach(player.id, 'reconnected-player');
+  // CONN-4: ownership waits for the restored owner's grace, as in the replay test above.
+  assert.equal(restored.ownerId, host.id);
+  assert.ok(restored.removalTimers.has(host.id));
+  clearTimeout(restored.removalTimers.get(host.id));
+  restored.expire(host.id);
+  // The saved game was not in the lobby, so the seat survives the lobby fallback ('keep' mode).
+  assert.equal(restored.participants.get(host.id).role, 'host');
+  assert.equal(restored.participants.get(player.id).score, 300);
+  assert.equal(restored.ownerId, player.id);
   assert.equal(restored.canModerate(player.id), true);
 });
 

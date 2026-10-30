@@ -6,6 +6,7 @@ import { config } from '../config.ts';
 import { loadPack } from '../packs/packManager.ts';
 import { PHASES, type Phase } from './constants.ts';
 import { defaultSettings, type GameSettings } from './settings.ts';
+import { armGrace, graceModeForSavedPhase } from './seatGrace.ts';
 import type { CurrentQuestionState, Judgment } from './GameEngine.ts';
 import type { Participant, Room } from './Room.ts';
 
@@ -105,8 +106,13 @@ export async function restoreRoom(room: Room, stateFile = file): Promise<void> {
         room.engine.scheduleRoundEnd();
       }
     }
+    // Everyone restored is offline, so give each the normal reconnect window (audit CONN-4).
+    const mode = graceModeForSavedPhase(game?.phase);
+    for (const pid of room.participants.keys()) armGrace(room, pid, mode);
   } catch (err) {
     console.warn(`[room] State not restored: ${(err as Error).message}`);
+    for (const timer of room.removalTimers.values()) clearTimeout(timer);
+    room.removalTimers.clear();
     room.participants.clear(); room.tokens.clear(); room.ownerId = null; room.loadedPack = null;
     room.engine.reset();
   }

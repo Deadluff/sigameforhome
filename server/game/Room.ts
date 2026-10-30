@@ -10,6 +10,8 @@ import type { ContentItem, PackageStats, RoundType } from '../packs/siqParser.ts
 import { PHASES, ROLES, type Role } from './constants.ts';
 import { GameEngine, type GameView } from './GameEngine.ts';
 import { applySettingsPatch, defaultSettings, type GameSettings } from './settings.ts';
+import { takeGraceMode } from './seatGrace.ts';
+import { safeTimeout } from '../utils/safeTimer.ts';
 
 const NICK_MAX = 24;
 const MAX_MANUAL_SCORE = 1_000_000_000_000;
@@ -172,6 +174,7 @@ export class Room extends EventEmitter {
         !this.removalTimers.has(this.ownerId)) this.reassignOwner();
     clearTimeout(this.removalTimers.get(pid));
     this.removalTimers.delete(pid);
+    takeGraceMode(this, pid); // a reconnect ends any restore grace; later drops follow live rules
     this.changed();
     return previous;
   }
@@ -185,7 +188,7 @@ export class Room extends EventEmitter {
     p.socketId = null;
     this.removalTimers.set(
       pid,
-      setTimeout(() => this.expire(pid), config.reconnectGraceMs),
+      safeTimeout(`reconnect grace ${pid}`, () => this.expire(pid), config.reconnectGraceMs, () => this.changed()),
     );
     // A disconnected bidder cannot act, so offer the turn to the next player now.
     if (wasAuctionTurn) this.engine.advanceStakeAuction();
@@ -196,8 +199,10 @@ export class Room extends EventEmitter {
   expire(pid: string): void {
     const p = this.participants.get(pid);
     this.removalTimers.delete(pid);
+    // A restored 'keep' seat survives a lobby fallback (e.g. its saved pack failed to load).
+    const keepRestored = takeGraceMode(this, pid) === 'keep';
     if (!p || p.connected) return;
-    const inGame = this.engine.phase !== PHASES.LOBBY;
+    const inGame = this.engine.phase !== PHASES.LOBBY || keepRestored;
     if (inGame && (p.role === ROLES.PLAYER || p.role === ROLES.HOST)) {
       // Keep scores/seats for reconnects, but let a connected participant recover moderation.
       if (this.ownerId === pid) {
@@ -223,6 +228,7 @@ export class Room extends EventEmitter {
       this.engine.auctionTurnId() === pid;
     clearTimeout(this.removalTimers.get(pid));
     this.removalTimers.delete(pid);
+    takeGraceMode(this, pid);
     this.participants.delete(pid);
     this.tokens.delete(p.token);
     if (this.engine.chooserId === pid) this.engine.chooserId = this.players()[0]?.id ?? null;
