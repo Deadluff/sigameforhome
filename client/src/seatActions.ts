@@ -21,6 +21,25 @@ export function removeConfirmBody(p: { name: string; role: string; score: number
 }
 
 /**
+ * "Give this seat to…" on an offline player's menu (device playtest F7): the player rejoined from
+ * another device under a new name; the host picks that newcomer and the old seat, score included,
+ * moves to the new device.
+ */
+export function giveSeatForm(seat: { id: string; name: string }, newcomers: { id: string; name: string }[],
+  onGive: (newcomerId: string) => void): HTMLFormElement {
+  const form = Object.assign(document.createElement('form'), { className: 'rename-form give-seat-form' });
+  const pick = document.createElement('select');
+  pick.setAttribute('aria-label', `Who gets ${seat.name}'s seat`);
+  for (const p of newcomers) pick.add(new Option(p.name, p.id));
+  form.append(pick, Object.assign(document.createElement('button'), { type: 'submit', textContent: 'Give seat' }));
+  form.onsubmit = (event) => {
+    event.preventDefault();
+    if (pick.value) onGive(pick.value);
+  };
+  return form;
+}
+
+/**
  * An inline rename field for a seat menu; `onRename` runs only when the name actually changes.
  * Seats are rebuilt on every snapshot, so the caller passes back any half-typed `draft`.
  */

@@ -7,9 +7,12 @@ import { audioCue, drawPins, drawRing, fitText, imageFrame, makePickable, option
 import { buzzerView, createPressTracker, phaseLabel } from './buzzerFeedback';
 import { createConnectionMonitor, noticeText } from './connection';
 import { fullscreenSupported, toggleFullscreen } from './fullscreen';
-import { betweenQuestions, removeConfirmBody, renameForm } from './seatActions';
+import { betweenQuestions, giveSeatForm, removeConfirmBody, renameForm } from './seatActions';
 import { inviteChoices, resultsText } from './sharing';
 import { setupKeepAwake } from './wakeLock';
+import { releasePointerFocus } from './pointerFocus';
+import { createDraftSender } from './draftSender';
+import { auctionTurnHint, formatReaction } from './statusText';
 import { hostBannerText } from './hostBanner';
 import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentItem,
   GameEvent, JoinAck, NoPayloadCommand, PackListItem, RoomState, ServerToClientEvents } from './types';
@@ -517,7 +520,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     me.replaceChildren();
     if (tvMode) me.textContent = 'TV view';
     else {
-      // Phones show your own score here, so it is visible without scrolling to the podium row.
+      // A player's own score sits in the top bar at every width, visible without finding the podium.
       const score = you.role === 'player' && game.phase !== 'lobby' ? participants.find((p) => p.id === you.id)?.score : undefined;
       me.append(avatar(you.id, you.name), Object.assign(document.createElement('span'), { className: 'me-name', textContent: you.name }),
         Object.assign(document.createElement('span'), { className: 'role', textContent: roleLabels[you.role] ?? you.role }));
@@ -672,6 +675,19 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     }
   }
 
+  /*
+   * When a panel becomes your move (bid, wager, written answer), bring it on screen once (playtest
+   * F5): on small phones it can sit below the fold while its clock runs. Once per turn, so it never
+   * fights the player's own scrolling.
+   */
+  let revealedTurn = '';
+  function revealTurnPanel(panel: HTMLElement, turnKey: string) {
+    if (turnKey === revealedTurn) return;
+    revealedTurn = turnKey;
+    const behavior = matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+    requestAnimationFrame(() => panel.scrollIntoView({ block: 'nearest', behavior }));
+  }
+
   function renderFinal() {
     const state = activeState();
     const { game, you, participants } = state;
@@ -685,6 +701,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       return;
     }
     if (wagering && finalist) {
+      revealTurnPanel($('#final-wager'), `wager:${game.current?.presentationId}`);
       const score = Math.max(0, participants.find((p) => p.id === you.id)?.score ?? 0);
       input('#final-amount').max = String(score);
       // The saved wager sits in the field label: below the buttons it fell off small phone screens.
@@ -696,12 +713,15 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     const answering = game.phase === 'finalQuestion' && finalist && !final.judged.includes(you.id);
     $('#final-answer').classList.toggle('hidden', !answering);
     if (answering) {
+      revealTurnPanel($('#final-answer'), `final:${game.current?.presentationId}`);
       const field = textarea('#final-answer-input');
       if (final.yourAnswer && document.activeElement !== field && !field.value) field.value = final.yourAnswer;
-      // A typed but unsent answer used to vanish at time-up with no warning.
+      // Unsent text is kept as a draft and counts if time runs out (playtest F4); say so plainly.
       const draft = field.value.trim();
-      $('#final-answer-status').textContent = draft && draft !== final.yourAnswer ? 'Not sent yet. Press Submit answer.'
-        : final.yourAnswer ? 'Saved. You can change it until time is up.' : '';
+      $('#final-answer-status').textContent = !draft ? (final.yourAnswer ? `Sent: ${final.yourAnswer}` : '')
+        : !final.yourAnswer ? 'Draft kept. Press Submit answer to lock it in.'
+          : draft !== final.yourAnswer ? 'Changed since you sent it. The newest text counts.'
+            : 'Sent. You can change it until time is up.';
     }
     const host = you.canModerate && ['finalWager', 'finalQuestion', 'finalJudge'].includes(game.phase);
     $('#final-host').classList.toggle('hidden', !host);
@@ -712,9 +732,17 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     button('#btn-open-final').disabled = waiting.length > 0;
     button('#btn-close-final').classList.toggle('hidden', game.phase !== 'finalQuestion');
     const answered = finalists.filter((p) => final.answeredIds.includes(p.id)).length;
+    // Name who the room waits for (playtest F11); offline finalists do not hold anything up.
+    const unsent = finalUnsent();
+    const changing = participants.filter((p) => final.editingIds.includes(p.id));
+    const names = (list: { name: string }[]) => list.map((p) => p.name).join(', ');
     $('#final-host-status').textContent = !finalists.length ? 'Nobody has a positive score, so nobody plays the final.'
-      : wagering ? `${finalists.length - waiting.length} of ${finalists.length} wagers saved`
-        : game.phase === 'finalQuestion' ? `${answered} of ${finalists.length} answers in`
+      : wagering ? `${finalists.length - waiting.length} of ${finalists.length} wagers saved` +
+        (waiting.length ? ` · Waiting for ${names(waiting)}` : '')
+        : game.phase === 'finalQuestion' ? `${answered} of ${finalists.length} answers in` +
+          (unsent.length ? ` · Not sent: ${names(unsent)}` : '') +
+          // A finalist changing a sent answer holds the automatic close (see GameEngine).
+          (changing.length ? ` · Changing: ${names(changing)}` : '')
           : 'Judge each answer on the podiums';
   }
 
@@ -727,10 +755,32 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     field.value = field.max;
     send('game:finalWager', { amount: Number(field.max) });
   };
+  /*
+   * Unsent answer text goes to the server quietly while the player types. It counts only when answer
+   * time closes without a newer sent answer, so ending the time early never loses it (playtest F4).
+   * A raw emit on purpose: a draft that fails must not toast or flag the connection.
+   */
+  const drafts = createDraftSender((text) => {
+    if (!socket.connected) return false;
+    socket.emit('game:draft', { text }, () => {});
+    return true;
+  });
+  const draftKey = () => state?.game.current?.presentationId ?? '';
+  // Registered after the session-resume connect handler, which binds this socket to the seat first;
+  // a draft sent before that would be refused and dropped.
+  socket.on('connect', () => drafts.flush());
+  document.addEventListener('visibilitychange', () => { if (document.hidden) drafts.flush(); });
+  for (const field of ['#final-answer-input', '#for-all-answer']) {
+    textarea(field).addEventListener('input', () => drafts.update(draftKey(), textarea(field).value));
+    textarea(field).addEventListener('blur', () => drafts.flush());
+  }
+
   $('#final-answer').addEventListener('submit', (event) => {
     event.preventDefault();
     const answer = textarea('#final-answer-input').value.trim();
-    if (answer) send('game:finalAnswer', { answer });
+    if (!answer) return;
+    drafts.submitted(draftKey(), answer);
+    send('game:finalAnswer', { answer });
   });
   // Answers are one line: Enter sends (Shift+Enter still breaks the line). People pressed Enter and
   // assumed the answer was in.
@@ -744,30 +794,22 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   }
   textarea('#final-answer-input').addEventListener('input', () => { if (state) renderFinal(); });
 
-  /*
-   * Last-second save: a draft that differs from the saved answer is sent just before the final clock
-   * ends. Not sent earlier on purpose: the server closes the final once every finalist has an answer.
-   */
-  let finalDraftSentFor: string | null = null;
-  function sendFinalDraftBeforeTimeUp() {
-    const game = state?.game;
-    const t = game?.timer;
-    if (!game || !state?.you || game.phase !== 'finalQuestion' || !t) return;
-    if (!game.final?.eligibleIds.includes(state.you.id) || t.endsAt - nowServer() > 1500) return;
-    const draft = textarea('#final-answer-input').value.trim();
-    const key = `${t.endsAt}:${draft}`;
-    if (!draft || draft === game.final.yourAnswer || finalDraftSentFor === key) return;
-    finalDraftSentFor = key;
-    send('game:finalAnswer', { answer: draft });
-  }
   $('#btn-open-final').onclick = () => send('game:openFinal');
-  $('#btn-close-final').onclick = async () => {
+  /** Online finalists still to send an answer; judged (auto-zeroed) and offline ones are not waited for. */
+  function finalUnsent(): { name: string }[] {
     const final = state?.game.final;
-    const missing = final ? final.eligibleIds.filter((id) => !final.answeredIds.includes(id)).length : 0;
-    // Closing early drops anything a finalist typed but has not sent yet.
-    if (missing && !(await askConfirm({
+    if (!state || !final) return [];
+    return state.participants.filter((p) => final.eligibleIds.includes(p.id) && p.connected &&
+      !final.judged.includes(p.id) && !final.answeredIds.includes(p.id));
+  }
+  $('#btn-close-final').onclick = async () => {
+    // Someone changing a sent answer gets their newest text too, so no question is needed for them.
+    const unsent = finalUnsent();
+    // Unsent text is kept as a draft on the server, so closing early uses it instead of dropping it.
+    if (unsent.length && !(await askConfirm({
       title: 'End answer time now?',
-      body: `${missing} finalist${missing === 1 ? ' has' : 's have'} not sent an answer yet.`,
+      body: `${unsent.map((p) => p.name).join(', ')} ${unsent.length === 1 ? 'has' : 'have'} not sent an answer. ` +
+        'Anything they typed is used as their answer.',
       confirmLabel: 'End answer time',
     }))) return;
     send('game:closeFinal');
@@ -820,21 +862,28 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
 
     const myTurn = game.phase === 'stakeAuction' && you.role === 'player' && auction.turnId === you.id;
     $('#stake-bid-form').classList.toggle('hidden', !myTurn);
-    $('#stake-auction-hint').textContent = pausedAuction ? 'The auction is paused.' : myTurn
-      ? `Your turn. Bid at least ${auction.minimumNextBid}, go all in, or pass.`
-      : auction.turnId ? `${playerName(auction.turnId)} is choosing a bid.` : 'Auction is ending…';
-    if (!myTurn) return;
-
     const score = participants.find((p) => p.id === you.id)?.score ?? 0;
     const maxRegular = Math.max(game.current?.price ?? auction.minimum, score);
     const canBid = !auction.allIn && maxRegular >= auction.minimumNextBid;
+    const canAllIn = !(score < auction.minimum || score <= auction.amount);
+    $('#stake-auction-hint').textContent = pausedAuction ? 'The auction is paused.' : myTurn
+      ? auctionTurnHint(auction.minimumNextBid, canBid, canAllIn)
+      : auction.turnId
+        // A dropped bidder keeps the turn for a few seconds (playtest F16); say why it waits.
+        ? participants.find((p) => p.id === auction.turnId)?.connected === false
+          ? `${playerName(auction.turnId)} is reconnecting. Their turn waits a few seconds.`
+          : `${playerName(auction.turnId)} is choosing a bid.`
+        : 'Auction is ending…';
+    if (!myTurn) return;
+    revealTurnPanel($('#stake-auction'), `stake:${game.current?.presentationId}:${auction.leaderId}:${auction.amount}`);
+
     const bidInput = input('#stake-bid-amount');
     bidInput.min = String(auction.minimumNextBid);
     bidInput.max = String(maxRegular);
     bidInput.step = '1';
     bidInput.disabled = !canBid;
     button('#stake-bid-form button[type="submit"]').disabled = !canBid;
-    button('#stake-all-in').disabled = score < auction.minimum || score <= auction.amount;
+    button('#stake-all-in').disabled = !canAllIn;
     if (document.activeElement !== bidInput &&
         (!bidInput.value || Number(bidInput.value) < auction.minimumNextBid || Number(bidInput.value) > maxRegular)) {
       bidInput.value = String(auction.minimumNextBid);
@@ -886,6 +935,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     const canAnswer = game.phase === 'forAllAnswering' && isPlayer &&
       forAll.eligibleIds.includes(you.id) && !hasSubmitted;
     $('#for-all-answer-form').classList.toggle('hidden', !canAnswer);
+    if (canAnswer) revealTurnPanel($('#for-all'), `forAll:${game.current.presentationId}`);
     if (forAll.yourAnswer !== null) $('#for-all-status').textContent += ' Your answer is saved.';
 
     const host = you.canModerate;
@@ -932,7 +982,9 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   $('#for-all-answer-form').addEventListener('submit', (event) => {
     event.preventDefault();
     const answer = ($('#for-all-answer') as HTMLTextAreaElement).value.trim();
-    if (answer) send('game:forAllAnswer', { answer });
+    if (!answer) return;
+    drafts.submitted(draftKey(), answer);
+    send('game:forAllAnswer', { answer });
   });
   button('#for-all-close').onclick = () => send('game:closeForAll');
 
@@ -1190,6 +1242,20 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
         seat.onclick = () => send('role:set', { targetId: p.id, role: 'player' });
         panel.append(seat);
       }
+      // A player back on a new device takes their old seat and score with one click (playtest F7).
+      const newcomers = participants.filter((member) => member.connected && member.id !== p.id &&
+        member.role !== 'host' && !member.displayOnly);
+      if (you.canModerate && p.role === 'player' && !p.connected && newcomers.length && betweenQuestions(game)) {
+        panel.append(Object.assign(document.createElement('span'), { className: 'menu-hint', textContent: 'Back on a new device?' }));
+        panel.append(giveSeatForm(p, newcomers, async (newcomerId) => {
+          const name = newcomers.find((member) => member.id === newcomerId)?.name ?? 'They';
+          if (await askConfirm({
+            title: `Give ${p.name}'s seat to ${name}?`,
+            body: `${name} continues as ${p.name} with ${formatScore(p.score)} points. ${name}'s own seat goes away.`,
+            confirmLabel: 'Give seat',
+          })) send('seat:give', { seatId: p.id, newcomerId });
+        }));
+      }
       // An offline player's seat is removed only between questions; a connected guest can go any time.
       if (you.canModerate && p.id !== you.id && (p.connected || p.role !== 'player' || betweenQuestions(game))) {
         const kick = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Remove from room' });
@@ -1270,8 +1336,9 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     return box;
   }
 
-  // Wide screens list the scoreboard down the host column; elsewhere it sits under the table.
-  const sideScoreboard = matchMedia('(min-width: 861px) and (min-height: 620px)');
+  // Wide screens and landscape phones list the scoreboard down the host column; elsewhere it sits
+  // under the table. Keep the second query in step with client/src/styles/landscape.css.
+  const sideScoreboard = matchMedia('(min-width: 861px) and (min-height: 620px), (orientation: landscape) and (max-height: 500px)');
   function placeScoreboard() {
     const target = sideScoreboard.matches ? $('.host-col') : $('#screen-game');
     if ($('#players').parentElement !== target) target.append($('#players'));
@@ -1292,7 +1359,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   const numberSettingKeys = [
     'maxPlayers', 'timeForBlockingButton', 'buzzSyncWindowMs', 'readingSpeed', 'timeForThinkingOnQuestion',
     'timeForPrintingAnswer', 'timeForMakingStake', 'timeForThinkingOnSpecial',
-    'timeForFinalThinking', 'timeOfRound', 'timeForQuestionIntro',
+    'timeForFinalThinking', 'timeOfRound', 'timeForQuestionIntro', 'timeForChoosingQuestion', 'timeForChoosingFinalTheme',
   ] as const;
   let packsLoaded = false;
   let knownPacks: PackListItem[] = [];
@@ -1676,7 +1743,9 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     board.style.setProperty('--rows', String(game.board.length));
     // Phones: up to six prices share a row (a 5-column cap left every sixth price alone on a second
     // row and doubled the board's height); longer themes split into two even rows.
-    board.style.setProperty('--phone-cols', String(cols <= 6 ? cols : Math.min(5, Math.ceil(cols / 2))));
+    const phoneCols = cols <= 6 ? cols : Math.min(5, Math.ceil(cols / 2));
+    board.style.setProperty('--phone-cols', String(phoneCols));
+    board.style.setProperty('--phone-cell-rows', String(game.board.length * Math.ceil(cols / phoneCols)));
     const canPick = !intro && (you.canModerate || you.id === game.chooserId);
     // The pick blink is timed from the server's intro start, so a rebuilt board continues it instead of
     // restarting, and every screen blinks in step. A paused intro shows the steady lit cell.
@@ -2131,7 +2200,13 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     } else {
       questionPresenter?.dispose();
       questionPresenter = null;
-      if (c.answerShown && c.right) renderAnswerStage(slots, c);
+      // A gift has no answer: the table says who got the points instead of staying empty (playtest F9).
+      if (c.type === 'secretNoQuestion' && game.phase === 'reveal') {
+        box.classList.add('showing-answer');
+        slots.prompt.append(Object.assign(document.createElement('p'), {
+          className: 'answer-title', textContent: `${recipient} +${formatScore(c.price)}`,
+        }));
+      } else if (c.answerShown && c.right) renderAnswerStage(slots, c);
       else if (contentVisible) renderStaticContent(slots, c.content);
     }
 
@@ -2189,6 +2264,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     }
     const canSubmit = winner && game.phase === 'answering' && !typed.submitted && !typed.closed;
     $('#typed-answer-form').classList.toggle('hidden', !canSubmit);
+    if (canSubmit) revealTurnPanel($('#typed-answer'), `typed:${key}`);
     textarea('#typed-answer-input').disabled = !canSubmit;
     const hostText = you.canModerate && typed.submitted && typed.text !== null;
     $('#typed-answer-host').classList.toggle('hidden', !hostText);
@@ -2298,7 +2374,9 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
         setStage('money', you.role === 'player' ? 'Place your final wager' : 'Final wagers',
           you.role === 'player' ? 'Your wager is private until the answers are judged.' : 'Players are placing private wagers.');
       } else if (game.phase === 'stakeAuction') {
-        setStage('money', 'Question auction', 'Players bid in turn for the right to answer.');
+        // The bidder must see at a glance that it is their move (playtest F5); others see the rule.
+        if (you.role === 'player' && game.auction?.turnId === you.id) setStage('money', 'Your turn to bid', 'Bid, or pass to let others answer.');
+        else setStage('money', 'Question auction', 'Players bid in turn for the right to answer.');
       } else if (game.phase === 'forAllAnswering') {
         setStage('reading', 'Everyone answers', 'Submit a private answer before time runs out.');
       } else if (game.phase === 'forAllJudge') {
@@ -2318,7 +2396,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       } else if (game.phase === 'answering') {
         const winnerId = game.buzzer.winnerId;
         const info = game.buzzer.winnerInfo;
-        const reaction = info?.reactionMs != null ? ` Reaction ${info.reactionMs} ms.` : '';
+        const reaction = info?.reactionMs != null ? ` Reaction ${formatReaction(info.reactionMs)}.` : '';
         const title = winnerId === you.id ? 'Your answer' : `${nameOf(winnerId)} answers`;
         const tapType = game.current?.answerType ?? 'text';
         if (tapType !== 'text') {
@@ -2344,6 +2422,10 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
           : you.role === 'player' ? 'You sit out the final. Watch along.' : 'Finalists are writing their answers.');
       } else if (game.phase === 'finalJudge') {
         setStage('answering', 'Final judging', 'The host is checking every answer.');
+      } else if (game.phase === 'reveal' && game.current?.type === 'secretNoQuestion') {
+        // A gift has no answer to show; the old "Answer shown" puzzled people (playtest F9).
+        setStage('reveal', 'Gift given', t ? 'Back to the board in a moment.' : you.canModerate ? 'Press Next to continue.' : 'Waiting for the host.');
+        if (!t) $('#stage-progress-fill').style.width = '100%';
       } else if (game.phase === 'reveal') {
         if (game.current?.answerShown) {
           // The answer itself is on the table; saying it here too would print it twice.
@@ -2404,7 +2486,6 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   setInterval(() => {
     if (!state?.game) return;
     updateOrientiers();
-    sendFinalDraftBeforeTimeUp();
   }, 100);
 
   /*
@@ -2499,6 +2580,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
    * pick intro. Keys use e.code so a Russian layout works. A step that just changed ignores keys for
    * 700 ms, so a double press cannot open the buttons the moment the question appears.
    */
+  // Mouse clicks drop focus before any handler runs, so Space never re-presses the last clicked control.
+  document.addEventListener('click', releasePointerFocus, true);
   $('#btn-fullscreen').addEventListener('click', () => { void toggleFullscreen().catch(() => toast('Full screen is not available here.')); });
 
   const HOST_KEYS_KEY = 'sigame.hostKeys';
@@ -2569,11 +2652,9 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   }
 
   for (const b of document.querySelectorAll<HTMLElement>('[data-act]')) {
-    b.addEventListener('click', async (event) => {
+    b.addEventListener('click', async () => {
       const act = b.dataset.act;
       if (!act) return;
-      // A mouse click leaves focus on the button, and Space would then press it again natively.
-      if (event.detail > 0 && b.closest('#host-controls')) b.blur();
       const phase = state?.game?.phase ?? '';
       const question = confirmQuestionFor(act, phase);
       if (question) {

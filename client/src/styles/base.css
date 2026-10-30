@@ -29,17 +29,25 @@ button, .button-link {
   font: 700 var(--t-s)/1.2 var(--font-ui); text-decoration: none; cursor: pointer;
   transition: background-color .15s, border-color .15s, transform .08s;
 }
-button:not(:disabled):hover, .button-link:hover { background: var(--set-hover); }
 button:not(:disabled):active { transform: translateY(1px); }
 button:disabled { opacity: .4; cursor: default; }
 button.primary { background: var(--lamp); border-color: transparent; color: var(--on-lamp); font-weight: 800; }
-button.primary:not(:disabled):hover { background: var(--lamp-soft); }
 button.ok { background: var(--ok-fill); border-color: transparent; }
-button.ok:not(:disabled):hover { background: var(--ok-hover); }
 button.bad { background: var(--bad-fill); border-color: transparent; }
-button.bad:not(:disabled):hover { background: var(--bad-hover); }
 button.quiet { background: transparent; }
-button.quiet:not(:disabled):hover { background: var(--set-raised); }
+/*
+ * Hover only where a real pointer hovers: touch browsers keep :hover after a tap, which repainted
+ * the buzzer after a press (device playtest F1). The generic rule sits in :where() so any state
+ * class with two classes (.buzzer.buzz-you-answering) keeps its colour under a mouse too.
+ * scripts/hover-rules.test.js keeps every :hover rule inside this kind of block.
+ */
+@media (hover: hover) and (pointer: fine) {
+  button:where(:not(:disabled)):hover, .button-link:hover { background: var(--set-hover); }
+  button.primary:not(:disabled):hover { background: var(--lamp-soft); }
+  button.ok:not(:disabled):hover { background: var(--ok-hover); }
+  button.bad:not(:disabled):hover { background: var(--bad-hover); }
+  button.quiet:not(:disabled):hover { background: var(--set-raised); }
+}
 button.small { min-height: 36px; padding: 6px 12px; font-size: var(--t-xs); }
 
 input:not([type="checkbox"]):not([type="file"]), select, textarea {

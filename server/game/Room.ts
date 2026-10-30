@@ -15,6 +15,9 @@ import { clearHandover, handoverReady, startHandover } from './moderationHandove
 import { assertNicknameFree, normalizeNickname } from './nickname.ts';
 import { safeTimeout } from '../utils/safeTimer.ts';
 
+/** Moments with no live answer, wager or bid, where seats may change hands. */
+const CALM_PHASES = new Set<string>([PHASES.LOBBY, PHASES.BOARD, PHASES.ROUND_END, PHASES.FINAL_THEMES, PHASES.GAME_OVER]);
+
 const MAX_MANUAL_SCORE = 1_000_000_000_000;
 export const MAX_ROOM_PARTICIPANTS = 64;
 
@@ -173,6 +176,7 @@ export class Room extends EventEmitter {
     this.removalTimers.delete(pid);
     takeGraceMode(this, pid); // a reconnect ends any restore grace; later drops follow live rules
     clearHandover(this, pid);
+    this.engine.resumeAuctionTurn(pid);
     this.changed();
     return previous;
   }
@@ -189,8 +193,8 @@ export class Room extends EventEmitter {
       pid,
       safeTimeout(`reconnect grace ${pid}`, () => this.expire(pid), config.reconnectGraceMs, () => this.changed()),
     );
-    // A disconnected bidder cannot act, so offer the turn to the next player now.
-    if (wasAuctionTurn) this.engine.advanceStakeAuction();
+    // A refresh or app switch must not cost the turn: the engine holds it briefly, then moves on.
+    if (wasAuctionTurn) this.engine.holdAuctionTurn(pid);
     this.engine.advanceForAllAfterRosterChange();
     this.changed();
   }
@@ -317,6 +321,40 @@ export class Room extends EventEmitter {
     if (wasAuctionTurn && role !== ROLES.PLAYER) this.engine.advanceStakeAuction();
     this.engine.advanceForAllAfterRosterChange();
     this.changed();
+  }
+
+  /**
+   * A player lost their device (dead phone, another browser) and rejoined under a new name. The host
+   * gives them their old offline seat back (device playtest F7): the newcomer's session moves into
+   * it, so the seat keeps its id, score and history, and the temporary seat disappears. The lost
+   * device's old token stops working. Between questions only, so no live answer, wager or bid
+   * changes hands. Returns the newcomer's socket id so the caller can rebind it.
+   */
+  giveSeat(actorId: string, seatId: string, newcomerId: string): string {
+    if (!this.canModerate(actorId)) throw new Error('Only the host can give a seat back');
+    const seat = this.participants.get(seatId);
+    const newcomer = this.participants.get(newcomerId);
+    if (!seat || !newcomer || seatId === newcomerId) throw new Error('Unknown participant');
+    if (seat.role !== ROLES.PLAYER) throw new Error('Only a player seat can be given back');
+    if (seat.connected) throw new Error('That seat is still connected');
+    if (newcomer.role === ROLES.HOST || newcomerId === actorId) throw new Error('The host cannot take a player seat');
+    if (!newcomer.connected || !newcomer.socketId) throw new Error('The new device is not connected');
+    const engine = this.engine;
+    const phase = engine.phase === PHASES.PAUSED ? engine.paused?.phase : engine.phase;
+    if (!phase || !CALM_PHASES.has(phase)) throw new Error('Wait until the question is over');
+
+    const socketId = newcomer.socketId;
+    clearTimeout(this.removalTimers.get(newcomerId));
+    this.removalTimers.delete(newcomerId);
+    takeGraceMode(this, newcomerId);
+    this.participants.delete(newcomerId);
+    this.tokens.delete(seat.token);
+    seat.token = newcomer.token;
+    this.tokens.set(seat.token, seatId);
+    if (engine.chooserId === newcomerId) engine.chooserId = seatId;
+    if (this.ownerId === newcomerId) this.ownerId = seatId;
+    this.attach(seatId, socketId);
+    return socketId;
   }
 
   kick(actorId: string, targetId: string): void {

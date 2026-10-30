@@ -41,6 +41,8 @@ export interface RoomState {
     timeForThinkingOnQuestion: number;
     timeForPrintingAnswer: number;
     timeForMakingStake: number;
+    timeForChoosingQuestion: number;
+    timeForChoosingFinalTheme: number;
     timeForThinkingOnSpecial: number;
     timeForFinalThinking: number;
     timeOfRound: number;
@@ -120,6 +122,7 @@ export interface RoomState {
       judged: string[];
       eligibleIds: string[];
       answeredIds: string[];
+      editingIds: string[];
       yourAnswer: string | null;
       answers: Record<string, string> | null;
     } | null;
@@ -176,6 +179,8 @@ export interface CommandPayloads {
   'game:configureSpecial': { playerId: string; price: number };
   'game:finalWager': { amount: number };
   'game:finalAnswer': { answer: string };
+  'game:draft': { text: string };
+  'seat:give': { seatId: string; newcomerId: string };
   'game:judgeFinal': { playerId: string; correct: boolean };
   'game:judge': { correct: boolean; factor?: number };
   'game:stakeBid': { amount: number; allIn: boolean };

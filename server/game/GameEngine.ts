@@ -25,6 +25,9 @@ const CLIENT_CLOCK_TRUST_MS = 500;
 const REWARD_FACTORS = [0.5, 1, 2];
 const QUESTION_PHASES = new Set<Phase>([PHASES.READING, PHASES.BUZZER_OPEN, PHASES.ANSWERING, PHASES.FOR_ALL_ANSWERING, PHASES.FOR_ALL_JUDGE, PHASES.REVEAL]);
 
+
+/** How long a dropped bidder keeps their auction turn (device playtest F16). */
+const AUCTION_RECONNECT_GRACE_MS = 10_000;
 export interface ActiveTimer {
   name: string;
   durationMs: number;
@@ -210,6 +213,7 @@ export interface GameView {
     judged: string[];
     eligibleIds: string[];
     answeredIds: string[];
+    editingIds: string[];
     yourAnswer: string | null;
     answers: Record<string, string> | null;
   } | null;
@@ -242,6 +246,12 @@ export class GameEngine {
   finalWagers!: Map<string, number>;
   finalJudged!: Set<string>;
   finalAnswers!: Map<string, string>;
+  /**
+   * Unsent text from the final and for-all answer boxes (device playtest F4). Used only when answer
+   * time closes, so a host who ends it early, a timer, or a dropped phone never loses a typed answer.
+   * Never part of view(): nobody else sees what a player has not sent.
+   */
+  drafts!: Map<string, string>;
   removedFinalThemes!: Set<number>;
   paused!: PausedState | null;
   auction!: StakeAuction | null;
@@ -267,6 +277,7 @@ export class GameEngine {
     this.finalWagers = new Map();
     this.finalJudged = new Set();
     this.finalAnswers = new Map();
+    this.drafts = new Map();
     this.removedFinalThemes = new Set();
     this.paused = null;
     this.auction = null;
@@ -527,6 +538,8 @@ export class GameEngine {
     }
     // Roster changes while paused may have satisfied the for-all completion rule.
     this.advanceForAllAfterRosterChange();
+    // A finalist may have dropped an edit while paused, releasing a held final.
+    this.closeFinalWhenAllSent();
   }
 
   /* ---------------------------------------------------------------- flow */
@@ -717,6 +730,7 @@ export class GameEngine {
       this.finalWagers = new Map();
       this.finalJudged = new Set();
       this.finalAnswers = new Map();
+      this.drafts = new Map();
       this.phase = PHASES.FINAL_WAGER;
       return;
     }
@@ -748,6 +762,7 @@ export class GameEngine {
     if (this.current.type === 'forAll') {
       // Every player connected when the question starts gets a private answer slot.
       this.forAll = { eligibleIds: this.activePlayers().map((p) => p.id), answers: new Map(), judged: new Set() };
+      this.drafts = new Map();
       this.phase = PHASES.READING;
       this.startReading(question);
       return;
@@ -789,6 +804,27 @@ export class GameEngine {
 
   auctionTurnId(): string | null {
     return this.auction?.order[this.auction.turnIndex] ?? null;
+  }
+
+  /**
+   * The bidder's phone dropped (a refresh, an app switch). Skipping them at once burned the whole
+   * question when everyone else had passed (device playtest F16), so the turn waits a short grace,
+   * never longer than the bid clock had left. Still offline then: the turn moves on as before.
+   */
+  holdAuctionTurn(playerId: string): void {
+    if (this.phase !== PHASES.STAKE_AUCTION || this.auctionTurnId() !== playerId) return;
+    const leftMs = this.timer ? this.timer.endsAt - Date.now() : AUCTION_RECONNECT_GRACE_MS;
+    this.startTimer('stake', Math.max(0.001, Math.min(leftMs, AUCTION_RECONNECT_GRACE_MS) / 1000), () => {
+      if (this.auctionTurnId() !== playerId) return;
+      if (this.room.participants.get(playerId)?.connected) this.passStake(playerId);
+      else this.advanceStakeAuction();
+    });
+  }
+
+  /** The bidder is back within the grace: their turn gets a fresh bid clock. */
+  resumeAuctionTurn(playerId: string): void {
+    if (this.phase !== PHASES.STAKE_AUCTION || this.auctionTurnId() !== playerId) return;
+    this.startTimer('stake', this.settings.timeForMakingStake, () => this.passStake(playerId));
   }
 
   /** Skips passed/disconnected players and the current leader; their prior bid still stands. */
@@ -893,6 +929,12 @@ export class GameEngine {
   closeForAllAnswers(): void {
     this.assert(this.phase === PHASES.FOR_ALL_ANSWERING && this.forAll, 'Answers are closed');
     this.clearTimer();
+    // A sent for-all answer is final (no resubmit), so a draft only fills an empty slot.
+    for (const id of this.forAllEligibleIds()) {
+      const draft = this.drafts.get(id);
+      if (draft && !this.forAll.answers.has(id)) this.forAll.answers.set(id, draft);
+    }
+    this.drafts.clear();
     this.phase = PHASES.FOR_ALL_JUDGE;
     if (!this.forAllEligibleIds().length) this.revealAnswer();
   }
@@ -979,6 +1021,32 @@ export class GameEngine {
     this.startTimer('final', this.settings.timeForFinalThinking, () => this.closeFinal());
   }
 
+  /**
+   * Saves what a player has typed but not sent. Accepted while the answer box is open, also during a
+   * pause. A draft never counts as an answer. Returns true when others must hear about it: a
+   * finalist started or stopped changing a sent answer (the host sees who holds the close), or
+   * dropping such a change let a held final close.
+   */
+  saveDraft(playerId: string, text: unknown): boolean {
+    this.assert(typeof text === 'string' && text.length <= 350, 'Answer must be at most 350 characters');
+    const phase = this.phase === PHASES.PAUSED ? this.paused?.phase : this.phase;
+    if (phase === PHASES.FINAL_QUESTION) {
+      this.assert(this.finalEligibleIds().includes(playerId) && !this.finalJudged.has(playerId),
+        'You are not playing this final');
+    } else {
+      this.assert(phase === PHASES.FOR_ALL_ANSWERING && this.forAll, 'Answers are closed');
+      this.assert(this.forAllEligibleIds().includes(playerId) && !this.forAll.answers.has(playerId),
+        'You cannot answer this question');
+    }
+    const editing = () => this.finalAnswers.has(playerId) && this.drafts.has(playerId);
+    const wasEditing = editing();
+    const draft = text.trim();
+    // A draft equal to the sent final answer is no edit at all.
+    if (draft && draft !== this.finalAnswers.get(playerId)) this.drafts.set(playerId, draft);
+    else this.drafts.delete(playerId);
+    return this.closeFinalWhenAllSent() || editing() !== wasEditing;
+  }
+
   /** Finalists write a private answer so the host can judge what they actually said. */
   submitFinalAnswer(playerId: string, answer: unknown): void {
     this.assert(this.phase === PHASES.FINAL_QUESTION, 'Final answers are closed');
@@ -987,15 +1055,33 @@ export class GameEngine {
     this.assert(typeof answer === 'string' && answer.trim().length > 0 && answer.length <= 350,
       'Answer must be 1–350 characters');
     this.finalAnswers.set(playerId, answer.trim());
-    // Everyone online has answered: waiting out the clock would only stall the room.
+    // The sent text replaces any draft; a later edit saves a new draft that wins at close.
+    this.drafts.delete(playerId);
+    this.closeFinalWhenAllSent();
+  }
+
+  /**
+   * Everyone online has sent an answer and nobody is changing one: waiting out the clock would only
+   * stall the room. An edit typed after sending holds the close, so another player's last answer can
+   * never lock in someone's half-typed change; the timer or the host still ends it.
+   */
+  closeFinalWhenAllSent(): boolean {
+    if (this.phase !== PHASES.FINAL_QUESTION) return false;
     const waiting = this.finalEligibleIds().filter((id) => !this.finalJudged.has(id) &&
-      this.room.participants.get(id)?.connected && !this.finalAnswers.has(id));
-    if (!waiting.length) this.closeFinal();
+      this.room.participants.get(id)?.connected && (!this.finalAnswers.has(id) || this.drafts.has(id)));
+    if (waiting.length) return false;
+    this.closeFinal();
+    return true;
   }
 
   closeFinal(): void {
     this.assert(this.phase === PHASES.FINAL_QUESTION, 'Final question is not open');
     this.clearTimer();
+    // Sending clears a draft, so any draft left here was typed after the last send: it is the newest text.
+    for (const [id, draft] of this.drafts) {
+      if (this.finalEligibleIds().includes(id) && !this.finalJudged.has(id)) this.finalAnswers.set(id, draft);
+    }
+    this.drafts.clear();
     this.phase = PHASES.FINAL_JUDGE;
     if (this.finalEligibleIds().every((id) => this.finalJudged.has(id))) this.revealAnswer();
   }
@@ -1594,6 +1680,8 @@ export class GameEngine {
         eligibleIds: this.phase === PHASES.FINAL_WAGER || this.phase === PHASES.FINAL_THEMES ||
           this.phase === PHASES.BOARD ? this.finalists().map((p) => p.id) : this.finalEligibleIds(),
         answeredIds: [...this.finalAnswers.keys()],
+        // Who holds the close by changing a sent answer; the host only, and never the text itself.
+        editingIds: canModerate ? [...this.drafts.keys()].filter((id) => this.finalAnswers.has(id)) : [],
         yourAnswer: viewer ? this.finalAnswers.get(viewer.id) ?? null : null,
         answers: finalShown
           ? Object.fromEntries(this.finalEligibleIds().map((id) => [id, this.finalAnswers.get(id) ?? ''])) : null,

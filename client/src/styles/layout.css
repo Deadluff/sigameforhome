@@ -16,7 +16,7 @@
 .host-tools button.primary { padding: 0 14px; border-radius: 999px; }
 /* A hairline splits navigation from pause and stop inside the same pill. */
 .round-nav .host-tools:not(.hidden) { margin-left: 2px; padding-left: 4px; border-left: 1px solid var(--rule); }
-#btn-stop:not(:disabled):hover { background: var(--stop-deep); color: var(--error-text); }
+@media (hover: hover) and (pointer: fine) { #btn-stop:not(:disabled):hover { background: var(--stop-deep); color: var(--error-text); } }
 .round-arrow:disabled { opacity: .3; }
 .topbar-round .round-count { margin-left: 8px; color: var(--mist); font-variant-numeric: tabular-nums; }
 .topbar-round { flex: 0 1 auto; min-width: 0; color: var(--mist); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -52,7 +52,9 @@
   width: 18px; height: 18px; border-radius: 50%; border: 0;
   background: var(--lamp-soft); box-shadow: 0 0 0 4px rgb(var(--lamp-rgb) / .22), 0 2px 6px rgba(0, 0, 0, .45);
 }
-.volume-pop input[type="range"]:hover::-webkit-slider-thumb,
+@media (hover: hover) and (pointer: fine) {
+  .volume-pop input[type="range"]:hover::-webkit-slider-thumb { transform: scale(1.12); box-shadow: 0 0 0 6px rgb(var(--lamp-rgb) / .3), 0 2px 6px rgba(0, 0, 0, .45); }
+}
 .volume-pop input[type="range"]:focus-visible::-webkit-slider-thumb { transform: scale(1.12); box-shadow: 0 0 0 6px rgb(var(--lamp-rgb) / .3), 0 2px 6px rgba(0, 0, 0, .45); }
 .volume-pop input[type="range"]:focus-visible { outline: none; }
 .volume-pop output { min-width: 4ch; color: var(--paper); font: 600 var(--t-s)/1 var(--font-display); font-variant-numeric: tabular-nums; text-align: right; }
@@ -70,7 +72,11 @@
 @media (min-width: 601px) { #screen-game:has(#host-seat:not(:empty)) #host-chip { display: none; } }
 .me-chip { display: inline-flex; align-items: center; gap: 8px; min-width: 0; font-weight: 800; white-space: nowrap; }
 .host-menu { display: none; position: relative; flex: none; }
+/* In a game a player's own score sits in the top bar at every width; it replaces the role badge (playtest F14). */
 .me-chip .me-score { display: none; }
+#screen-game:not([data-phase="lobby"]) .me-chip .me-score { display: inline; color: var(--lamp); font: 600 var(--t-m)/1 var(--font-display); font-variant-numeric: tabular-nums; }
+#screen-game:not([data-phase="lobby"]) .me-chip .me-score.negative { color: var(--stop); }
+.me-chip:has(.me-score) .role { display: none; }
 .me-chip .role { padding: 2px 8px; border-radius: 999px; background: var(--set-raised); color: var(--mist); font-size: var(--t-xs); font-weight: 700; }
 #connection-status:empty { display: none; }
 /* Host-away banner and the fixed connection notice share the warning look of the status line. */
@@ -166,8 +172,6 @@
     border-radius: var(--r-panel); background: var(--set-raised); border: 1px solid var(--rule-strong); box-shadow: 0 14px 36px rgba(0, 0, 0, .6);
   }
   .host-menu-panel button { justify-content: flex-start; width: 100%; }
-  .me-chip .me-score { display: inline; color: var(--lamp); font: 600 var(--t-m)/1 var(--font-display); font-variant-numeric: tabular-nums; }
-  .me-chip .me-score.negative { color: var(--stop); }
   .host-col { grid-template-columns: minmax(0, 1fr); }
   #host-seat { display: none; }
   /* When a phone user must act (bid, wager, written answer), the panel comes right under the table. */
@@ -176,6 +180,13 @@
   #screen-game > .dock > #host-controls,
   #screen-game > .dock > .buzzer { order: 3; }
   #screen-game:has(.dock > .card:not(.hidden)) #game-stage { min-height: 24dvh; }
+  /*
+   * An empty table (auction, wager) shrinks to its header while a card waits for you, so the card and
+   * the banner's clock share one screen on small phones (device playtest F5).
+   */
+  #screen-game:has(.dock > .card:not(.hidden)):has(#question:not(.hidden) .q-prompt:empty):has(#question .q-media:empty) #game-stage { min-height: 0; height: auto; }
+  /* Beats the no-media prompt rule in table.css, which keeps an empty prompt as a full-height filler. */
+  #screen-game:has(.dock > .card:not(.hidden)) #question:not(.has-media) .q-prompt:empty { display: none; }
 }
 
 #invite-address[hidden] { display: none; }

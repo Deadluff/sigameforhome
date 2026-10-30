@@ -153,7 +153,8 @@
   color: var(--mist); font-size: var(--t-l); line-height: 1; list-style: none;
 }
 .player-menu summary::-webkit-details-marker { display: none; }
-.player-menu summary:hover, .player-menu[open] summary { background: var(--set-raised); color: var(--paper); }
+.player-menu[open] summary { background: var(--set-raised); color: var(--paper); }
+@media (hover: hover) and (pointer: fine) { .player-menu summary:hover { background: var(--set-raised); color: var(--paper); } }
 .player-menu-panel {
   position: absolute; z-index: 8; right: 0; bottom: calc(100% + 6px); display: grid; gap: 6px; width: 220px;
   padding: 8px; border-radius: var(--r-panel); text-align: left;
@@ -168,6 +169,8 @@
 .score-form, .rename-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
 .score-form input, .rename-form input { min-height: 36px; padding: 6px 8px; font-size: 14px; }
 .score-form button, .rename-form button { width: auto; }
+.give-seat-form select { min-width: 0; min-height: 36px; padding: 6px 8px; font-size: 14px; }
+.player-menu-panel .menu-hint { color: var(--mist); font-size: var(--t-xs); font-weight: 700; }
 
 @media (max-width: 600px) {
   /* Replics sit inside the podium on phones too, so the row needs no 30 px gutter above it. */

@@ -174,6 +174,9 @@
             <details class="lobby-details">
               <summary>Timers</summary>
               <div class="settings-grid">
+                <!-- The pick clocks only inform; they were fixed at 30 s until the host could set them (playtest F15). -->
+                <label class="field"><span>Time to pick</span><span class="unit-input"><input type="number" id="set-timeForChoosingQuestion" min="1" max="300" /><em>sec</em></span></label>
+                <label class="field"><span>Final theme pick</span><span class="unit-input"><input type="number" id="set-timeForChoosingFinalTheme" min="1" max="300" /><em>sec</em></span></label>
                 <label class="field"><span>Pick reveal</span><span class="unit-input"><input type="number" id="set-timeForQuestionIntro" min="0" max="5" /><em>sec</em></span></label>
                 <label class="field"><span>Reading speed</span><span class="unit-input"><input type="number" id="set-readingSpeed" min="1" max="100" /><em>chars/s</em></span></label>
                 <label class="field"><span>Time to buzz</span><span class="unit-input"><input type="number" id="set-timeForThinkingOnQuestion" min="1" max="120" /><em>sec</em></span></label>

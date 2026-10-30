@@ -115,8 +115,9 @@ export function registerSocketHandlers(io: Server, room: Room, limits: SocketLim
           if (access === 'moderator' && !room.canModerate(pid)) throw new Error('Only the host can do that');
           if (access === 'manager' && !room.canManage(pid)) throw new Error('Only the host or owner can do that');
           const result = await handler((payload ?? ({} as TPayload)), pid ?? '');
-          // Ignored repeat buzzes do not alter state and should not trigger room-wide snapshots.
+          // Ignored repeat buzzes and quiet commands (drafts) do not alter shared state, so no room-wide snapshot.
           if (event.startsWith('game:') &&
+              !(result as { quiet?: boolean } | null)?.quiet &&
               !(event === 'game:buzz' && (result as { result?: string } | null)?.result === 'ignored') &&
               !(event === 'game:contentFinished' && (result as { advanced?: boolean } | null)?.advanced === false)) room.changed();
           reply({ ok: true, ...(typeof result === 'object' && result !== null ? result : {}) });
@@ -170,6 +171,11 @@ export function registerSocketHandlers(io: Server, room: Room, limits: SocketLim
       room.setRole(pid, targetId ?? pid, role),
     );
     on<{ targetId: string }>('participant:kick', 'moderator', ({ targetId }, pid) => room.kick(pid, targetId));
+    // The newcomer's socket now speaks for the old seat; Room.giveSeat already broadcast the change.
+    on<{ seatId: string; newcomerId: string }>('seat:give', 'moderator', ({ seatId, newcomerId }, pid) => {
+      const moved = io.sockets.sockets.get(room.giveSeat(pid, String(seatId), String(newcomerId)));
+      if (moved) moved.data.pid = String(seatId);
+    });
     on<{ targetId?: string; name: string }>('participant:rename', 'member', ({ targetId, name }, pid) =>
       renameParticipant(room, pid, targetId ?? pid, name));
     on<{ targetId: string; delta: number }>('score:adjust', 'moderator', ({ targetId, delta }, pid) =>
@@ -238,6 +244,11 @@ export function registerSocketHandlers(io: Server, room: Room, limits: SocketLim
       room.engine.setFinalWager(pid, Number(amount)));
     on<{ answer: string }>('game:finalAnswer', 'member', ({ answer }, pid) =>
       room.engine.submitFinalAnswer(pid, answer));
+    // Drafts change nothing anyone sees, so they must not fan out a room snapshot per keystroke pause.
+    // The exception: a finalist starts or stops changing a sent answer (the host sees who holds
+    // the close), or dropping that change closes the final.
+    on<{ text: string }>('game:draft', 'member', ({ text }, pid) =>
+      (room.engine.saveDraft(pid, text) ? {} : { quiet: true }));
     on('game:openFinal', 'moderator', () => room.engine.openFinal());
     on('game:closeFinal', 'moderator', () => room.engine.closeFinal());
     on<{ playerId: string; correct: boolean }>('game:judgeFinal', 'moderator', ({ playerId, correct }) =>
