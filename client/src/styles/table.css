@@ -139,8 +139,10 @@
 /* The ready toggle sits above the rules so a player sees it first; pressed it turns green. */
 .btn-ready { justify-self: center; min-height: 52px; padding: 12px 32px; font-size: var(--t-m); }
 /* Outranks button.primary and its hover, so the pressed state stays green under the pointer. */
-button.btn-ready[aria-pressed="true"], button.btn-ready[aria-pressed="true"]:not(:disabled):hover {
-  background: var(--go); border-color: var(--go); color: var(--on-go);
+button.btn-ready[aria-pressed="true"] { background: var(--go); border-color: var(--go); color: var(--on-go); }
+/* button.primary only repaints on hover for fine pointers (base.css), so the override lives in the same media block. */
+@media (hover: hover) and (pointer: fine) {
+  button.btn-ready[aria-pressed="true"]:not(:disabled):hover { background: var(--go); border-color: var(--go); color: var(--on-go); }
 }
 .lobby-table .invite { display: grid; gap: 8px; justify-items: center; margin-top: 6px; }
 .lobby-table .invite > span { color: var(--mist); font-weight: 700; font-size: var(--t-xs); }
