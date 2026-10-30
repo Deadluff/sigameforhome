@@ -384,9 +384,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     else if (game.round) {
       // Packs often name rounds "1", "2"…; "2 2/3" would repeat the number, so those read "Round 2 of 3".
       const numbered = /^\d+$/.test(game.round.name.trim());
-      phase.append(Object.assign(document.createElement('b'), {
-        textContent: numbered ? `Round ${game.round.name.trim()}` : game.round.name,
-      }));
+      phase.append(Object.assign(document.createElement('b'), { textContent: roundTitle(game.round.name) }));
       if (pack?.rounds.length) {
         phase.append(Object.assign(document.createElement('span'), {
           className: 'round-count',
@@ -1327,12 +1325,39 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   /* ---------------- board & question ---------------- */
 
   const isIntro = (game: RoomState['game']) => game.phase === 'reading' && game.timer?.name === 'intro';
+  const roundTitle = (name: string) => /^\d+$/.test(name.trim()) ? `Round ${name.trim()}` : name;
+
+  /*
+   * Round entrance, played when a round starts or the host switches to one (not on reload):
+   * the title card swells in, then the cells light up in a diagonal wave. The board is rebuilt on
+   * every state update, so the wave is timed from the entrance start rather than from each rebuild.
+   */
+  const ROUND_ENTER_MS = 2200;
+  let lastRoundIndex: number | undefined;
+  let roundEnterAt = 0;
+  function noteRoundChange(game: RoomState['game']) {
+    const previous = lastRoundIndex;
+    lastRoundIndex = game.roundIndex;
+    if (previous === undefined || previous === game.roundIndex || !game.round) return;
+    roundEnterAt = Date.now();
+    const splash = $('#round-splash');
+    splash.textContent = roundTitle(game.round.name);
+    splash.classList.remove('show');
+    void splash.offsetWidth; // Restart the animation when rounds switch quickly.
+    splash.classList.add('show');
+  }
 
   function renderBoard() {
     const state = activeState();
     const { game, you } = state;
     const board = $('#board');
     board.innerHTML = '';
+    noteRoundChange(game);
+    const entering = Date.now() - roundEnterAt < ROUND_ENTER_MS;
+    board.classList.toggle('round-enter', entering);
+    board.style.setProperty('--elapsed', `${Date.now() - roundEnterAt}ms`);
+    let waveIndex = 0;
+    const wave = (el: HTMLElement, step: number) => { el.style.setProperty('--d', `${520 + step * 28}ms`); };
     const lobby = game.phase === 'lobby';
     $('#lobby-table').classList.toggle('hidden', !lobby);
     if (lobby && !inviteLoaded) void loadInvite();
@@ -1345,6 +1370,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
         const el = document.createElement(canRemove ? 'button' : 'div');
         el.className = 'theme';
         el.textContent = theme.name;
+        wave(el, waveIndex++ * 3);
         if (canRemove) {
           el.setAttribute('type', 'button');
           el.setAttribute('aria-label', `Remove theme ${theme.name}`);
@@ -1380,12 +1406,14 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       const title = Object.assign(document.createElement('div'), { className: 'theme', textContent: theme.name, title: theme.name });
       // Hyphenation needs the text's language; packs here are mostly Russian or English.
       title.lang = /[А-Яа-яЁё]/.test(theme.name) ? 'ru' : 'en';
+      wave(title, t);
       board.append(title);
       for (let q = 0; q < cols; q++) {
         const cell = theme.questions[q];
         const el = document.createElement(cell?.available && canPick ? 'button' : 'div');
         const chosen = intro && game.current?.themeIndex === t && game.current?.questionIndex === q;
         el.className = 'cell' + (chosen ? ' chosen' : cell?.available ? '' : ' used');
+        wave(el, t + q + 1);
         el.textContent = String(cell?.price ?? '');
         if (cell?.available && canPick) {
           el.setAttribute('type', 'button');
