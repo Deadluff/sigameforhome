@@ -52,6 +52,11 @@ Pack files are limited to 200 MB compressed, 1 GB extracted, and 256 MB per medi
 > Allow Node.js through your firewall so phones can connect. To use a different port,
 > set `PORT=3001` before starting (`set PORT=3001` on Windows, `PORT=3001 ./start.sh` on macOS/Linux).
 
+> The server only accepts its own pages, reached by an IP address, `localhost`, a `*.local` name,
+> or this computer's name. If guests reach it by another name (a router DNS name or a reverse proxy),
+> start it with `ALLOWED_HOSTS=quiz.home` (comma-separated), or `ALLOW_ANY_ORIGIN=1` to turn the check off.
+> Each device may hold up to 32 connections that have not joined yet; change it with `SOCKET_CAP_PER_ADDRESS`.
+
 ## Quick start (macOS)
 
 1. Install **Node.js 20.19+ or 22.12+** from https://nodejs.org (or via Homebrew: `brew install node`).

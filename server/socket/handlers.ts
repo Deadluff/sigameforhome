@@ -7,6 +7,7 @@ import type { Participant, Room } from '../game/Room.ts';
 import { SETTINGS_SCHEMA } from '../game/settings.ts';
 import { listPacks, loadPack } from '../packs/packManager.ts';
 import { downloadWorkshopPack } from '../steam/workshop.ts';
+import { createSocketLimits, type SocketLimits } from './socketLimits.ts';
 
 const JOINED_ROOM = 'joined';
 const JOIN_WINDOW_MS = 60_000;
@@ -23,7 +24,7 @@ function requireBoolean(value: unknown): boolean {
   return value;
 }
 
-export function registerSocketHandlers(io: Server, room: Room): void {
+export function registerSocketHandlers(io: Server, room: Room, limits: SocketLimits = createSocketLimits()): void {
   const joinAttempts = new Map<string, { startedAt: number; count: number }>();
   const checkJoinRate = (address: string): void => {
     const now = Date.now();
@@ -56,7 +57,7 @@ export function registerSocketHandlers(io: Server, room: Room): void {
     const s = io.sockets.sockets.get(p.socketId);
     s?.emit('session:kicked');
     s?.leave(JOINED_ROOM);
-    if (s) s.data.pid = null;
+    if (s) { s.data.pid = null; limits.left(s); } // still connected, so it counts as unjoined again
   });
 
   const emitToManagers = (event: string, payload: unknown): void => {
@@ -68,6 +69,7 @@ export function registerSocketHandlers(io: Server, room: Room): void {
   /* ------------------------------------------------------ per connection */
 
   io.on('connection', (socket: Socket) => {
+    limits.connected(socket);
     socket.data.pid = null as string | null;
     let commandWindowStartedAt = Date.now();
     let commandAttempts = 0;
@@ -128,6 +130,7 @@ export function registerSocketHandlers(io: Server, room: Room): void {
       if (stale) io.sockets.sockets.get(stale)?.disconnect(true);
       socket.data.pid = participant.id;
       socket.join(JOINED_ROOM);
+      limits.joined(socket);
     };
 
     /* ---- clock sync ---- */
@@ -156,6 +159,7 @@ export function registerSocketHandlers(io: Server, room: Room): void {
       room.remove(pid);
       socket.data.pid = null;
       socket.leave(JOINED_ROOM);
+      limits.left(socket);
     });
 
     /* ---- roles ---- */
@@ -260,6 +264,7 @@ export function registerSocketHandlers(io: Server, room: Room): void {
     on('game:nextRound', 'moderator', () => room.engine.nextRound());
 
     socket.on('disconnect', () => {
+      limits.disconnected(socket);
       if (socket.data.pid) room.detach(socket.data.pid as string, socket.id);
     });
   });

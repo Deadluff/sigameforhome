@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { after, test } from 'node:test';
+import { io as connectSocket } from 'socket.io-client';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const temp = await fsp.mkdtemp(path.join(os.tmpdir(), 'sigame-server-process-'));
@@ -70,4 +71,30 @@ test('a taken port exits with code 78 so the launcher does not retry', { timeout
   } finally {
     blocker.close();
   }
+});
+
+test('the real server refuses sockets from foreign pages but serves its own (audit SEC-3)', { timeout: 30_000 }, async () => {
+  const port = await freePort();
+  const server = startServer(port);
+  await server.ready;
+  try {
+    const url = `http://127.0.0.1:${port}`;
+    const tryConnect = (origin, transport = 'websocket') => new Promise((resolve) => {
+      const socket = connectSocket(url, { transports: [transport], reconnection: false,
+        extraHeaders: origin ? { Origin: origin } : {} });
+      socket.on('connect', () => { socket.close(); resolve('connected'); });
+      socket.on('connect_error', () => { socket.close(); resolve('refused'); });
+    });
+    assert.equal(await tryConnect(`http://127.0.0.1:${port}`), 'connected');
+    assert.equal(await tryConnect('http://evil.example'), 'refused');
+    // The long-polling handshake goes through the same check.
+    assert.equal(await tryConnect('http://evil.example', 'polling'), 'refused');
+    assert.equal(await tryConnect(`http://127.0.0.1:${port}`, 'polling'), 'connected');
+    const shell = await fetch(`${url}/api/info`);
+    assert.equal(shell.headers.get('x-frame-options'), 'SAMEORIGIN');
+  } finally {
+    server.child.kill('SIGTERM');
+    await server.exited;
+  }
+  assert.match(server.output(), /\[origin\] Refused a connection/);
 });

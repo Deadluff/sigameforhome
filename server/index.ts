@@ -14,7 +14,10 @@ import { persistRoom, restoreRoom } from './game/persistence.ts';
 import { ensureIosCompatibleMedia } from './packs/mediaTranscoder.ts';
 import { listPacks } from './packs/packManager.ts';
 import { canUpload, MAX_UPLOAD_BYTES, saveUploadedPack, UploadError } from './packs/upload.ts';
+import { errorHandler, originMiddleware, securityHeaders } from './http/httpSafety.ts';
 import { registerSocketHandlers } from './socket/handlers.ts';
+import { logRefusal, policyFromEnv, refusalReason } from './socket/originGuard.ts';
+import { createSocketLimits } from './socket/socketLimits.ts';
 import { ensureDir, safeJoin } from './utils/fsx.ts';
 import { getLanAddresses } from './utils/network.ts';
 import { qrSvg } from './utils/qrSvg.ts';
@@ -23,20 +26,31 @@ await Promise.all([ensureDir(config.packsDir), ensureDir(config.cacheDir)]);
 
 const app = express();
 const server = http.createServer(app);
+const originPolicy = policyFromEnv();
 const io = new Server(server, {
   pingInterval: 10_000,
   pingTimeout: 8_000,
   maxHttpBufferSize: 1e6,
+  // Foreign pages and unexpected Host names cannot open a game socket (audit SEC-3).
+  allowRequest: (req, callback) => {
+    const reason = refusalReason(req.headers, originPolicy);
+    if (reason) logRefusal(req.headers, reason);
+    callback(reason, !reason);
+  },
 });
+const socketLimits = createSocketLimits();
+io.use(socketLimits.middleware);
 
 const room = new Room();
 await restoreRoom(room);
 const flushRoomState = persistRoom(room);
-registerSocketHandlers(io, room);
+registerSocketHandlers(io, room, socketLimits);
 
 /* ------------------------------------------------------------------ HTTP */
 
 app.disable('x-powered-by');
+app.use(originMiddleware(originPolicy));
+app.use(securityHeaders);
 
 app.get('/api/info', (_req: Request, res: Response) => {
   res.json({
@@ -137,11 +151,7 @@ if (fs.existsSync(config.publicDir)) {
   app.use(express.static(config.publicDir, { index: 'index.html' }));
 }
 
-app.use((err: Error & { status?: number }, _req: Request, res: Response, _next: NextFunction) => {
-  if (err.status === 404) return res.status(404).end();
-  console.error(err);
-  res.status(500).json({ error: err.message });
-});
+app.use(errorHandler);
 
 /* --------------------------------------------------------------- startup */
 
