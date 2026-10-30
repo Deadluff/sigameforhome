@@ -1,4 +1,5 @@
 import { io, type Socket } from 'socket.io-client';
+import { askConfirm } from './confirmDialog';
 import { ContentPresenter } from './contentPresenter';
 import { avatar, formatScore, questionTypeLabel, replicFor, roleLabels, sayReplic, toast, type ReplicTone } from './ui';
 import { audioCue, drawPins, drawRing, fitText, imageFrame, makePickable, optionText, optionTiles, parsePoint,
@@ -119,14 +120,26 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     if (masterGain) masterGain.gain.value = volume;
     for (const media of questionMedia()) media.volume = routedMedia.has(media) ? 1 : volume;
     input('#volume-range').value = String(Math.round(volume * 100));
+    // The filled part of the track is painted from this, since only Firefox styles range progress natively.
+    input('#volume-range').style.setProperty('--fill', `${Math.round(volume * 100)}%`);
     $('#volume-value').textContent = `${Math.round(volume * 100)}%`;
     button('#btn-volume').dataset.icon = volume === 0 ? 'mute' : 'volume';
+    const mute = button('#volume-mute');
+    mute.dataset.icon = volume === 0 ? 'volume' : 'mute';
+    mute.title = volume === 0 ? 'Unmute' : 'Mute';
+    mute.querySelector('.label')!.textContent = mute.title;
   }
-  input('#volume-range').addEventListener('input', () => {
-    volume = Number(input('#volume-range').value) / 100;
+  function setVolume(next: number) {
+    volume = Math.min(1, Math.max(0, next));
     try { localStorage.setItem(VOLUME_KEY, String(volume)); } catch { /* Not saved; still applies now. */ }
     applyVolume();
-  });
+  }
+  // Mute remembers the last level, so unmuting returns to it instead of to full blast.
+  let volumeBeforeMute = volume || 1;
+  input('#volume-range').addEventListener('input', () => setVolume(Number(input('#volume-range').value) / 100));
+  button('#volume-mute').onclick = () => {
+    if (volume > 0) { volumeBeforeMute = volume; setVolume(0); } else setVolume(volumeBeforeMute);
+  };
   button('#btn-volume').onclick = (event) => {
     event.stopPropagation();
     const open = $('#volume-pop').classList.toggle('hidden') === false;
@@ -277,7 +290,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   });
 
   async function leaveRoom() {
-    if (!confirm('Leave this room?')) return;
+    if (!(await askConfirm({ title: 'Leave this room?', body: 'You leave the game on this device.', confirmLabel: 'Leave room', danger: true }))) return;
     const result = await send('session:leave');
     if (!result.ok) return;
     // The server has removed this socket, so a later reconnect must not resume the old seat.
@@ -519,15 +532,15 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       if (action === 'game:reveal') button.disabled = game.current?.type === 'forAll' ||
         !(['reading', 'buzzerOpen', 'answering'].includes(game.phase) ||
           (game.phase === 'reveal' && !game.current?.answerShown));
-      if (action === 'game:next') button.disabled = !['intro', 'reveal', 'roundEnd', 'specialSetup', 'stakeAuction'].includes(game.phase);
+      // Nothing to skip while the picked cell is still animating; once the card is up, the host may skip it.
+      if (action === 'game:next') button.disabled = !['reading', 'buzzerOpen', 'reveal', 'roundEnd', 'specialSetup', 'stakeAuction'].includes(game.phase);
       if (action === 'game:next') {
         const finalReveal = game.phase === 'reveal' && game.round?.type === 'final';
         const moreFinalThemes = game.board.some((theme) => theme.questions[0]?.available);
         button.textContent = finalReveal && state.settings.playAllQuestionsInFinalRound
           ? moreFinalThemes ? 'Next final theme' : 'Finish game'
           : game.phase === 'specialSetup' ? 'Skip question'
-            // During the pick intro Next only shortens the pause; the question still plays.
-            : game.phase === 'intro' ? 'Skip' : 'Next';
+            : game.phase === 'reading' || game.phase === 'buzzerOpen' ? 'Skip question' : 'Next';
       }
     }
 
@@ -541,8 +554,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     for (const control of $('#host-controls').querySelectorAll<HTMLButtonElement>(':scope > button[data-act]')) {
       control.classList.toggle('primary', control.dataset.act === primaryAct);
     }
-    // During the intro "Skip" only shortens the pause, so it stays quiet.
-    button('#host-controls [data-act="game:next"]').classList.toggle('quiet', game.phase === 'intro');
+    // Skipping a question being read is a side action, so it stays quiet next to Open buzzer.
+    button('#host-controls [data-act="game:next"]').classList.toggle('quiet', game.phase === 'reading' || game.phase === 'buzzerOpen');
     // Keep unavailable phase actions out of the primary control strip.
     for (const control of $('#host-controls').querySelectorAll<HTMLButtonElement>(':scope > button[data-act]')) {
       control.classList.toggle('hidden', control.disabled);
@@ -553,11 +566,15 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     renderHostMenu();
   }
 
-  button('#btn-undo-judgment').onclick = () => {
+  button('#btn-undo-judgment').onclick = async () => {
     const undo = state?.game.undoJudgment;
     if (!undo) return;
     const name = state?.participants.find((player) => player.id === undo.playerId)?.name ?? 'this player';
-    if (confirm(`Undo the last verdict for ${name}? A revealed answer may already be known to viewers.`)) {
+    if (await askConfirm({
+      title: `Undo the verdict for ${name}?`,
+      body: 'Their points for this answer are taken back. Viewers may already have seen the answer.',
+      confirmLabel: 'Undo verdict',
+    })) {
       send('game:undoJudgment', { presentationId: undo.presentationId, judgmentId: undo.judgmentId });
     }
   };
@@ -936,8 +953,10 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       : 'Waiting for the host to start a rematch.';
   }
 
-  button('#btn-rematch').onclick = () => {
-    if (confirm('Start a rematch? Scores will reset.')) send('game:start');
+  button('#btn-rematch').onclick = async () => {
+    if (await askConfirm({ title: 'Start a rematch?', body: 'Everyone’s score goes back to zero.', confirmLabel: 'Start rematch' })) {
+      send('game:start');
+    }
   };
 
   function renderPlayers() {
@@ -1059,8 +1078,10 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
         kick.className = 'bad';
         kick.dataset.icon = 'cross';
         kick.setAttribute('aria-label', `Remove ${p.name} from the room`);
-        kick.onclick = () => {
-          if (confirm(`Remove ${p.name} from the room?`)) send('participant:kick', { targetId: p.id });
+        kick.onclick = async () => {
+          if (await askConfirm({
+            title: `Remove ${p.name} from the room?`, body: 'They leave the game right away.', confirmLabel: 'Remove', danger: true,
+          })) send('participant:kick', { targetId: p.id });
         };
         panel.append(kick);
       }
@@ -2032,11 +2053,12 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       const remMs = t ? Math.max(0, t.endsAt - now) : 0;
       const pct = t && t.durationMs > 0 ? Math.max(0, Math.min(100, (remMs / t.durationMs) * 100)) : 0;
       $('#stage-countdown').textContent = t ? String(Math.ceil(remMs / 1000)) : '';
-      $('#stage-progress-fill').style.width = `${pct}%`;
+      // With no clock the bar shows a fixed state (set below); a running clock is drawn by frameClock.
+      if (!t) $('#stage-progress-fill').style.width = `${pct}%`;
       // The table frame is the clock: its lit edge drains as the countdown runs.
       const stage = $('#game-stage');
-      stage.classList.toggle('timed', !!t && remMs > 0 && t.name !== 'intro');
-      stage.style.setProperty('--left', String(pct / 100));
+      // The frame clock only shows the buzz window; other timers live in the banner.
+      stage.classList.toggle('timed', !!t && remMs > 0 && game.phase === 'buzzerOpen');
       const chooser = game.chooserId === you.id ? 'You' : nameOf(game.chooserId);
       const canPick = you.canModerate || game.chooserId === you.id;
 
@@ -2186,6 +2208,21 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
 
   /* ---------------- fast tick for smooth countdown bars ---------------- */
 
+  /*
+   * The frame's draining edge and the banner bar move every display frame. The 100 ms tick below
+   * only updates the words and numbers; at 10 updates a second the edge visibly stepped.
+   */
+  function frameClock() {
+    const t = state?.game?.timer;
+    if (t && t.durationMs > 0) {
+      const left = Math.max(0, Math.min(1, (t.endsAt - nowServer()) / t.durationMs));
+      $('#game-stage').style.setProperty('--left', left.toFixed(4));
+      $('#stage-progress-fill').style.width = `${(left * 100).toFixed(2)}%`;
+    }
+    requestAnimationFrame(frameClock);
+  }
+  requestAnimationFrame(frameClock);
+
   setInterval(() => {
     if (!state?.game) return;
     updateOrientiers();
@@ -2265,9 +2302,9 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   });
 
   /*
-   * Host shortcuts: Space runs the highlighted step (Skip during the intro), Y and N give a verdict.
-   * Keys use e.code so a Russian layout works. A step that just changed ignores keys for 700 ms, so a
-   * double press cannot skip the intro and then open the buttons before anyone has read the question.
+   * Host shortcuts: Space runs the highlighted step, Y and N give a verdict. Nothing runs during the
+   * pick intro. Keys use e.code so a Russian layout works. A step that just changed ignores keys for
+   * 700 ms, so a double press cannot open the buttons the moment the question appears.
    */
   const HOST_KEYS_KEY = 'sigame.hostKeys';
   let hostKeys = true;
@@ -2279,6 +2316,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   });
   document.addEventListener('keydown', (e) => {
     if (!hostKeys || tvMode || settingsOpen || state?.you?.role !== 'host') return;
+    // An open question dialog owns the keyboard (Enter, Esc, Tab between its buttons).
+    if (document.querySelector('dialog[open]')) return;
     if (e.repeat || e.metaKey || e.ctrlKey || e.altKey || Date.now() - stepChangedAt < 700) return;
     const focused = document.activeElement;
     if (focused instanceof HTMLElement &&
@@ -2286,7 +2325,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     const bar = $('#host-controls');
     const usable = (el: HTMLButtonElement | null) => el && !el.disabled && !el.classList.contains('hidden') ? el : null;
     const target = e.code === 'Space'
-      ? usable(bar.querySelector<HTMLButtonElement>(state.game.phase === 'intro' ? '[data-act="game:next"]' : ':scope > button.primary'))
+      ? usable(bar.querySelector<HTMLButtonElement>(':scope > button.primary'))
       : e.code === 'KeyY' ? usable(bar.querySelector<HTMLButtonElement>('[data-act="judge-ok"]'))
         : e.code === 'KeyN' ? usable(bar.querySelector<HTMLButtonElement>('[data-act="judge-bad"]')) : null;
     if (!target || bar.classList.contains('hidden')) return;
@@ -2295,14 +2334,22 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   });
 
   for (const b of document.querySelectorAll<HTMLElement>('[data-act]')) {
-    b.addEventListener('click', (event) => {
+    b.addEventListener('click', async (event) => {
       const act = b.dataset.act;
       if (!act) return;
       // A mouse click leaves focus on the button, and Space would then press it again natively.
       if (event.detail > 0 && b.closest('#host-controls')) b.blur();
-      if (act === 'game:stop' && !confirm('Stop this game? Scores and progress will be reset.')) return;
-      if (act === 'game:next' && state?.game?.phase === 'specialSetup' &&
-          !confirm('Skip this special question?')) return;
+      const phase = state?.game?.phase ?? '';
+      if (act === 'game:stop' && !(await askConfirm({
+        title: 'Stop this game?', body: 'Scores and progress are reset for everyone.', confirmLabel: 'Stop game', danger: true,
+      }))) return;
+      if (act === 'game:next' && phase === 'specialSetup' && !(await askConfirm({
+        title: 'Skip this special question?', body: 'It is marked as played and nobody gets its points.', confirmLabel: 'Skip question',
+      }))) return;
+      // Skipping while a question is up drops it without the answer, so it needs a second thought.
+      if (act === 'game:next' && ['reading', 'buzzerOpen'].includes(phase) && !(await askConfirm({
+        title: 'Skip this question?', body: 'It returns to the board as played, without the answer.', confirmLabel: 'Skip question',
+      }))) return;
       if (act === 'judge-ok') send('game:judge', { correct: true });
       else if (act === 'judge-half') send('game:judge', { correct: true, factor: 0.5 });
       else if (act === 'judge-double') send('game:judge', { correct: true, factor: 2 });

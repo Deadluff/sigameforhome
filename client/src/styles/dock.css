@@ -20,7 +20,7 @@
 .stage-countdown:empty { display: none; }
 /* The table frame shows the countdown now; the seconds stay in the panel as numbers. */
 .stage-progress-track { display: none; height: 6px; border-radius: 999px; background: var(--set-sunk); overflow: hidden; }
-.stage-progress-fill { height: 100%; width: 0; border-radius: inherit; background: var(--tone); transition: width .1s linear; }
+.stage-progress-fill { height: 100%; width: 0; border-radius: inherit; background: var(--tone); }
 
 /* Contextual panels */
 .dock .card { display: grid; gap: 12px; }

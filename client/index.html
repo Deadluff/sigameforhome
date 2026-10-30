@@ -67,6 +67,7 @@
         <span class="volume">
           <button id="btn-volume" type="button" class="quiet icon-only" data-icon="volume" title="Sound volume" aria-expanded="false" aria-controls="volume-pop"><span class="label">Sound volume</span></button>
           <span id="volume-pop" class="volume-pop hidden">
+            <button id="volume-mute" type="button" class="quiet icon-only" data-icon="mute" title="Mute"><span class="label">Mute</span></button>
             <input id="volume-range" type="range" min="0" max="100" step="5" aria-label="Sound volume" />
             <output id="volume-value" for="volume-range"></output>
           </span>
@@ -319,6 +320,17 @@
     </section>
   </main>
   <div id="toasts" class="toasts" aria-live="assertive"></div>
+  <!-- One in-app confirmation for the whole client (see confirmDialog.ts); the browser's confirm() is not used. -->
+  <dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-body">
+    <form method="dialog">
+      <h2 id="confirm-title"></h2>
+      <p id="confirm-body"></p>
+      <div class="confirm-actions">
+        <button id="confirm-cancel" value="cancel" class="quiet">Cancel</button>
+        <button id="confirm-ok" value="ok" class="primary">OK</button>
+      </div>
+    </form>
+  </dialog>
 
   <script type="module" src="/src/app.ts"></script>
 </body>

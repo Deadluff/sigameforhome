@@ -1,8 +1,9 @@
 /*
- * Studio palette "Plum studio": a TV quiz set lit warm violet around a blue board. The board is the
- * only blue object, so it is the brightest thing in the room. Amber "lamp" marks money and numbers,
- * the picked cell, and at most one filled button; three signal colours match the question frame
- * (buzz now / someone answers / wrong). Every colour in the other stylesheets comes from here.
+ * Studio palette "Plum studio": a TV quiz set lit warm violet. The board is a brighter violet from the
+ * same family (a saturated blue fought the plum), so it is the brightest thing in the room without
+ * clashing. Amber "lamp" marks money and numbers, the picked cell, and at most one filled button;
+ * three signal colours match the question frame (buzz now / someone answers / wrong). Every colour
+ * in the other stylesheets comes from here.
  */
 :root {
   color-scheme: dark;
@@ -12,8 +13,8 @@
   --set-raised: #3a2560;    /* neutral buttons and menus on panels */
   --set-hover: #45306e;     /* hovered neutral button */
   --set-sunk: #120a22;      /* inset windows: score, inputs */
-  --board: #2a3fd4;         /* live board cell */
-  --board-lit: #4258ec;     /* hovered cell; off-phase of the pick blink */
+  --board: #5a3ec8;         /* live board cell: violet, one step up from the set */
+  --board-lit: #6e54de;     /* hovered cell; where the pick lights up from */
   --board-spent: #1f1640;   /* table bed behind the cells */
   --theme-cell: #33215a;    /* theme names on the board */
   --cell-played: #35265e;   /* played cell: visible on the bed, clearly spent */
@@ -22,6 +23,7 @@
 
   --lamp: #ffc24b;          /* prices, scores, the picked cell, the single primary action */
   --lamp-soft: #ffe2a1;
+  --lamp-rgb: 255 194 75;   /* --lamp as channels, for soft rings: rgb(var(--lamp-rgb) / .22) */
   --on-lamp: #2a1a00;       /* text on amber */
   --go: #3be38e;            /* buzzer open, correct */
   --go-hover: #5af0a3;
