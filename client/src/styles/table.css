@@ -139,7 +139,8 @@
 .lobby-table .invite { display: grid; gap: 8px; justify-items: center; margin-top: 6px; }
 .lobby-table .invite > span { color: var(--mist); font-weight: 700; font-size: var(--t-xs); }
 .lobby-table .invite .row { justify-content: center; align-items: center; }
-#invite-url { padding: 10px 14px; border-radius: var(--r-control); background: var(--set-sunk); color: var(--lamp); font: 600 var(--t-m) var(--font-display); overflow-wrap: anywhere; user-select: all; }
+/* The link shrinks with narrow phones so a LAN address stays on one line instead of breaking mid-port. */
+#invite-url { padding: 10px 14px; border-radius: var(--r-control); background: var(--set-sunk); color: var(--lamp); font: 600 min(var(--t-m), max(12px, 4vw)) var(--font-display); overflow-wrap: anywhere; user-select: all; }
 /* White quiet zone around the code is part of the SVG, so phone cameras lock on quickly. */
 .invite-qr { width: clamp(120px, 16vw, 200px); height: auto; aspect-ratio: 1; border-radius: var(--r-control); image-rendering: pixelated; }
 
@@ -271,6 +272,8 @@ button.option:not(:disabled):hover { background: var(--set-raised); border-color
 #question.showing-answer { box-shadow: inset 0 0 0 3px var(--go); }
 .showing-answer .answer-title { color: var(--go); font-family: var(--font-display); font-weight: 700; }
 .showing-answer .q-prompt p:not(.answer-title) { color: var(--paper); font-size: .7em; }
+/* Other accepted spellings: a footnote under the answer, not a second headline. */
+.showing-answer .q-prompt p.answer-alt { color: var(--paper); font-family: var(--font-ui); font-size: .45em; }
 
 /* The host's private line sits in its own row, never on top of the picture. */
 .q-host {

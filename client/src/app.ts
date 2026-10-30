@@ -1,5 +1,5 @@
 import { io, type Socket } from 'socket.io-client';
-import { askConfirm } from './confirmDialog';
+import { askConfirm, type ConfirmOptions } from './confirmDialog';
 import { ContentPresenter } from './contentPresenter';
 import { avatar, formatScore, questionTypeLabel, replicFor, roleLabels, sayReplic, toast, type ReplicTone } from './ui';
 import { audioCue, drawPins, drawRing, fitText, imageFrame, makePickable, optionText, optionTiles, parsePoint,
@@ -116,6 +116,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       routedMedia.add(el);
     } catch { /* Keep the plain element volume. */ }
   }
+  // With "Sound on host and TV only" the room hears one speaker instead of every phone out of sync.
+  const playsSoundHere = () => !state?.settings.soundOnHostOnly || tvMode || state.you?.role === 'host';
   function applyVolume() {
     if (masterGain) masterGain.gain.value = volume;
     for (const media of questionMedia()) media.volume = routedMedia.has(media) ? 1 : volume;
@@ -268,7 +270,16 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   $('#join-form').addEventListener('submit', (e) => {
     e.preventDefault();
     $('#join-error').textContent = '';
-    socket.emit('session:join', { nickname: input('#nickname').value }, (res: JoinAck) => {
+    // The role picker can take a second to appear; a busy button stops a second tap from joining twice.
+    const submit = $('#join-form').querySelector<HTMLButtonElement>('button[type="submit"]')!;
+    const label = submit.textContent;
+    submit.disabled = true;
+    submit.textContent = 'Joining…';
+    // A lost reply must not leave the button stuck on "Joining…".
+    socket.timeout(8000).emit('session:join', { nickname: input('#nickname').value }, (err: Error | null, res: JoinAck) => {
+      submit.disabled = false;
+      submit.textContent = label;
+      if (err) return ($('#join-error').textContent = 'No reply from the game. Check the connection and try again.');
       if (!res.ok) return ($('#join-error').textContent = res.error);
       localStorage.setItem(TOKEN_KEY, res.token);
     });
@@ -290,7 +301,13 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   });
 
   async function leaveRoom() {
-    if (!(await askConfirm({ title: 'Leave this room?', body: 'You leave the game on this device.', confirmLabel: 'Leave room', danger: true }))) return;
+    // Leaving frees the seat for good: rejoining makes a new player at 0. Say so while points are at stake.
+    const me = state?.participants.find((p) => p.id === state?.you?.id);
+    const inGame = !!state && !['lobby', 'gameOver'].includes(state.game.phase);
+    const body = me?.role === 'player' && inGame
+      ? `Your seat and your ${formatScore(me.score)} points are given up. Joining again starts a new player at 0.`
+      : 'You leave the game on this device.';
+    if (!(await askConfirm({ title: 'Leave this room?', body, confirmLabel: 'Leave room', danger: true }))) return;
     const result = await send('session:leave');
     if (!result.ok) return;
     // The server has removed this socket, so a later reconnect must not resume the old seat.
@@ -566,17 +583,13 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     renderHostMenu();
   }
 
-  button('#btn-undo-judgment').onclick = async () => {
+  // No confirm step: the answer reveal moves on by itself after a few seconds, so a dialog made the
+  // host lose that race and confirm a stale undo. Undo is reversible anyway (the host judges again).
+  button('#btn-undo-judgment').title = 'Take back the last verdict and judge again. Viewers may already have seen the answer.';
+  button('#btn-undo-judgment').onclick = () => {
     const undo = state?.game.undoJudgment;
     if (!undo) return;
-    const name = state?.participants.find((player) => player.id === undo.playerId)?.name ?? 'this player';
-    if (await askConfirm({
-      title: `Undo the verdict for ${name}?`,
-      body: 'Their points for this answer are taken back. Viewers may already have seen the answer.',
-      confirmLabel: 'Undo verdict',
-    })) {
-      send('game:undoJudgment', { presentationId: undo.presentationId, judgmentId: undo.judgmentId });
-    }
+    send('game:undoJudgment', { presentationId: undo.presentationId, judgmentId: undo.judgmentId });
   };
 
   let gameMediaPaused = false;
@@ -643,9 +656,10 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     if (wagering && finalist) {
       const score = Math.max(0, participants.find((p) => p.id === you.id)?.score ?? 0);
       input('#final-amount').max = String(score);
-      $('#final-amount-label').textContent = `Your final wager, 0 to ${formatScore(score)}`;
-      $('#final-wager-status').textContent = final.wagered.includes(you.id)
-        ? `Saved: ${formatScore(final.yourWager ?? 0)}` : '';
+      // The saved wager sits in the field label: below the buttons it fell off small phone screens.
+      $('#final-amount-label').textContent = final.wagered.includes(you.id)
+        ? `Saved: ${formatScore(final.yourWager ?? 0)}. You can change it (0 to ${formatScore(score)}).`
+        : `Your final wager, 0 to ${formatScore(score)}`;
     }
     // Finalists write their answer so the host judges what was actually said.
     const answering = game.phase === 'finalQuestion' && finalist && !final.judged.includes(you.id);
@@ -653,7 +667,10 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     if (answering) {
       const field = textarea('#final-answer-input');
       if (final.yourAnswer && document.activeElement !== field && !field.value) field.value = final.yourAnswer;
-      $('#final-answer-status').textContent = final.yourAnswer ? 'Saved. You can change it until time is up.' : '';
+      // A typed but unsent answer used to vanish at time-up with no warning.
+      const draft = field.value.trim();
+      $('#final-answer-status').textContent = draft && draft !== final.yourAnswer ? 'Not sent yet. Press Submit answer.'
+        : final.yourAnswer ? 'Saved. You can change it until time is up.' : '';
     }
     const host = you.canModerate && ['finalWager', 'finalQuestion', 'finalJudge'].includes(game.phase);
     $('#final-host').classList.toggle('hidden', !host);
@@ -684,8 +701,46 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     const answer = textarea('#final-answer-input').value.trim();
     if (answer) send('game:finalAnswer', { answer });
   });
+  // Answers are one line: Enter sends (Shift+Enter still breaks the line). People pressed Enter and
+  // assumed the answer was in.
+  for (const [field, form] of [['#final-answer-input', '#final-answer'], ['#for-all-answer', '#for-all-answer-form'],
+    ['#typed-answer-input', '#typed-answer-form']] as const) {
+    textarea(field).addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
+      event.preventDefault();
+      ($(form) as HTMLFormElement).requestSubmit();
+    });
+  }
+  textarea('#final-answer-input').addEventListener('input', () => { if (state) renderFinal(); });
+
+  /*
+   * Last-second save: a draft that differs from the saved answer is sent just before the final clock
+   * ends. Not sent earlier on purpose: the server closes the final once every finalist has an answer.
+   */
+  let finalDraftSentFor: string | null = null;
+  function sendFinalDraftBeforeTimeUp() {
+    const game = state?.game;
+    const t = game?.timer;
+    if (!game || !state?.you || game.phase !== 'finalQuestion' || !t) return;
+    if (!game.final?.eligibleIds.includes(state.you.id) || t.endsAt - nowServer() > 1500) return;
+    const draft = textarea('#final-answer-input').value.trim();
+    const key = `${t.endsAt}:${draft}`;
+    if (!draft || draft === game.final.yourAnswer || finalDraftSentFor === key) return;
+    finalDraftSentFor = key;
+    send('game:finalAnswer', { answer: draft });
+  }
   $('#btn-open-final').onclick = () => send('game:openFinal');
-  $('#btn-close-final').onclick = () => send('game:closeFinal');
+  $('#btn-close-final').onclick = async () => {
+    const final = state?.game.final;
+    const missing = final ? final.eligibleIds.filter((id) => !final.answeredIds.includes(id)).length : 0;
+    // Closing early drops anything a finalist typed but has not sent yet.
+    if (missing && !(await askConfirm({
+      title: 'End answer time now?',
+      body: `${missing} finalist${missing === 1 ? ' has' : 's have'} not sent an answer yet.`,
+      confirmLabel: 'End answer time',
+    }))) return;
+    send('game:closeFinal');
+  };
 
   function renderSpecialSetup() {
     const state = activeState();
@@ -873,7 +928,9 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     if (active) {
       const challenge = active.kind === 'for' ? 'rejected answer' : 'accepted answer';
       const voted = active.votedIds.filter((id) => active.eligibleVoterIds.includes(id)).length;
-      $('#appeal-status').textContent = `${nameOf(active.requesterId)} appealed ${nameOf(active.targetId)}’s ${challenge}. ` +
+      // "Cid appealed Cid's answer" read oddly; a player appealing their own verdict is the common case.
+      const whose = active.requesterId === active.targetId ? 'their own' : `${nameOf(active.targetId)}’s`;
+      $('#appeal-status').textContent = `${nameOf(active.requesterId)} appealed ${whose} ${challenge}. ` +
         `${voted} of ${active.eligibleVoterIds.length} votes received. Votes are private.` +
         (active.votedIds.includes(you.id) ? ' Your vote is saved.' : '') +
         (game.phase === 'paused' ? ' Paused.' : '');
@@ -1022,8 +1079,9 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       else if (isChooser) badge('chooser-badge', game.phase === 'finalThemes' ? 'Removes' : 'Picks');
       el.append(slot);
       // Final answers are judged on each podium, next to the answer and wager they belong to.
+      // The server sends them to the host while judging and to everyone once the final is revealed.
       const final = game.final;
-      if (you.canModerate && game.phase === 'finalJudge' && final?.eligibleIds.includes(p.id)) {
+      if (final?.answers && final.eligibleIds.includes(p.id)) {
         el.classList.add('judging');
         el.append(finalVerdict(p.id, p.name, final));
       }
@@ -1126,7 +1184,18 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     }));
     const wager = final.wagers?.[playerId];
     if (wager != null) box.append(Object.assign(document.createElement('small'), { textContent: `Wager ${formatScore(wager)}` }));
-    if (final.judged.includes(playerId)) return box;
+    if (final.judged.includes(playerId)) {
+      // Verdicts are public at reveal; the latest one counts when an appeal overturned the first.
+      const verdict = state?.game.appeals?.judgments.filter((j) => j.playerId === playerId && !j.voided).at(-1);
+      if (verdict) {
+        // A span, not <b>: the podium's "(you)" suffix targets its <b> name.
+        box.append(Object.assign(document.createElement('span'), {
+          className: `final-delta ${verdict.correct ? 'ok' : 'bad'}`,
+          textContent: `${verdict.correct ? '✓' : '✗'} ${verdict.delta > 0 ? '+' : ''}${formatScore(verdict.delta)}`,
+        }));
+      }
+      return box;
+    }
     const row = Object.assign(document.createElement('div'), { className: 'verdict-buttons' });
     const verdict = (correct: boolean) => {
       const b = Object.assign(document.createElement('button'), {
@@ -1397,34 +1466,38 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     if (document.activeElement !== $('#set-useApellations')) {
       input('#set-useApellations').checked = s.useApellations;
     }
+    if (document.activeElement !== $('#set-soundOnHostOnly')) {
+      input('#set-soundOnHostOnly').checked = s.soundOnHostOnly;
+    }
   }
 
-  // Settings change listeners
-  select('#set-gameMode').addEventListener('change', () => send('settings:update', { gameMode: select('#set-gameMode').value }));
+  // Settings change listeners.
+  // A change saves silently otherwise; a short "Saved" mark on the field confirms it reached the room.
+  const savedMarks = new WeakMap<Element, ReturnType<typeof setTimeout>>();
+  async function saveSetting(field: HTMLElement, patch: CommandPayloads['settings:update']) {
+    const res = await send('settings:update', patch);
+    const label = field.closest('label');
+    if (!res.ok || !label) return;
+    clearTimeout(savedMarks.get(label));
+    label.classList.add('saved');
+    savedMarks.set(label, setTimeout(() => label.classList.remove('saved'), 1500));
+  }
+  select('#set-gameMode').addEventListener('change', () =>
+    saveSetting(select('#set-gameMode'), { gameMode: select('#set-gameMode').value }));
   select('#set-buzzSyncMode').addEventListener('change', () =>
-    send('settings:update', { buzzSyncMode: select('#set-buzzSyncMode').value as RoomState['settings']['buzzSyncMode'] }));
-  input('#set-falseStart').addEventListener('change', () => {
-    send('settings:update', { falseStart: input('#set-falseStart').checked });
-  });
-  input('#set-ignoreWrong').addEventListener('change', () => {
-    send('settings:update', { ignoreWrong: input('#set-ignoreWrong').checked });
-  });
-  input('#set-partialText').addEventListener('change', () => {
-    send('settings:update', { partialText: input('#set-partialText').checked });
-  });
-  input('#set-oral').addEventListener('change', () => {
-    send('settings:update', { oral: input('#set-oral').checked });
-  });
-  input('#set-playAllQuestionsInFinalRound').addEventListener('change', () => {
-    send('settings:update', { playAllQuestionsInFinalRound: input('#set-playAllQuestionsInFinalRound').checked });
-  });
-  input('#set-useApellations').addEventListener('change', () => {
-    send('settings:update', { useApellations: input('#set-useApellations').checked });
-  });
+    saveSetting(select('#set-buzzSyncMode'), { buzzSyncMode: select('#set-buzzSyncMode').value as RoomState['settings']['buzzSyncMode'] }));
+  const toggleSettingKeys = [
+    'falseStart', 'ignoreWrong', 'partialText', 'oral', 'playAllQuestionsInFinalRound', 'useApellations', 'soundOnHostOnly',
+  ] as const;
+  for (const key of toggleSettingKeys) {
+    input(`#set-${key}`).addEventListener('change', () => {
+      saveSetting(input(`#set-${key}`), { [key]: input(`#set-${key}`).checked });
+    });
+  }
   for (const key of numberSettingKeys) {
     input(`#set-${key}`).addEventListener('change', () => {
       const val = Number.parseInt(input(`#set-${key}`).value, 10);
-      if (Number.isFinite(val)) send('settings:update', { [key]: val });
+      if (Number.isFinite(val)) saveSetting(input(`#set-${key}`), { [key]: val });
     });
   }
 
@@ -1448,12 +1521,19 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     lastRoundIndex = game.roundIndex;
     if (previous === undefined || previous === game.roundIndex || !game.round) return;
     roundEnterAt = Date.now();
+    // A backgrounded tab holds its animations, so the title card would pop up late over the next question.
+    if (document.hidden) return;
     const splash = $('#round-splash');
     splash.textContent = roundTitle(game.round.name);
     splash.classList.remove('show');
     void splash.offsetWidth; // Restart the animation when rounds switch quickly.
     splash.classList.add('show');
   }
+
+  // A tab hidden mid-entrance would replay the held title card on return; drop it once its time has passed.
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && Date.now() - roundEnterAt >= ROUND_ENTER_MS) $('#round-splash').classList.remove('show');
+  });
 
   function renderBoard() {
     const state = activeState();
@@ -1508,7 +1588,9 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     board.style.gridTemplateColumns = '';
     board.style.setProperty('--cols', String(cols));
     board.style.setProperty('--rows', String(game.board.length));
-    board.style.setProperty('--phone-cols', String(Math.min(cols, 5)));
+    // Phones: up to six prices share a row (a 5-column cap left every sixth price alone on a second
+    // row and doubled the board's height); longer themes split into two even rows.
+    board.style.setProperty('--phone-cols', String(cols <= 6 ? cols : Math.min(5, Math.ceil(cols / 2))));
     const canPick = !intro && (you.canModerate || you.id === game.chooserId);
     // The pick blink is timed from the server's intro start, so a rebuilt board continues it instead of
     // restarting, and every screen blinks in step. A paused intro shows the steady lit cell.
@@ -1553,6 +1635,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     // Pack media starts with the question; show a tap button only if autoplay is blocked.
     el.preload = 'auto';
     routeThroughVolume(el, url);
+    // Muted, not skipped: the clip keeps its length, so reading and media timing stay the same on every device.
+    el.muted = !playsSoundHere();
     el.autoplay = autoStart && state?.game.phase !== 'paused' &&
       state?.game.phase !== 'answering' && !previous?.paused;
     if (el instanceof HTMLVideoElement) {
@@ -1796,7 +1880,18 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     const right = c.right ?? [];
     if (c.answerType === 'select') return right.map((label) => optionText(c.answerOptions, label)).join(' / ');
     if (c.answerType === 'point') return '';
-    return right.join(' / ');
+    return right[0] ?? '';
+  }
+
+  /**
+   * Other accepted spellings, minus those the main answer already contains. Packs often list
+   * "Title (Original, 1984)", "Title", "Original": joined, the headline said the same thing three times.
+   */
+  function answerAlternates(c: CurrentQuestion): string[] {
+    if (c.answerType === 'select' || c.answerType === 'point') return [];
+    const [main = '', ...rest] = c.right ?? [];
+    const seen = main.toLocaleLowerCase();
+    return rest.filter((alt) => alt.trim() && !seen.includes(alt.trim().toLocaleLowerCase()));
   }
 
   /** At reveal the answer takes the question's place instead of piling up under it. */
@@ -1805,6 +1900,12 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     const answerItems = c.answerContent ?? [];
     const title = answerTitle(c);
     if (title) slots.prompt.append(Object.assign(document.createElement('p'), { className: 'answer-title', textContent: title }));
+    const alternates = answerAlternates(c);
+    if (alternates.length) {
+      slots.prompt.append(Object.assign(document.createElement('p'), {
+        className: 'answer-alt', textContent: `Also accepted: ${alternates.join(', ')}`,
+      }));
+    }
     const answerTexts = answerItems.filter(isTextItem);
     answerTexts.forEach((item) => slots.prompt.append(Object.assign(document.createElement('p'), { textContent: item.value })));
     // A picture answer is marked on the question's own picture.
@@ -2061,6 +2162,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       stage.classList.toggle('timed', !!t && remMs > 0 && game.phase === 'buzzerOpen');
       const chooser = game.chooserId === you.id ? 'You' : nameOf(game.chooserId);
       const canPick = you.canModerate || game.chooserId === you.id;
+      const finalist = !!game.final?.eligibleIds.includes(you.id);
 
       if (game.phase === 'lobby') {
         const host = participants.find((p) => p.role === 'host');
@@ -2087,18 +2189,28 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       } else if (game.phase === 'paused') {
         setStage('reading', 'Game paused', you.canModerate ? 'Press Resume to continue.' : 'Waiting for the host to resume.');
       } else if (game.phase === 'board') {
+        // The pick clock only informs; at 0 nothing happens by itself, so say who moves the game on.
+        // The board always starts this clock (at least 1 s) and the server drops it when it runs out,
+        // so a board without a clock means the time is up.
+        const pickTimeUp = !t || remMs <= 0;
         setStage('idle', game.chooserId === you.id ? 'Your pick' : `${chooser} picks next`,
-          canPick ? 'Choose a theme and a price on the board.' : 'Waiting for a question to be chosen.');
+          !pickTimeUp ? (canPick ? 'Choose a theme and a price on the board.' : 'Waiting for a question to be chosen.')
+            : game.chooserId === you.id ? 'Time is up. Pick now, or the host picks for you.'
+              : you.canModerate ? `Time is up. Pick a question for ${chooser}.`
+                : 'Time is up. Waiting for a question to be chosen.');
       } else if (game.phase === 'finalThemes') {
-        setStage('idle', 'Final round', canPick ? 'Remove themes until one is left.' : `${chooser} removes a theme.`);
+        setStage('idle', game.chooserId === you.id ? 'Final round: your turn' : 'Final round',
+          canPick ? 'Remove themes until one is left.' : `${chooser} removes a theme.`);
       } else if (game.phase === 'specialSetup') {
         setStage('reading', game.current?.type === 'secretNoQuestion' ? 'A gift question' : 'Special question',
           you.canModerate ? 'Choose who answers and the value below.' : 'The host is setting up this question.');
       } else if (game.phase === 'roundEnd') {
         setStage('idle', 'Round complete', you.canModerate ? 'Press Next to continue.' : 'The next round starts soon.');
+      } else if (game.phase === 'finalWager' && you.role === 'player' && !finalist) {
+        setStage('idle', 'You sit out the final', 'Only players with more than 0 points play it. Watch along.');
       } else if (game.phase === 'finalWager') {
-        setStage('money', 'Place your final wager', you.role === 'player'
-          ? 'Your wager is private until the answers are judged.' : 'Players are placing private wagers.');
+        setStage('money', you.role === 'player' ? 'Place your final wager' : 'Final wagers',
+          you.role === 'player' ? 'Your wager is private until the answers are judged.' : 'Players are placing private wagers.');
       } else if (game.phase === 'stakeAuction') {
         setStage('money', 'Question auction', 'Players bid in turn for the right to answer.');
       } else if (game.phase === 'forAllAnswering') {
@@ -2142,7 +2254,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
             : winnerId === you.id ? 'Say your answer out loud.' : 'Listen to the answer.') + reaction);
         }
       } else if (game.phase === 'finalQuestion') {
-        setStage('reading', 'Final question', 'Prepare your answer before time runs out.');
+        setStage('reading', 'Final question', finalist ? 'Write your answer, then press Submit.'
+          : you.role === 'player' ? 'You sit out the final. Watch along.' : 'Finalists are writing their answers.');
       } else if (game.phase === 'finalJudge') {
         setStage('answering', 'Final judging', 'The host is checking every answer.');
       } else if (game.phase === 'reveal') {
@@ -2226,6 +2339,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   setInterval(() => {
     if (!state?.game) return;
     updateOrientiers();
+    sendFinalDraftBeforeTimeUp();
   }, 100);
 
   /*
@@ -2333,6 +2447,46 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     target.click();
   });
 
+  /** Where the game stands, coarsely: changes when the phase, round or question changes. */
+  function gameMoment(): string {
+    const game = state?.game;
+    return `${game?.phase}|${game?.roundIndex}|${game?.current?.presentationId ?? ''}`;
+  }
+
+  /** The second thought a host control needs right now, or null when it acts at once. */
+  function confirmQuestionFor(act: string, phase: string): ConfirmOptions | null {
+    if (act === 'game:stop') {
+      return { title: 'Stop this game?', body: 'Scores and progress are reset for everyone.', confirmLabel: 'Stop game', danger: true };
+    }
+    if (act === 'game:next' && phase === 'specialSetup') {
+      return { title: 'Skip this special question?', body: 'It is marked as played and nobody gets its points.', confirmLabel: 'Skip question' };
+    }
+    // Skipping while a question is up drops it without the answer, so it needs a second thought.
+    if (act === 'game:next' && ['reading', 'buzzerOpen'].includes(phase)) {
+      return { title: 'Skip this question?', body: 'It returns to the board as played, without the answer.', confirmLabel: 'Skip question' };
+    }
+    // The round arrows sit in the top bar, a stray click away. Once a round has ended, moving on is the normal step.
+    if ((act === 'game:nextRound' || act === 'game:prevRound') && phase !== 'roundEnd') return roundJumpQuestion(act);
+    return null;
+  }
+
+  function roundJumpQuestion(act: 'game:nextRound' | 'game:prevRound'): ConfirmOptions {
+    const game = state?.game;
+    if (act === 'game:prevRound') {
+      return { title: 'Go back a round?', body: 'The previous round restarts with its board as it was left.', confirmLabel: 'Previous round' };
+    }
+    // From the last round, "next" finishes the game.
+    if (game && state?.pack && game.roundIndex + 1 >= state.pack.rounds.length) {
+      return { title: 'Finish the game?', body: 'The game ends now and the final scores are shown.', confirmLabel: 'Finish game', danger: true };
+    }
+    const left = game?.board.reduce((n, theme) => n + theme.questions.filter((q) => q.available).length, 0) ?? 0;
+    return {
+      title: 'Skip to the next round?',
+      body: left ? `${left} question${left === 1 ? '' : 's'} in this round stay unplayed.` : 'This round ends now.',
+      confirmLabel: 'Next round',
+    };
+  }
+
   for (const b of document.querySelectorAll<HTMLElement>('[data-act]')) {
     b.addEventListener('click', async (event) => {
       const act = b.dataset.act;
@@ -2340,16 +2494,17 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       // A mouse click leaves focus on the button, and Space would then press it again natively.
       if (event.detail > 0 && b.closest('#host-controls')) b.blur();
       const phase = state?.game?.phase ?? '';
-      if (act === 'game:stop' && !(await askConfirm({
-        title: 'Stop this game?', body: 'Scores and progress are reset for everyone.', confirmLabel: 'Stop game', danger: true,
-      }))) return;
-      if (act === 'game:next' && phase === 'specialSetup' && !(await askConfirm({
-        title: 'Skip this special question?', body: 'It is marked as played and nobody gets its points.', confirmLabel: 'Skip question',
-      }))) return;
-      // Skipping while a question is up drops it without the answer, so it needs a second thought.
-      if (act === 'game:next' && ['reading', 'buzzerOpen'].includes(phase) && !(await askConfirm({
-        title: 'Skip this question?', body: 'It returns to the board as played, without the answer.', confirmLabel: 'Skip question',
-      }))) return;
+      const question = confirmQuestionFor(act, phase);
+      if (question) {
+        const asked = gameMoment();
+        if (!(await askConfirm(question))) return;
+        // Timers keep running behind the dialog. A "skip" or "next round" meant for the moment the host
+        // saw must not hit whatever came after it (a new question, or the next round).
+        if (act !== 'game:stop' && gameMoment() !== asked) {
+          toast('The game moved on while you decided. Nothing was changed.');
+          return;
+        }
+      }
       if (act === 'judge-ok') send('game:judge', { correct: true });
       else if (act === 'judge-half') send('game:judge', { correct: true, factor: 0.5 });
       else if (act === 'judge-double') send('game:judge', { correct: true, factor: 2 });

@@ -66,6 +66,8 @@
 .host-chip.vacant { padding: 6px 12px; border-style: dashed; }
 .host-chip.vacant:has(button) { max-width: none; padding: 3px 3px 3px 12px; overflow: visible; }
 .host-chip button { min-height: 30px; padding: 4px 12px; border-radius: 999px; }
+/* Above phone width the host seat card already names the host; the chip would say it twice. */
+@media (min-width: 601px) { #screen-game:has(#host-seat:not(:empty)) #host-chip { display: none; } }
 .me-chip { display: inline-flex; align-items: center; gap: 8px; min-width: 0; font-weight: 800; white-space: nowrap; }
 .host-menu { display: none; position: relative; flex: none; }
 .me-chip .me-score { display: none; }
@@ -99,6 +101,17 @@
   .host-col { min-height: 0; }
 }
 
+/*
+ * Tablet portrait fits one screen too. Without it the table kept its 66dvh height and pushed the
+ * podiums under the pinned buzzer (768x1024: 114 px of scores hidden). The host column stacks above
+ * the table here, so the table is the second row.
+ */
+@media (min-width: 601px) and (max-width: 860px) and (min-height: 700px) {
+  #screen-game:not([data-phase="lobby"]):not([data-phase="gameOver"]) { height: calc(100dvh - 32px); }
+  #screen-game:not([data-phase="lobby"]):not([data-phase="gameOver"]) .stage-layout { flex: 1 1 0; min-height: 0; grid-template-rows: auto minmax(0, 1fr); }
+  #screen-game:not([data-phase="lobby"]):not([data-phase="gameOver"]) #game-stage { min-height: 0; height: auto; }
+}
+
 @media (max-width: 860px) {
   /* A host on a tablet needs the room for pause and stop more than for the logo. */
   .topbar:has(#host-tools:not(.hidden)) .brand { display: none; }
@@ -126,6 +139,13 @@
    */
   #screen-game:not([data-phase="lobby"]) .brand, #screen-game:not([data-phase="lobby"]) .host-chip { display: none; }
   #screen-game:not([data-phase="lobby"]) .me-chip .me-name { display: none; }
+  /*
+   * Lobby: logo, sound, host chip, your chip and Leave did not fit at 375 px; your name ran under the
+   * Leave icon. "Lobby" repeats the "Waiting to start" banner, so it goes; a long name clips.
+   */
+  #screen-game[data-phase="lobby"] .topbar-round { display: none; }
+  .me-chip { overflow: hidden; }
+  .me-chip .me-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .round-nav { flex: 1 1 auto; }
   .round-nav .round-arrow, .round-nav .host-tools { display: none !important; }
   .round-nav:has(.round-arrow:not(.hidden)) { padding: 0; background: none; border: 0; }

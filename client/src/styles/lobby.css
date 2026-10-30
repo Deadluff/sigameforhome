@@ -58,6 +58,8 @@
 .setting-toggle { display: flex; align-items: flex-start; gap: 12px; padding: 10px 0; cursor: pointer; }
 .setting-toggle strong { display: block; font-size: var(--t-s); }
 .setting-toggle small { display: block; color: var(--mist); font-weight: 600; }
+/* A brief mark after the room accepts a change; settings otherwise save without any sign. */
+.field.saved > span:first-child::after, .setting-toggle.saved strong::after { content: " · Saved"; color: var(--ok-hover); }
 
 
 @media (max-width: 860px) {

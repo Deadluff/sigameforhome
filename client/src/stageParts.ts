@@ -145,7 +145,9 @@ export function audioCue(media: () => HTMLMediaElement[]): HTMLButtonElement {
   const sync = () => {
     const playing = media().some((item) => !item.paused && !item.ended);
     cue.classList.toggle('playing', playing);
-    label.textContent = playing ? 'Listen' : 'Tap to play the sound';
+    // A muted clip still plays here when the room's sound comes from the host or TV screen.
+    const muted = media().some((item) => item.muted);
+    label.textContent = playing ? (muted ? 'Listen to the host screen' : 'Listen') : 'Tap to play the sound';
     // While sound plays the meter is just a picture; it is a control only when playback was blocked.
     cue.tabIndex = playing ? -1 : 0;
     cue.setAttribute('aria-disabled', String(playing));

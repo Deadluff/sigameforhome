@@ -22,6 +22,7 @@ export interface GameSettings {
   displaySources: boolean;
   useApellations: boolean;
   gameMode: GameMode;
+  soundOnHostOnly: boolean;
   timeForChoosingQuestion: number;
   timeForThinkingOnQuestion: number;
   timeForPrintingAnswer: number;
@@ -97,6 +98,8 @@ export const SETTINGS_SCHEMA: Record<keyof GameSettings, SettingSchemaEntry> = O
   displaySources: bool(false, 'Show question sources'),
   useApellations: bool(true, 'Allow appeals'),
   gameMode: oneOf<GameMode>('classic', ['classic', 'simple'], 'Game mode'),
+  // Phones in one room play clips out of sync; the host or TV screen can be the only speaker.
+  soundOnHostOnly: bool(false, 'Play question sound only on the host and TV screens'),
 
   /* ---- Timers in seconds (TimeSettings) ---- */
   timeForChoosingQuestion: int(30, 1, 300, 'Time to choose a question'),

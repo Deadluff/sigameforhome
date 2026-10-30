@@ -158,6 +158,8 @@
                   <span><strong>Allow appeals</strong><small>Players can vote to overturn a verdict.</small></span></label>
                 <label class="setting-toggle"><input type="checkbox" id="set-playAllQuestionsInFinalRound" />
                   <span><strong>Play every final theme</strong><small>One final question per theme.</small></span></label>
+                <label class="setting-toggle"><input type="checkbox" id="set-soundOnHostOnly" />
+                  <span><strong>Sound on host and TV only</strong><small>Phones show clips muted, so the room hears one speaker.</small></span></label>
               </div>
             </details>
             <details class="lobby-details">
@@ -276,10 +278,9 @@
           <button id="appeal-close" type="button" class="hidden">Close vote</button>
         </section>
         <form id="final-wager" class="card hidden">
-          <label class="field"><span id="final-amount-label">Your final wager</span><input id="final-amount" type="number" inputmode="numeric" min="0" required /></label>
+          <label class="field"><span id="final-amount-label" aria-live="polite">Your final wager</span><input id="final-amount" type="number" inputmode="numeric" min="0" required /></label>
           <button type="submit" class="primary">Save wager</button>
           <button id="final-all-in" type="button">All in</button>
-          <span id="final-wager-status" class="hint"></span>
         </form>
         <form id="final-answer" class="card hidden">
           <label for="final-answer-input">Your final answer</label>

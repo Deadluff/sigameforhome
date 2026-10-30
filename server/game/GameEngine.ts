@@ -1496,6 +1496,10 @@ export class GameEngine {
     const forAll = this.forAll;
     // A player who owns the room may moderate, but must never receive an early answer.
     const showAnswer = viewer?.role === ROLES.HOST || (c?.answerShown ?? false);
+    // Final answers and wagers stay private until the host has judged them all; then the room sees the payoff.
+    const shownPhase = this.phase === PHASES.PAUSED ? this.paused?.phase : this.phase;
+    const finalShown = (canModerate && this.phase === PHASES.FINAL_JUDGE) ||
+      (round?.type === 'final' && (shownPhase === PHASES.REVEAL || shownPhase === PHASES.APPEAL_VOTE));
 
     return {
       phase: this.phase,
@@ -1578,7 +1582,7 @@ export class GameEngine {
       final: this.round?.type === 'final' ? {
         wagered: [...this.finalWagers.keys()],
         yourWager: viewer ? this.finalWagers.get(viewer.id) ?? null : null,
-        wagers: canModerate && this.phase === PHASES.FINAL_JUDGE
+        wagers: finalShown
           ? Object.fromEntries(this.finalEligibleIds().map((id) => [id, this.finalWagers.get(id)])) : null,
         judged: [...this.finalJudged],
         // Before wagers close, finalists are everyone with a positive score.
@@ -1586,7 +1590,7 @@ export class GameEngine {
           this.phase === PHASES.BOARD ? this.finalists().map((p) => p.id) : this.finalEligibleIds(),
         answeredIds: [...this.finalAnswers.keys()],
         yourAnswer: viewer ? this.finalAnswers.get(viewer.id) ?? null : null,
-        answers: canModerate && this.phase === PHASES.FINAL_JUDGE
+        answers: finalShown
           ? Object.fromEntries(this.finalEligibleIds().map((id) => [id, this.finalAnswers.get(id) ?? ''])) : null,
       } : null,
       // Verdicts are public once the question reaches reveal; votes stay private until resolution.

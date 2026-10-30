@@ -161,6 +161,9 @@ test('finalists write answers the host sees while judging; zero scores sit out',
   room.engine.judgeFinal(alice.id, true);
   assert.equal(alice.score, 700);
   assert.equal(room.engine.phase, 'reveal');
+  // Once every finalist is judged, the whole room sees what each one wrote and wagered.
+  assert.deepEqual(room.snapshotFor(bob.id).game.final.answers, { [alice.id]: 'F' });
+  assert.deepEqual(room.snapshotFor(bob.id).game.final.wagers, { [alice.id]: 200 });
 });
 
 test('the host can award half or double the value for a correct answer', (t) => {

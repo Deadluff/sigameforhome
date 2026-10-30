@@ -65,6 +65,7 @@ export function replicFor(playerId: string): HTMLElement | null {
 
 /** Score with a real minus sign and thin grouping, e.g. "−1 200". */
 export function formatScore(score: number): string {
-  const grouped = String(Math.abs(score)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+  // Narrow no-break space: a thin space let "1 000" wrap into "1" and "000" inside running text.
+  const grouped = String(Math.abs(score)).replace(/\B(?=(\d{3})+(?!\d))/g, '\u202f');
   return score < 0 ? `−${grouped}` : grouped;
 }

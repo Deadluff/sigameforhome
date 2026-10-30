@@ -32,6 +32,7 @@ export interface RoomState {
     ignoreWrong: boolean;
     playAllQuestionsInFinalRound: boolean;
     useApellations: boolean;
+    soundOnHostOnly: boolean;
     timeForBlockingButton: number;
     readingSpeed: number;
     partialText: boolean;
