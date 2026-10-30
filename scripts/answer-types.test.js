@@ -162,3 +162,15 @@ test('finalists write answers the host sees while judging; zero scores sit out',
   assert.equal(alice.score, 700);
   assert.equal(room.engine.phase, 'reveal');
 });
+
+test('the host can award half or double the value for a correct answer', (t) => {
+  const { room, alice } = createRoom(t);
+  buzzIn(room, alice.id, 2);
+  assert.throws(() => room.engine.judge(true, 3), /half, full or double/);
+  room.engine.judge(true, 0.5);
+  assert.equal(alice.score, 150);
+  const second = createRoom(t);
+  buzzIn(second.room, second.bob.id, 2);
+  second.room.engine.judge(true, 2);
+  assert.equal(second.bob.score, 600);
+});

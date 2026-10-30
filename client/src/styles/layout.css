@@ -8,11 +8,20 @@
 
 .topbar { display: flex; align-items: center; gap: 16px; min-height: 52px; padding: 0 4px; }
 .brand { font: 700 var(--t-l) var(--font-display); letter-spacing: -.02em; white-space: nowrap; }
-.round-nav { flex: 1; min-width: 0; display: flex; align-items: center; gap: 2px; }
-/* Arrows stay full size while a long round name truncates between them. */
-.round-arrow { flex: none; min-width: 40px; min-height: 40px; padding: 4px 10px; font: 700 var(--t-l)/1 var(--font-display); }
+/* Round name, with the host's arrows inside one pill; the pill hugs its text. */
+.round-nav { flex: 0 1 auto; min-width: 0; margin-right: auto; display: flex; align-items: center; gap: 2px; }
+.round-nav:has(.round-arrow:not(.hidden)) { padding: 3px; border-radius: 999px; background: var(--set); border: 1px solid var(--rule); }
+.round-nav:has(.round-arrow:not(.hidden)) .topbar-round { padding: 0 6px; }
+.round-arrow, .host-tools button { flex: none; min-width: 34px; min-height: 34px; padding: 0; border: 0; border-radius: 50%; font-size: var(--t-m); }
+.host-tools button.primary { padding: 0 14px; border-radius: 999px; }
+/* A hairline splits navigation from pause and stop inside the same pill. */
+.round-nav .host-tools:not(.hidden) { margin-left: 2px; padding-left: 4px; border-left: 1px solid var(--rule); }
+#btn-stop:not(:disabled):hover { background: #5a1d2b; color: #ffb3bd; }
+.round-arrow:disabled { opacity: .3; }
+.topbar-round .round-count { margin-left: 8px; color: var(--mist); font-variant-numeric: tabular-nums; }
 .topbar-round { flex: 0 1 auto; min-width: 0; color: var(--mist); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .topbar-round b { color: var(--paper); font-weight: 800; }
+.host-tools { display: inline-flex; align-items: center; gap: 2px; flex: none; }
 .host-chip {
   display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 30vw;
   padding: 4px 12px 4px 4px; border-radius: 999px; background: var(--set); border: 1px solid var(--rule);
@@ -54,6 +63,8 @@
 }
 
 @media (max-width: 860px) {
+  /* A host on a tablet needs the room for pause and stop more than for the logo. */
+  .topbar:has(#host-tools:not(.hidden)) .brand { display: none; }
   .stage-layout { grid-template-columns: minmax(0, 1fr); }
   .host-col { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: stretch; }
   #host-seat:empty { display: none; }
@@ -69,6 +80,8 @@
   .host-chip { max-width: 32vw; gap: 6px; padding-right: 8px; }
   .host-chip .avatar { width: 22px; height: 22px; font-size: 9px; }
   .host-chip .host-prefix { display: none; }
+  #btn-leave { padding-left: 10px; padding-right: 10px; }
+  #btn-leave .label { display: none; }
   #btn-leave { min-height: 36px; padding: 6px 10px; font-size: var(--t-xs); }
   .host-col { grid-template-columns: minmax(0, 1fr); }
   #host-seat { display: none; }

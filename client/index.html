@@ -47,14 +47,21 @@
         <strong class="brand" aria-label="SIGame Local">SIGame</strong>
         <!-- The host steps between rounds right where the round is named. -->
         <span class="round-nav">
-          <button data-act="game:prevRound" id="btn-prev-round" type="button" class="quiet round-arrow hidden" aria-label="Previous round">‹</button>
+          <button data-act="game:prevRound" id="btn-prev-round" type="button" class="quiet round-arrow icon-only hidden" data-icon="prev" aria-label="Previous round" title="Previous round"></button>
           <span id="phase" class="topbar-round" role="status" aria-live="polite"></span>
-          <button data-act="game:nextRound" id="btn-next-round" type="button" class="quiet round-arrow hidden" aria-label="Next round">›</button>
+          <button data-act="game:nextRound" id="btn-next-round" type="button" class="quiet round-arrow icon-only hidden" data-icon="next" aria-label="Next round" title="Next round"></button>
+          <!-- Pause and stop share the host pill, so the host bar only appears when a step needs it. -->
+          <span id="host-tools" class="host-tools hidden">
+            <button data-act="game:pause" id="btn-pause" type="button" class="quiet icon-only" data-icon="pause" title="Pause"><span class="label">Pause</span></button>
+            <button data-act="game:resume" id="btn-resume" type="button" class="primary" data-icon="play" title="Resume">Resume</button>
+            <button id="btn-settings" type="button" class="quiet icon-only" data-icon="sliders" title="Game settings" aria-controls="manage"><span class="label">Game settings</span></button>
+            <button data-act="game:stop" id="btn-stop" type="button" class="quiet icon-only" data-icon="stop" title="Stop game"><span class="label">Stop game</span></button>
+          </span>
         </span>
         <!-- Everyone should know who runs the game, including when nobody does yet. -->
         <span id="host-chip" class="host-chip"></span>
         <span id="me" class="me-chip"></span>
-        <button id="btn-leave" type="button" class="quiet">Leave</button>
+        <button id="btn-leave" type="button" class="quiet" data-icon="leave" title="Leave the room"><span class="label">Leave</span></button>
       </header>
       <div id="connection-status" role="status" aria-live="polite"></div>
 
@@ -107,8 +114,9 @@
             </details>
           </section>
 
-          <section class="card manage-col" aria-labelledby="settings-title">
-            <div class="col-head"><h3 id="settings-title">Game settings</h3></div>
+          <section id="settings-panel" class="card manage-col" aria-labelledby="settings-title">
+            <div class="col-head"><h3 id="settings-title">Game settings</h3>
+              <button id="btn-close-settings" type="button" class="quiet small icon-only hidden" data-icon="cross" title="Close settings"><span class="label">Close settings</span></button></div>
             <details class="lobby-details" open>
               <summary>Rules</summary>
               <div class="settings-box">
@@ -191,8 +199,8 @@
               <span>Join from a phone on the same Wi‑Fi</span>
               <div class="row">
                 <code id="invite-url">…</code>
-                <button id="btn-copy-invite" type="button">Copy link</button>
-                <a id="tv-link" class="button-link" href="/?tv" target="_blank" rel="noopener">TV view</a>
+                <button id="btn-copy-invite" type="button" data-icon="copy">Copy link</button>
+                <a id="tv-link" class="button-link" href="/?tv" target="_blank" rel="noopener" data-icon="tv">TV view</a>
               </div>
               <img id="invite-qr" class="invite-qr hidden" alt="QR code that opens the join link" width="168" height="168" />
             </div>
@@ -261,12 +269,14 @@
         </form>
 
         <div id="host-controls" class="hidden" role="toolbar" aria-label="Host controls">
-          <button data-act="judge-ok" type="button" class="ok">Correct</button>
-          <button data-act="judge-bad" type="button" class="bad">Wrong</button>
-          <button data-act="game:openBuzzer" id="btn-open-buzzer" type="button" class="primary">Open buzzer now</button>
-          <button data-act="game:reveal" type="button">Show answer</button>
-          <button data-act="game:next" type="button" class="primary">Next</button>
-          <button id="btn-undo-judgment" type="button" class="quiet hidden">Undo verdict</button>
+          <button data-act="judge-ok" type="button" class="ok" data-icon="check">Correct</button>
+          <button data-act="judge-half" type="button" class="ok reward" title="Correct for half the value">½</button>
+          <button data-act="judge-double" type="button" class="ok reward" title="Correct for double the value">×2</button>
+          <button data-act="judge-bad" type="button" class="bad" data-icon="cross">Wrong</button>
+          <button data-act="game:openBuzzer" id="btn-open-buzzer" type="button" class="primary" data-icon="zap">Open buzzer now</button>
+          <button data-act="game:reveal" type="button" data-icon="eye">Show answer</button>
+          <button data-act="game:next" type="button" class="primary" data-icon="next">Next</button>
+          <button id="btn-undo-judgment" type="button" class="quiet hidden" data-icon="undo">Undo verdict</button>
           <!-- Step-specific host controls share this one bar instead of stacking extra panels. -->
           <form id="special-setup" class="bar-group hidden">
             <strong id="special-setup-title">Special question</strong>
@@ -279,10 +289,6 @@
             <button id="btn-open-final" type="button" class="primary">Show final question</button>
             <button id="btn-close-final" type="button">End answer time</button>
           </div>
-          <span class="controls-spacer"></span>
-          <button data-act="game:pause" id="btn-pause" type="button" class="quiet">Pause</button>
-          <button data-act="game:resume" id="btn-resume" type="button" class="primary">Resume</button>
-          <button data-act="game:stop" id="btn-stop" type="button" class="quiet">Stop game</button>
         </div>
 
         <button id="buzzer" type="button" class="buzzer hidden">

@@ -171,7 +171,7 @@ export interface CommandPayloads {
   'game:finalWager': { amount: number };
   'game:finalAnswer': { answer: string };
   'game:judgeFinal': { playerId: string; correct: boolean };
-  'game:judge': { correct: boolean };
+  'game:judge': { correct: boolean; factor?: number };
   'game:stakeBid': { amount: number; allIn: boolean };
   'game:forAllAnswer': { answer: string };
   'game:judgeForAll': { playerId: string; correct: boolean };

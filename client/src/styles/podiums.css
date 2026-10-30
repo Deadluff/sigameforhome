@@ -55,7 +55,7 @@
 .players .player:not(.role-spectator) {
   grid-template-columns: auto minmax(0, 1fr) max-content; grid-template-areas: "avatar name badge" "avatar score score";
   justify-items: start; align-items: center; column-gap: 10px; row-gap: 2px;
-  width: 240px; padding: 8px 34px 8px 10px; text-align: left;
+  width: 240px; padding: 8px 42px 8px 10px; text-align: left;
 }
 .players .player:not(.role-spectator) .avatar { grid-area: avatar; width: 44px; height: 44px; font-size: var(--t-s); }
 .players .player:not(.role-spectator) .avatar::after { width: 11px; height: 11px; box-shadow: 0 0 0 2px var(--set); }
@@ -91,9 +91,27 @@
 .player.role-spectator .role-label { grid-column: 2; }
 
 /* Host seat in the host column: the largest portrait on screen after the table. */
-#host-seat .player { width: 100%; padding: 18px 14px; }
-#host-seat .avatar { width: 76px; height: 76px; font-size: var(--t-xl); }
-#host-seat .player b { font-size: var(--t-m); }
+/* Host seat: a compact name card, so the column has room for the scoreboard. */
+#host-seat .player {
+  width: 100%; grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "avatar name" "avatar role";
+  justify-items: start; align-items: center; column-gap: 12px; row-gap: 0; padding: 10px 42px 10px 12px; text-align: left;
+}
+#host-seat .avatar { grid-area: avatar; width: 48px; height: 48px; font-size: var(--t-m); }
+#host-seat .player b { grid-area: name; font-size: var(--t-m); }
+#host-seat .role-label { grid-area: role; }
+
+/* Wide screens: the scoreboard runs down the host column, under the host and the status. */
+.host-col .players { flex-direction: column; flex-wrap: nowrap; align-items: stretch; justify-content: flex-start; gap: 6px; padding: 0; }
+/* flex-basis means height in a column, so the row's 200px basis must not carry over. */
+.host-col .players .player { flex: none; }
+.host-col .players .player:not(.role-spectator), .host-col .players .player.judging { width: auto; }
+.host-col .players .player.role-spectator { align-self: stretch; }
+/* Speech bubbles sit at the podium's top edge instead of floating over the one above. */
+.host-col .replic { left: 8px; right: auto; bottom: calc(100% - 14px); transform: none; animation-name: replic-side; }
+.host-col .replic::after { left: 16px; margin-left: 0; }
+@keyframes replic-side { from { opacity: 0; transform: translateY(6px); } }
+/* In the column a menu opens beside its podium, over the table, instead of over the status. */
+.host-col .players .player-menu-panel { top: -6px; bottom: auto; left: calc(100% + 12px); right: auto; }
 #host-seat .badge-slot:empty { display: none; }
 
 /* Replic: what a contestant just "said" — a bid, a pass, a verdict — floats above the podium. */
@@ -119,8 +137,11 @@
 .player-menu summary:hover, .player-menu[open] summary { background: var(--set-raised); color: var(--paper); }
 .player-menu-panel {
   position: absolute; z-index: 8; right: 0; bottom: calc(100% + 6px); display: grid; gap: 6px; width: 220px;
-  padding: 8px; border-radius: var(--r-panel); background: var(--set-raised); border: 1px solid var(--rule); text-align: left;
+  padding: 8px; border-radius: var(--r-panel); text-align: left;
+  /* Darker than the board and lifted by a shadow, so it reads as a menu and not as more board. */
+  background: var(--set-sunk); border: 1px solid rgba(167, 177, 234, .45); box-shadow: 0 14px 36px rgba(0, 0, 0, .6);
 }
+.player-menu .menu-title { padding: 2px 2px 0; color: var(--mist); font-size: var(--t-xs); font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The host seat sits high on the page, so its menu opens downward. */
 #host-seat .player-menu-panel { bottom: auto; top: calc(100% + 6px); }
 .player-menu .row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }

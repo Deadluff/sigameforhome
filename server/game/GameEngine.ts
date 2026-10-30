@@ -18,6 +18,8 @@ import { PHASES, type Phase, ROLES } from './constants.ts';
 import type { Participant, Room } from './Room.ts';
 import type { GameSettings } from './settings.ts';
 
+/** Host verdict multipliers for a correct answer: half credit, full, or double. */
+const REWARD_FACTORS = [0.5, 1, 2];
 const QUESTION_PHASES = new Set<Phase>([PHASES.READING, PHASES.BUZZER_OPEN, PHASES.ANSWERING, PHASES.FOR_ALL_ANSWERING, PHASES.FOR_ALL_JUDGE, PHASES.REVEAL]);
 
 export interface ActiveTimer {
@@ -1247,8 +1249,10 @@ export class GameEngine {
     });
   }
 
-  judge(correct: boolean): void {
+  /** `factor` lets the host award half (a partly right answer) or double the question value. */
+  judge(correct: boolean, factor = 1): void {
     this.assert(this.phase === PHASES.ANSWERING && this.buzzer.winnerId, 'Nobody is answering');
+    this.assert(REWARD_FACTORS.includes(factor), 'Reward must be half, full or double');
     this.assert(this.current, 'No active question');
     this.assert(!this.usesAnswerInput() || this.buzzer.typedAnswer !== null || this.buzzer.typedAnswerClosed,
       'Wait for the written answer or its deadline');
@@ -1257,11 +1261,12 @@ export class GameEngine {
     this.captureJudgmentUndo();
 
     if (correct) {
-      if (player) player.score += price;
-      this.recordJudgment(this.buzzer.winnerId, true, price, price,
+      const reward = Math.round(price * factor);
+      if (player) player.score += reward;
+      this.recordJudgment(this.buzzer.winnerId, true, reward, reward,
         this.settings.ignoreWrong || this.current.type === 'noRisk' ? 0 : -price);
       this.chooserId = this.buzzer.winnerId;
-      this.room.emitEvent({ type: 'answerJudged', playerId: this.buzzer.winnerId, correct: true, delta: price });
+      this.room.emitEvent({ type: 'answerJudged', playerId: this.buzzer.winnerId, correct: true, delta: reward });
       this.revealAnswer({ showAnswer: true, autoNext: true });
       return;
     }

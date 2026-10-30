@@ -13,9 +13,33 @@
 #game-stage:has(#board:empty):has(#question.hidden):has(#lobby-table.hidden) { display: none; }
 #screen-game[data-phase="lobby"] #game-stage { min-height: 0; }
 #game-stage > * { grid-area: 1 / 1; min-width: 0; min-height: 0; }
+/*
+ * The frame doubles as the clock. While a countdown runs, the bright edge drains clockwise
+ * and only a faint outline stays, so time is read at the edge of the eye, not in a panel.
+ */
+#game-stage.timed { --signal: var(--mist); }
 #game-stage:has(.frame-reading) { --signal: var(--lamp); }
 #game-stage:has(.frame-open) { --signal: var(--go); }
 #game-stage:has(.frame-answering) { --signal: var(--talk); }
+/* The glow fades with the time left, so a nearly spent clock looks spent at a glance. */
+#game-stage.timed {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--signal) 18%, transparent),
+    0 0 calc(8px + 40px * var(--left, 1)) calc(-12px + 8px * var(--left, 1)) color-mix(in srgb, var(--signal) calc(20% + 60% * var(--left, 1)), transparent);
+  transition: box-shadow .1s linear;
+}
+/* The lit arc starts dim at the top and brightens toward its moving end, which carries a white spark. */
+#game-stage::after {
+  content: ""; position: absolute; inset: 0; z-index: 4; pointer-events: none; border-radius: inherit; padding: 5px;
+  background: conic-gradient(
+    color-mix(in srgb, var(--signal) 35%, transparent) 0deg,
+    var(--signal) calc(var(--left, 1) * 360deg - 6deg),
+    #fff calc(var(--left, 1) * 360deg - .5deg),
+    transparent calc(var(--left, 1) * 360deg));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+  opacity: 0; transition: opacity .3s;
+}
+#game-stage.timed::after { opacity: 1; }
 /* Outside the one-screen desktop layout the card still needs a fixed height, because it never scrolls. */
 #game-stage:has(> #question:not(.hidden)) { height: clamp(320px, 66dvh, 760px); }
 
@@ -79,7 +103,7 @@
   background: var(--board); text-align: center;
 }
 #question > * { flex: none; min-width: 0; }
-#question .q-meta { color: var(--lamp); font-size: var(--t-s); font-weight: 800; line-height: 1.3; }
+#question .q-meta { color: var(--lamp); font-size: clamp(15px, 1.5vw, 22px); font-weight: 800; line-height: 1.3; }
 #question .q-meta .q-type { display: inline-block; margin-left: 8px; padding: 1px 10px; border-radius: 999px; background: var(--set-sunk); color: var(--paper); font-size: var(--t-xs); vertical-align: 1px; }
 #question p { margin: 0; }
 
@@ -115,7 +139,9 @@
   --ar: 1.6;
   position: relative; width: min(100cqw, calc(100cqh * var(--ar))); height: min(100cqh, calc(100cqw / var(--ar)));
 }
-.fit img { display: block; width: 100%; height: 100%; object-fit: contain; user-select: none; -webkit-user-select: none; }
+/* No callout or drag on question pictures: a long press or double tap should not open a menu or move the page. */
+.q-media { touch-action: manipulation; -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; }
+.fit img { display: block; width: 100%; height: 100%; object-fit: contain; user-select: none; -webkit-user-select: none; -webkit-user-drag: none; }
 .q-media .media-wrap { position: relative; width: 100%; height: 100%; display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); place-items: center; }
 .q-media video { display: block; width: 100%; height: 100%; object-fit: contain; }
 .q-media .media-status { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); }

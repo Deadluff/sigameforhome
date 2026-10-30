@@ -245,7 +245,8 @@ export function registerSocketHandlers(io: Server, room: Room): void {
           buzzer.pending.some((press) => press.playerId === pid)) return { result: 'ignored' };
       return room.engine.buzz(pid, payload);
     });
-    on<{ correct: boolean }>('game:judge', 'moderator', ({ correct }) => room.engine.judge(requireBoolean(correct)));
+    on<{ correct: boolean; factor?: number }>('game:judge', 'moderator', ({ correct, factor }) =>
+      room.engine.judge(requireBoolean(correct), factor === undefined ? 1 : Number(factor)));
     on<{ presentationId: string; judgmentId: number }>('game:undoJudgment', 'moderator',
       ({ presentationId, judgmentId }) => room.engine.undoJudgment(presentationId, judgmentId));
     on<{ judgmentId: number }>('game:appealRequest', 'member', ({ judgmentId }, pid) =>

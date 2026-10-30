@@ -1,5 +1,5 @@
 /* Status line (the host's "voice"), contextual panels, host toolbar, and the player buzzer. */
-.stage-status-slot { flex: 1; display: flex; min-width: 0; }
+.stage-status-slot { flex: none; display: flex; min-width: 0; }
 .stage-banner {
   --tone: var(--mist);
   display: flex; flex-direction: column; justify-content: space-between; gap: 14px; flex: 1; min-width: 0;
@@ -15,7 +15,8 @@
 .stage-subtitle { color: var(--mist); font-weight: 600; }
 .stage-countdown { align-self: flex-start; color: var(--tone); font: 700 var(--t-2xl)/1 var(--font-display); font-variant-numeric: tabular-nums; }
 .stage-countdown:empty { display: none; }
-.stage-progress-track { height: 6px; border-radius: 999px; background: var(--set-sunk); overflow: hidden; }
+/* The table frame shows the countdown now; the seconds stay in the panel as numbers. */
+.stage-progress-track { display: none; height: 6px; border-radius: 999px; background: var(--set-sunk); overflow: hidden; }
 .stage-progress-fill { height: 100%; width: 0; border-radius: inherit; background: var(--tone); transition: width .1s linear; }
 
 /* Contextual panels */
@@ -50,8 +51,10 @@
   border-radius: var(--r-panel); background: var(--set); border: 1px solid var(--rule);
 }
 #host-controls > button[data-act="judge-ok"], #host-controls > button[data-act="judge-bad"] { min-width: 132px; font-size: var(--t-m); }
+/* Partial and double credit sit between the two verdicts as smaller variants of "correct". */
+#host-controls > button.reward { min-width: 52px; padding: 10px 12px; background: #157a4b; font: 700 var(--t-m)/1 var(--font-display); }
 .controls-spacer { flex: 1; }
-#btn-stop { color: #ffb3bd; }
+
 
 /* Buzzer: the one control a player needs. Colour mirrors the table frame. */
 .buzzer {

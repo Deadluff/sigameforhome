@@ -332,7 +332,11 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     else if (game.phase === 'gameOver') phase.textContent = 'Game over';
     else if (game.round) {
       phase.append(Object.assign(document.createElement('b'), { textContent: game.round.name }));
-      if (pack?.rounds.length) phase.append(` · ${game.roundIndex + 1} of ${pack.rounds.length}`);
+      if (pack?.rounds.length) {
+        phase.append(Object.assign(document.createElement('span'), {
+          className: 'round-count', textContent: `${game.roundIndex + 1}/${pack.rounds.length}`,
+        }));
+      }
     }
     // Round arrows replace the old menu items: one tap, right next to the round name.
     const roundNav = you.canModerate && !tvMode && game.phase !== 'lobby' && !!pack;
@@ -342,7 +346,9 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     next.classList.toggle('hidden', !roundNav);
     prev.disabled = game.roundIndex <= 0 && game.phase !== 'gameOver';
     next.disabled = game.phase === 'gameOver';
-    next.setAttribute('aria-label', pack && game.roundIndex >= pack.rounds.length - 1 ? 'Finish the game' : 'Next round');
+    const nextLabel = pack && game.roundIndex >= pack.rounds.length - 1 ? 'Finish the game' : 'Next round';
+    next.setAttribute('aria-label', nextLabel);
+    next.title = nextLabel;
     const host = participants.find((p) => p.role === 'host');
     const hostChip = $('#host-chip');
     // Your own chip already says "Host", so the label names someone else or the empty seat.
@@ -372,18 +378,17 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     const { you, game } = state;
     const mod = you.canModerate && game.phase !== 'lobby';
     $('#host-controls').classList.toggle('hidden', !mod);
+    $('#host-tools').classList.toggle('hidden', !mod || tvMode);
     if (!mod) return;
+    button('#btn-pause').classList.toggle('hidden', game.phase === 'paused');
+    button('#btn-pause').disabled = game.phase === 'gameOver';
+    button('#btn-resume').classList.toggle('hidden', game.phase !== 'paused');
     button('#btn-undo-judgment').classList.toggle('hidden', !game.undoJudgment);
     for (const button of $('#host-controls').querySelectorAll('button')) {
       const action = button.dataset.act;
-      if (action === 'game:pause') {
-        button.classList.toggle('hidden', game.phase === 'paused');
-        button.disabled = game.phase === 'gameOver';
-      }
-      if (action === 'game:resume') button.classList.toggle('hidden', game.phase !== 'paused');
       // Tapped answers judge themselves; written ones wait for the text or its deadline.
       const tapAnswer = (game.current?.answerType ?? 'text') !== 'text';
-      if (action === 'judge-ok' || action === 'judge-bad') button.disabled = game.phase !== 'answering' ||
+      if (action?.startsWith('judge-')) button.disabled = game.phase !== 'answering' ||
         ((!state.settings.oral || tapAnswer) && !game.buzzer.typedAnswer?.submitted && !game.buzzer.typedAnswer?.closed);
       if (action === 'game:reveal') button.disabled = game.current?.type === 'forAll' ||
         !(['reading', 'buzzerOpen', 'answering'].includes(game.phase) ||
@@ -404,10 +409,11 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     openBtn.textContent = 'Open buzzer now';
     // Keep unavailable phase actions out of the primary control strip.
     for (const control of $('#host-controls').querySelectorAll<HTMLButtonElement>(':scope > button[data-act]')) {
-      control.classList.toggle('hidden', control.disabled ||
-        (control.dataset.act === 'game:resume' && game.phase !== 'paused') ||
-        (control.dataset.act === 'game:pause' && game.phase === 'paused'));
+      control.classList.toggle('hidden', control.disabled);
     }
+    // An empty bar is just a blue strip; hide it until this step has something to press.
+    const busy = [...$('#host-controls').children].some((el) => !el.classList.contains('hidden'));
+    $('#host-controls').classList.toggle('hidden', !busy);
   }
 
   button('#btn-undo-judgment').onclick = () => {
@@ -876,6 +882,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       summary.setAttribute('aria-label', `Manage ${p.name}`);
       // Menu items live in a popover panel so opening one never reshapes the podium row.
       const panel = Object.assign(document.createElement('div'), { className: 'player-menu-panel' });
+      // Naming the person keeps the menu readable when it floats over the board.
+      panel.append(Object.assign(document.createElement('strong'), { className: 'menu-title', textContent: p.name }));
       actions.append(summary, panel);
       if (you.canModerate && p.role === 'player') {
         const row = document.createElement('div');
@@ -933,7 +941,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
         release.onclick = () => send('role:set', { targetId: p.id, role: 'spectator' });
         panel.append(release);
       }
-      if (panel.children.length) el.append(actions);
+      if (panel.children.length > 1) el.append(actions);
       (hostInColumn && p.role === 'host' ? hostSeat : seats).append(el);
     }
     // Before the game, open seats show how many more people can still join as players.
@@ -972,6 +980,15 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     box.append(row);
     return box;
   }
+
+  // Wide screens list the scoreboard down the host column; elsewhere it sits under the table.
+  const sideScoreboard = matchMedia('(min-width: 861px) and (min-height: 620px)');
+  function placeScoreboard() {
+    const target = sideScoreboard.matches ? $('.host-col') : $('#screen-game');
+    if ($('#players').parentElement !== target) target.append($('#players'));
+  }
+  sideScoreboard.addEventListener('change', placeScoreboard);
+  placeScoreboard();
 
   // Popover menus close when the user clicks elsewhere, like any menu.
   document.addEventListener('click', (event) => {
@@ -1127,11 +1144,29 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     }
   });
 
+  let settingsOpen = false;
+  const setSettingsOpen = (open: boolean) => {
+    settingsOpen = open;
+    if (hasActivePlayer(state)) renderManage();
+  };
+  button('#btn-settings').onclick = () => setSettingsOpen(!settingsOpen);
+  button('#btn-close-settings').onclick = () => setSettingsOpen(false);
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && settingsOpen) setSettingsOpen(false);
+  });
+
   function renderManage() {
     const state = activeState();
-    const showManage = state.you.canManage && state.game.phase === 'lobby';
+    // During a game the host opens the same settings as a drawer; pack and start stay in the lobby.
+    const inGame = state.game.phase !== 'lobby';
+    const showManage = state.you.canManage && (!inGame || settingsOpen);
     $('#manage').classList.toggle('hidden', !showManage);
+    $('#manage').classList.toggle('in-game', inGame);
+    button('#btn-close-settings').classList.toggle('hidden', !inGame);
+    button('#btn-settings').setAttribute('aria-expanded', String(settingsOpen && inGame));
     if (!showManage) return;
+    // The server refuses switching answer mode mid-game, so the toggle says so up front.
+    input('#set-oral').disabled = inGame;
 
     if (!packsLoaded) {
       packsLoaded = true;
@@ -1788,6 +1823,10 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       const pct = t && t.durationMs > 0 ? Math.max(0, Math.min(100, (remMs / t.durationMs) * 100)) : 0;
       $('#stage-countdown').textContent = t ? String(Math.ceil(remMs / 1000)) : '';
       $('#stage-progress-fill').style.width = `${pct}%`;
+      // The table frame is the clock: its lit edge drains as the countdown runs.
+      const stage = $('#game-stage');
+      stage.classList.toggle('timed', !!t && remMs > 0);
+      stage.style.setProperty('--left', String(pct / 100));
       const chooser = game.chooserId === you.id ? 'You' : nameOf(game.chooserId);
       const canPick = you.canModerate || game.chooserId === you.id;
 
@@ -1907,6 +1946,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     } else {
       setBuzzer('buzz-idle', 'Waiting for a question', 'The button opens after a question is chosen.');
     }
+    // A button that cannot be pressed only covers the podiums; the status panel already says why.
+    buzzerBtn.classList.toggle('hidden', buzzerBtn.classList.contains('buzz-reading') || buzzerBtn.classList.contains('buzz-idle'));
   }
 
   /* ---------------- fast tick for smooth countdown bars ---------------- */
@@ -1945,6 +1986,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       if (act === 'game:next' && state?.game?.phase === 'specialSetup' &&
           !confirm('Skip this special question?')) return;
       if (act === 'judge-ok') send('game:judge', { correct: true });
+      else if (act === 'judge-half') send('game:judge', { correct: true, factor: 0.5 });
+      else if (act === 'judge-double') send('game:judge', { correct: true, factor: 2 });
       else if (act === 'judge-bad') send('game:judge', { correct: false });
       else if (isNoPayloadCommand(act)) send(act);
     });
