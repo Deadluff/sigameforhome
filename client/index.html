@@ -210,6 +210,10 @@
                 </label>
                 <label class="field"><span>Comparison window</span><span class="unit-input"><input type="number" id="set-buzzSyncWindowMs" min="20" max="500" step="10" /><em>ms</em></span></label>
                 <label class="field"><span>False start block</span><span class="unit-input"><input type="number" id="set-timeForBlockingButton" min="0" max="10" /><em>sec</em></span></label>
+                <label class="setting-toggle wide"><input type="checkbox" id="set-paintCredit" />
+                  <span><strong>Credit slow screens</strong><small>A press counts from when that screen turned green, up to 80 ms. Trusts player devices.</small></span></label>
+                <label class="setting-toggle wide"><input type="checkbox" id="set-ignoreLaggingLinks" />
+                  <span><strong>Don’t wait for a lagging link</strong><small>A player far slower than the rest stops slowing every buzz, but may see green late.</small></span></label>
               </div>
             </details>
           </section>

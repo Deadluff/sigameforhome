@@ -145,7 +145,7 @@ export function registerSocketHandlers(io: Server, room: Room, limits: SocketLim
     });
 
     // Buzzer telemetry: each player's screen reports how it met the scheduled green signal.
-    on<{ leadMs?: unknown; paintMs?: unknown; clockErrMs?: unknown }>('clock:signal', 'member', (report, pid) => {
+    on<{ at?: unknown; leadMs?: unknown; paintMs?: unknown; clockErrMs?: unknown; readyMs?: unknown }>('clock:signal', 'member', (report, pid) => {
       if (room.participants.get(pid)?.role === ROLES.PLAYER) room.recordSignal(pid, report);
     });
 
@@ -274,7 +274,7 @@ export function registerSocketHandlers(io: Server, room: Room, limits: SocketLim
     // The host's device reports the end of the question's clips, or of the answer's (part: 'answer').
     on<{ presentationId: string; part?: string }>('game:contentFinished', 'moderator', ({ presentationId, part }) =>
       part === 'answer' ? room.engine.answerFinished(presentationId) : room.engine.contentFinished(presentationId));
-    on<{ clientAt?: number }>('game:buzz', 'member', (payload, pid) => {
+    on<{ clientAt?: number; paintMs?: number }>('game:buzz', 'member', (payload, pid) => {
       const buzzer = room.engine.buzzer;
       // Once this player's press is pending, penalized, or spent, repeats cannot improve it.
       if ((buzzer.blockedUntil.get(pid) ?? 0) > Date.now() || buzzer.attempted.has(pid) ||

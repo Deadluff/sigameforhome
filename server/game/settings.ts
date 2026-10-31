@@ -17,6 +17,8 @@ export interface GameSettings {
   buzzSyncMode: BuzzSyncMode;
   buzzSyncWindowMs: number;
   buzzOpenLeadMs: number;
+  paintCredit: boolean;
+  ignoreLaggingLinks: boolean;
   buttonPressMode: ButtonPressMode;
   buttonPressIntervalMs: number;
   playAllQuestionsInFinalRound: boolean;
@@ -97,11 +99,17 @@ export const SETTINGS_SCHEMA: Record<keyof GameSettings, SettingSchemaEntry> = O
   ),
   // 200 ms covers the upload gap between a laptop and a phone on weak Wi-Fi (about 80 ms plus spikes).
   // It is a floor: a slower player's reported round trip lengthens it (buzzTiming.ts).
-  buzzSyncWindowMs: int(200, 20, 500, 'Client timestamp sync collection window, minimum (ms)'),
+  buzzSyncWindowMs: int(200, 20, 500, 'Client timestamp sync collection window, minimum (ms); it closes sooner once no press can still be in flight'),
   // The open signal is scheduled this far ahead so every screen turns green at the same moment,
   // however slow its network or its rendering. Presses stamped before it are false starts.
   // Also a floor: a player past about 360 ms round trip gets a longer lead (buzzTiming.ts).
   buzzOpenLeadMs: int(300, 0, 1000, 'Open signal lead: all screens turn green together, minimum (ms)'),
+  // An old 60 Hz phone can paint green a frame or three after a new 120 Hz one. The credit is
+  // capped (MAX_PAINT_CREDIT_MS) because the client reports its own paint time.
+  paintCredit: bool(true, 'Rank device-time presses from each screen\'s own green, up to 80 ms (trusts player devices)'),
+  // Off by default: leaving a link out of the pace makes the game quicker for everyone else and
+  // harder for that one player.
+  ignoreLaggingLinks: bool(false, 'Stop slowing the buzzer for a player far laggier than the rest'),
   buttonPressMode: oneOf<ButtonPressMode>('firstWins', ['firstWins', 'randomWithinInterval'], 'Button press resolution'),
   buttonPressIntervalMs: int(100, 0, 1000, 'Random window for simultaneous presses (ms)'),
   playAllQuestionsInFinalRound: bool(false, 'Play all questions in the final round'),

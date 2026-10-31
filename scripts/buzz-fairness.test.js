@@ -15,11 +15,12 @@ process.env.CACHE_DIR = path.join(root, 'cache');
 process.env.ROOM_STATE_FILE = path.join(root, 'room-state.json');
 
 await import('./make-sample-pack.ts');
-const [{ Room }, { listPacks, loadPack }, { defaultSettings }, buzzTiming] = await Promise.all([
+const [{ Room }, { listPacks, loadPack }, { defaultSettings }, buzzTiming, { LatencyBoard }] = await Promise.all([
   import('../server/game/Room.ts'),
   import('../server/packs/packManager.ts'),
   import('../server/game/settings.ts'),
   import('../server/game/buzzTiming.ts'),
+  import('../server/game/latencyBoard.ts'),
 ]);
 const loaded = await loadPack((await listPacks()).find((pack) => pack.name.includes('v5')).file);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -134,15 +135,15 @@ test('a fast room keeps the host floors; a slow one grows up to the caps', () =>
   assert.equal(buzzTiming.openLeadMs(300, 20), 300);
   assert.equal(buzzTiming.syncWindowMs(200, 20), 200);
   // Poor mobile data: 600 ms round trip, about 300 ms each way plus margins.
-  assert.equal(buzzTiming.openLeadMs(300, 600), 420);
-  assert.equal(buzzTiming.syncWindowMs(200, 600), 380);
+  assert.equal(buzzTiming.openLeadMs(300, 600), 380);
+  assert.equal(buzzTiming.syncWindowMs(200, 600), 350);
   // A dead link must not stall every question.
   assert.equal(buzzTiming.openLeadMs(300, 1e9), buzzTiming.MAX_OPEN_LEAD_MS);
   assert.equal(buzzTiming.syncWindowMs(200, 1e9), buzzTiming.MAX_SYNC_WINDOW_MS);
 });
 
 test('the latency board ignores junk and caps huge reports', () => {
-  const board = new buzzTiming.LatencyBoard();
+  const board = new LatencyBoard();
   for (const junk of [undefined, 'fast', -5, Number.NaN, Infinity, { rtt: 1 }]) board.report('a', junk);
   assert.equal(board.worst(['a']), null);
   board.report('a', 99999);
@@ -158,21 +159,23 @@ test('a slow player lengthens the open lead and the countdown keeps its thinking
   room.latency.report(slow.id, 600);
   const before = Date.now();
   engine.openBuzzer();
-  assert.ok(engine.buzzer.openedAt >= before + 420 && engine.buzzer.openedAt <= Date.now() + 420);
-  assert.equal(engine.timer.durationMs, 5420);
+  assert.ok(engine.buzzer.openedAt >= before + 380 && engine.buzzer.openedAt <= Date.now() + 380);
+  assert.equal(engine.timer.durationMs, 5380);
 });
 
 test('a slow upload still wins with the earlier press once the window fits it', async (t) => {
   const { room, engine, fast, slow } = createRoom(t, { buzzSyncWindowMs: 20 });
-  room.latency.report(slow.id, 200); // window grows from 20 to 180 ms
+  // A 500 ms round trip: a press can be in flight 500 / 2 + 50 = 300 ms.
+  room.latency.report(slow.id, 500);
   engine.openBuzzer();
   const openedAt = Date.now() - 400;
   engine.buzzer.openedAt = openedAt;
   assert.equal(engine.buzz(fast.id, { clientAt: openedAt + 300 }).result, 'queued');
-  // The slow phone pressed earlier, but its press lands 100 ms later: past the 20 ms floor.
+  // The slow phone pressed earlier, but its press takes 250 ms one way and lands 100 ms after the
+  // fast one: past the 20 ms floor, inside the 300 ms the slow link may need.
   await sleep(100);
   assert.equal(engine.buzz(slow.id, { clientAt: openedAt + 250 }).result, 'queued');
-  await sleep(120);
+  await sleep(150);
   assert.equal(engine.buzzer.winnerId, slow.id);
 });
 
@@ -187,4 +190,85 @@ test('only connected players set the pace; a new connection is measured afresh',
   room.attach(slow.id, 'Slow-socket-2');
   room.attach(fast.id, 'Fast-socket-2');
   assert.equal(room.worstPlayerRttMs(), null);
+});
+
+test('a shaky link is planned for its high reports plus twice its jitter', () => {
+  const board = new LatencyBoard();
+  board.report('steady', 200);
+  board.report('steady', 200);
+  assert.equal(board.pace('steady'), 200, 'a steady link is planned at its round trip');
+  // The latest report is quiet, but the link spiked a moment ago.
+  for (const rtt of [100, 300, 100, 100]) board.report('shaky', rtt);
+  const { jitterMs } = board.stats('shaky');
+  assert.equal(jitterMs, 75);
+  assert.equal(board.pace('shaky'), 300 + 2 * 75);
+  assert.equal(board.worst(['steady', 'shaky']), 450);
+  assert.equal(board.pace('missing'), null);
+});
+
+/* ---- the comparison closes once no press in flight could still lead ---- */
+
+test('the comparison closes at once when every player has pressed', (t) => {
+  const { engine, fast, slow } = createRoom(t, { buzzSyncWindowMs: 400 });
+  engine.openBuzzer();
+  const openedAt = Date.now() - 400;
+  engine.buzzer.openedAt = openedAt;
+  assert.equal(engine.buzz(fast.id, { clientAt: openedAt + 290 }).result, 'queued');
+  assert.equal(engine.phase, 'buzzerOpen', 'the other player may still press');
+  assert.equal(engine.buzz(slow.id, { clientAt: openedAt + 260 }).result, 'queued');
+  assert.equal(engine.phase, 'answering', 'nobody is left to wait for');
+  assert.equal(engine.buzzer.winnerId, slow.id);
+  assert.equal(engine.buzzer.winnerInfo.contenders, 2);
+});
+
+test('a measured link is waited for only as long as its press can be in flight', (t) => {
+  const { room, engine, fast, slow } = createRoom(t, { buzzSyncWindowMs: 400, paintCredit: false });
+  room.latency.report(slow.id, 100); // a press can be in flight 100 / 2 + 50 = 100 ms
+  engine.openBuzzer();
+  const now = Date.now();
+  engine.buzzer.openedAt = now - 400;
+  // The leader pressed 30 ms ago, so the slow phone's earlier press would land within 70 ms.
+  engine.buzz(fast.id, { clientAt: now - 30 });
+  assert.ok(engine.buzzWindowEndsAt <= now + 75 && engine.buzzWindowEndsAt >= now + 65,
+    `closes about 70 ms from now, not after the 400 ms window (${engine.buzzWindowEndsAt - now} ms)`);
+});
+
+test('an unmeasured player keeps the full window', (t) => {
+  const { engine, fast } = createRoom(t, { buzzSyncWindowMs: 300 });
+  engine.openBuzzer();
+  const now = Date.now();
+  engine.buzzer.openedAt = now - 400;
+  engine.buzz(fast.id, { clientAt: now - 30 });
+  assert.ok(engine.buzzWindowEndsAt >= now + 300, 'no ping report yet: the window is not cut short');
+});
+
+test('a slow player who already pressed no longer holds up the answer', async (t) => {
+  const { room, engine, fast, slow } = createRoom(t, { buzzSyncWindowMs: 200 });
+  room.latency.report(fast.id, 10);
+  room.latency.report(slow.id, 800); // alone this would stretch the window to its 500 ms cap
+  engine.openBuzzer();
+  const now = Date.now();
+  engine.buzzer.openedAt = now - 400;
+  engine.buzz(slow.id, { clientAt: now - 300 });
+  // Only the fast link is left: 10 / 2 + 50 ms after the leader's press is long past.
+  assert.equal(engine.phase, 'answering');
+  assert.equal(engine.buzzer.winnerId, slow.id);
+});
+
+test('an earlier press arriving later brings the close forward', (t) => {
+  const { room, engine, fast, slow } = createRoom(t, { buzzSyncWindowMs: 400, paintCredit: false });
+  // A third, unpressed player on a 200 ms link keeps the comparison open.
+  const late = room.join('Late').participant;
+  room.attach(late.id, 'Late-socket');
+  room.latency.report(fast.id, 10);
+  room.latency.report(slow.id, 10);
+  room.latency.report(late.id, 200); // in flight up to 150 ms
+  engine.openBuzzer();
+  const now = Date.now();
+  engine.buzzer.openedAt = now - 400;
+  engine.buzz(fast.id, { clientAt: now - 10 });
+  const first = engine.buzzWindowEndsAt;
+  engine.buzz(slow.id, { clientAt: now - 100 });
+  assert.ok(engine.buzzWindowEndsAt < first, 'the new leader pressed earlier, so the late link has less to cover');
+  assert.ok(engine.buzzWindowEndsAt <= now + 55 && engine.buzzWindowEndsAt >= now + 45);
 });

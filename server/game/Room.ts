@@ -13,7 +13,8 @@ import { applySettingsPatch, defaultSettings, type GameSettings } from './settin
 import { takeGraceMode } from './seatGrace.ts';
 import { clearHandover, handoverReady, startHandover } from './moderationHandover.ts';
 import { assertNicknameFree, normalizeNickname } from './nickname.ts';
-import { LatencyBoard, type SignalStats } from './buzzTiming.ts';
+import { pressInFlightMs } from './buzzTiming.ts';
+import { LatencyBoard, type SignalReport, type SignalStats } from './latencyBoard.ts';
 import { safeTimeout } from '../utils/safeTimer.ts';
 
 /** Moments with no live answer, wager or bid, where seats may change hands. */
@@ -63,6 +64,8 @@ export interface RoomSnapshot {
     jitterMs: number | null;
     /** How this screen met the last green signals; null until it reports one. */
     signal: SignalStats | null;
+    /** The buzzer no longer waits for this player's link (ignoreLaggingLinks). */
+    lagging: boolean;
   }>;
   settings: GameSettings;
   pack: {
@@ -101,9 +104,33 @@ export class Room extends EventEmitter {
     return [...this.participants.values()].filter((p) => p.role === ROLES.PLAYER);
   }
 
-  /** The slowest round trip among seated, connected players; their screens set the buzzer pace. */
+  /** Seated, connected players whose links set the buzzer pace; the host may leave out lagging ones. */
+  pacingPlayerIds(): string[] {
+    const ids = this.players().filter((p) => p.connected).map((p) => p.id);
+    if (!this.settings.ignoreLaggingLinks) return ids;
+    const lagging = this.latency.lagging(ids);
+    return ids.filter((id) => !lagging.has(id));
+  }
+
+  /** Players far laggier than the rest that the buzzer no longer waits for (host setting). */
+  laggingPlayerIds(): Set<string> {
+    if (!this.settings.ignoreLaggingLinks) return new Set();
+    return this.latency.lagging(this.players().filter((p) => p.connected).map((p) => p.id));
+  }
+
+  /** The slowest planned round trip among the pacing players; their screens set the buzzer pace. */
   worstPlayerRttMs(): number | null {
-    return this.latency.worst(this.players().filter((p) => p.connected).map((p) => p.id));
+    return this.latency.worst(this.pacingPlayerIds());
+  }
+
+  /** The slowest measured open-to-ready time among the pacing players; null before any is measured. */
+  worstPlayerDeliveryMs(): number | null {
+    return this.latency.worstDelivery(this.pacingPlayerIds());
+  }
+
+  /** How long this player's press may still be in flight; null before their first ping report. */
+  pressInFlightMs(pid: string): number | null {
+    return pressInFlightMs(this.latency.pace(pid));
   }
 
   /** Records a probe's round trip; the shown ping re-broadcasts only when it moves noticeably. */
@@ -115,8 +142,8 @@ export class Room extends EventEmitter {
    * Records how a screen met a green signal. It never re-broadcasts: every player reports right as
    * the buttons open, and a redraw then would slow the presses. The next room update carries it.
    */
-  recordSignal(pid: string, report: { leadMs?: unknown; paintMs?: unknown; clockErrMs?: unknown }): void {
-    this.latency.reportSignal(pid, report);
+  recordSignal(pid: string, report: SignalReport & { at?: unknown }): void {
+    this.latency.reportSignal(pid, report, this.engine.scheduledOpen(report.at));
   }
 
   host(): Participant | null {
@@ -548,6 +575,7 @@ export class Room extends EventEmitter {
           ({ ...item, url: this.mediaUrl(item.url, viewer, item.type) }));
       }
     }
+    const lagging = this.laggingPlayerIds();
 
     return {
       serverTime: Date.now(),
@@ -578,6 +606,7 @@ export class Room extends EventEmitter {
             oneWayMs: ping?.oneWayMs ?? null,
             jitterMs: ping?.jitterMs ?? null,
             signal: p.connected ? this.latency.signal(p.id) : null,
+            lagging: lagging.has(p.id),
           };
         }),
       settings: this.settings,

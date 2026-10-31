@@ -181,6 +181,14 @@ export const uk: Record<string, string | [string, string, string]> = {
   'Play every final theme': 'Грати всі фінальні теми',
   'One final question per theme.': 'По одному фінальному питанню на тему.',
   'Sound on host and TV only': 'Звук лише у ведучого й на ТВ',
+  'Credit slow screens': 'Зважати на повільні екрани',
+  'A press counts from when that screen turned green, up to 80 ms. Trusts player devices.':
+    'Натискання рахується від миті, коли цей екран став зеленим, до 80 мс. Довіряє пристроям гравців.',
+  'Don’t wait for a lagging link': 'Не чекати на дуже повільне з’єднання',
+  'A player far slower than the rest stops slowing every buzz, but may see green late.':
+    'Гравець, набагато повільніший за інших, більше не гальмує кожне натискання, але може побачити зелений пізніше.',
+  'The buzzer does not wait for this link: far slower than the rest.':
+    'Кнопка не чекає на це з’єднання: воно набагато повільніше за інші.',
   'Phones show clips muted, so the room hears one speaker.': 'Телефони показують кліпи без звуку, тож кімната чує один динамік.',
   'Lock the room': 'Закрити кімнату',
   'New arrivals watch until you seat them.': 'Нові учасники дивляться, доки ви не посадите їх грати.',
@@ -202,8 +210,8 @@ export const uk: Record<string, string | [string, string, string]> = {
   'Who wins a close press': 'Хто виграє при майже одночасному натисканні',
   'First press the server receives': 'Перше натискання, яке отримав сервер',
   'Earliest press on a calibrated device (trusts player clocks)': 'Найраніше натискання за каліброваним часом пристрою (довіряє годинникам гравців)',
-  'Presses within {ms} ms are compared by device time, longer for a slow connection. Fairer on mixed Wi‑Fi.':
-    'Натискання в межах {ms} мс порівнюються за часом пристрою, довше для повільного з’єднання. Чесніше при різній якості Wi‑Fi.',
+  'Presses within {ms} ms are compared by device time, longer for a slow connection, sooner once no press can still be on its way. Fairer on mixed Wi‑Fi.':
+    'Натискання в межах {ms} мс порівнюються за часом пристрою, довше для повільного з’єднання, коротше, коли жодне натискання вже не в дорозі. Чесніше при різній якості Wi‑Fi.',
   'Simplest. A slower connection can lose a close press.': 'Найпростіше. Повільніше з’єднання може програти близьке натискання.',
   'Comparison window': 'Вікно порівняння',
   'False start block': 'Блокування за фальстарт',

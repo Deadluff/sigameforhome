@@ -6,6 +6,7 @@ import { audioCue, closeZoom, drawPins, drawRing, fitText, imageFrame, makePicka
   optionTiles, parsePoint, setBackdrop, type Pin } from './stageParts';
 import { buzzerView, createPressTracker, phaseLabel } from './buzzerFeedback';
 import { createConnectionMonitor, noticeText } from './connection';
+import { ClockSync, localNow } from './clockSync';
 import { fullscreenSupported, toggleFullscreen } from './fullscreen';
 import { betweenQuestions, giveSeatForm, removeConfirmBody, renameForm, unreadyPlayers } from './seatActions';
 import { inviteChoices, resultsText } from './sharing';
@@ -83,44 +84,30 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   const slowCommandMs: Partial<Record<CommandEvent, number>> = { 'packs:load': 120_000, 'packs:list': 120_000 };
 
   let state: RoomState | null = null;
-  let clockOffset = 0; // serverTime - Date.now()
-  let bestRtt = Infinity;
-  // Typical round trip, sent with each probe so the server can fit the buzzer open lead and
-  // comparison window to the slowest phone (server/game/buzzTiming.ts).
-  let smoothRtt: number | null = null;
+  const clock = new ClockSync();
   let actionUncertain = false;
   const uncertainActionMessage = t('Action outcome unknown. It may still have applied; check the game state before retrying.');
   const unsentActionMessage = t('Action was not sent. Reconnect before trying again.');
 
-  // Lowest-latency samples give client timestamps a stable server clock estimate.
+  // Lowest-latency samples give client timestamps a stable server clock estimate (clockSync.ts).
   function syncClockSample() {
     if (!socket.connected) return;
-    const sentAt = Date.now();
-    socket.emit('clock:ping', smoothRtt == null ? {} : { rtt: Math.round(smoothRtt) }, (res) => {
-      if (!res?.ok || !Number.isFinite(res.serverTime)) return;
-      const receivedAt = Date.now();
-      const rtt = receivedAt - sentAt;
-      smoothRtt = smoothRtt == null ? rtt : smoothRtt * 0.7 + rtt * 0.3;
-      const sampleOffset = res.serverTime + rtt / 2 - receivedAt;
-      if (rtt <= bestRtt) {
-        bestRtt = rtt;
-        clockOffset = sampleOffset;
-      } else if (rtt <= bestRtt * 1.5 + 10) {
-        // A slow sample's offset can be wrong by half its extra delay (uneven up/down links), so
-        // only near-best samples refine the estimate; blending every sample let jitter creep in.
-        clockOffset = clockOffset * 0.8 + sampleOffset * 0.2;
-      }
+    const sentAt = localNow();
+    socket.emit('clock:ping', clock.smoothRttMs == null ? {} : { rtt: Math.round(clock.smoothRttMs) }, (res) => {
+      if (res?.ok) clock.add(sentAt, localNow(), res.serverTime);
     });
   }
 
-  async function calibrateClockBurst() {
-    bestRtt = Infinity;
-    // A reconnect may be on another network; measure the round trip afresh.
-    smoothRtt = null;
-    for (let i = 0; i < 4; i++) {
+  async function sampleClockBurst(count: number) {
+    for (let i = 0; i < count; i++) {
       syncClockSample();
       await new Promise((resolve) => setTimeout(resolve, 120));
     }
+  }
+
+  async function calibrateClockBurst() {
+    clock.reset();
+    await sampleClockBurst(4);
   }
   setInterval(syncClockSample, 8000);
 
@@ -264,7 +251,9 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     for (const s of document.querySelectorAll('.screen')) s.classList.toggle('hidden', s.id !== id);
   };
 
-  const nowServer = () => Date.now() + clockOffset;
+  const nowServer = () => clock.serverNow();
+  /** A server moment on Date.now()'s scale, for timers that run on wall time (contentPresenter, media). */
+  const serverToWall = (at: number) => at - nowServer() + Date.now();
   /** The buttons are open on the server but the scheduled green signal has not come yet. */
   const signalPending = (game: RoomState['game']) =>
     game.phase === 'buzzerOpen' && nowServer() < (game.buzzer.openedAt ?? 0);
@@ -314,7 +303,12 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     $('#connection-reclaim').hidden = notice !== 'otherTab';
     if (notice === 'otherTab') $('#connection-status').textContent = ''; // it will not reconnect by itself
   } });
-  document.addEventListener('visibilitychange', () => { if (document.hidden) connection.hidden(); else void connection.visible(); });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return connection.hidden();
+    void connection.visible();
+    // The local clock may have paused through sleep; one sample corrects the estimate at once.
+    syncClockSample();
+  });
   window.addEventListener('pageshow', (event) => { if (event.persisted) void connection.restored(); });
   $('#connection-reclaim').addEventListener('click', () => connection.reclaim());
 
@@ -398,13 +392,18 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     state = s;
     const key = `${s.game?.phase}:${s.game?.timer?.name ?? ''}:${s.game?.current?.presentationId ?? ''}`;
     if (key !== stepKey) { stepKey = key; stepChangedAt = Date.now(); }
-    if (!Number.isFinite(bestRtt)) clockOffset = s.serverTime - Date.now();
+    clock.seed(s.serverTime);
+    // A fresh round trip just before the buttons open, so the server paces them on current figures.
+    if (s.game?.phase === 'reading' && prev?.game?.phase !== 'reading' && s.you?.role === 'player') void sampleClockBurst(2);
     noteSignalArrival(s.game);
     const c = s.game?.current;
     if (c && ['intro', 'ready', 'reading'].includes(s.game.phase)) {
       lastPick = { round: s.game.roundIndex, theme: c.themeIndex, question: c.questionIndex };
     }
-    if (!pickTransition(prev, s)) return render();
+    if (!pickTransition(prev, s)) {
+      render();
+      return noteSignalReady();
+    }
     pickTransitionRunning = true;
     const transition = document.startViewTransition(() => render());
     void transition.finished.finally(() => { pickTransitionRunning = false; });
@@ -1169,6 +1168,10 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       { lead: signed(s.leadMs), worst: signed(s.worstLeadMs), paint: s.paintMs, clock: s.clockErrMs }) : '';
   }
 
+  function laggingText(p: Participant): string {
+    return p.lagging ? t('The buzzer does not wait for this link: far slower than the rest.') : '';
+  }
+
   function renderPlayers() {
     const state = activeState();
     const { participants, game, you } = state;
@@ -1239,10 +1242,10 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       else if (game.phase === 'lobby' && p.role === 'player') badge(p.ready ? 'ready-badge' : 'unready-badge', p.ready ? t('Ready') : t('Not ready'));
       // The host can spot a slow link before it slows every buzzer; a player sees only their own.
       else if (p.pingMs != null && (you.canModerate || p.id === you.id)) {
-        const quality = p.pingMs <= 25 ? 'ping-good' : p.pingMs <= 70 ? 'ping-fair' : 'ping-poor';
+        const quality = p.lagging ? 'ping-lag' : p.pingMs <= 25 ? 'ping-good' : p.pingMs <= 70 ? 'ping-fair' : 'ping-poor';
         badge(`ping-badge ${quality}`, t('{ms} ms', { ms: p.pingMs }));
         (slot.lastElementChild as HTMLElement).title = [t('Round trip {rtt} ms · one way {oneWay} ms · jitter ±{jitter} ms',
-          { rtt: p.pingMs, oneWay: p.oneWayMs ?? Math.round(p.pingMs / 2), jitter: p.jitterMs ?? 0 }), signalText(p)]
+          { rtt: p.pingMs, oneWay: p.oneWayMs ?? Math.round(p.pingMs / 2), jitter: p.jitterMs ?? 0 }), signalText(p), laggingText(p)]
           .filter(Boolean).join('\n');
       }
       el.append(slot);
@@ -1270,7 +1273,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
         ? t('{name} · {ms} ms (±{jitter})', { name: p.name, ms: p.pingMs, jitter: p.jitterMs ?? 0 }) : p.name;
       panel.append(Object.assign(document.createElement('strong'), { className: 'menu-title', textContent: title }));
       // Phones have no hover for the badge's title, so the host reads the buzzer timing here.
-      const signal = you.canModerate && p.connected ? signalText(p) : '';
+      const signal = you.canModerate && p.connected ? [signalText(p), laggingText(p)].filter(Boolean).join(' · ') : '';
       if (signal) panel.append(Object.assign(document.createElement('small'), { className: 'menu-signal', textContent: signal }));
       actions.append(summary, panel);
       // A stand-in host does not change their own score.
@@ -1709,7 +1712,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       select('#set-buzzSyncMode').value = s.buzzSyncMode;
     }
     $('#set-buzzSyncMode-desc').textContent = s.buzzSyncMode === 'clientTimestamp'
-      ? t('Presses within {ms} ms are compared by device time, longer for a slow connection. Fairer on mixed Wi‑Fi.', { ms: s.buzzSyncWindowMs })
+      ? t('Presses within {ms} ms are compared by device time, longer for a slow connection, sooner once no press can still be on its way. Fairer on mixed Wi‑Fi.', { ms: s.buzzSyncWindowMs })
       : t('Simplest. A slower connection can lose a close press.');
 
     for (const key of numberSettingKeys) {
@@ -1718,6 +1721,10 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       if (key === 'timeForBlockingButton') field.disabled = !s.falseStart;
       if (key === 'buzzSyncWindowMs') field.disabled = s.buzzSyncMode !== 'clientTimestamp';
     }
+    if (document.activeElement !== $('#set-paintCredit')) input('#set-paintCredit').checked = s.paintCredit;
+    // The credit applies to device-time ranking only; arrival order has no green to rank from.
+    input('#set-paintCredit').disabled = s.buzzSyncMode !== 'clientTimestamp';
+    if (document.activeElement !== $('#set-ignoreLaggingLinks')) input('#set-ignoreLaggingLinks').checked = s.ignoreLaggingLinks;
     if (document.activeElement !== $('#set-ignoreWrong')) {
       input('#set-ignoreWrong').checked = s.ignoreWrong;
     }
@@ -1757,7 +1764,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     saveSetting(select('#set-buzzSyncMode'), { buzzSyncMode: select('#set-buzzSyncMode').value as RoomState['settings']['buzzSyncMode'] }));
   const toggleSettingKeys = [
     'falseStart', 'ignoreWrong', 'partialText', 'oral', 'playAllQuestionsInFinalRound', 'useApellations', 'soundOnHostOnly',
-    'lockRoom',
+    'lockRoom', 'paintCredit', 'ignoreLaggingLinks',
   ] as const;
   for (const key of toggleSettingKeys) {
     input(`#set-${key}`).addEventListener('change', () => {
@@ -2174,7 +2181,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   /** Answer clips start together at the reveal's shared moment; a resume moves it, so it is read live. */
   function answerStartsAt(): number | null {
     const at = activeState().game.current?.mediaStartsAt;
-    return at == null ? null : at - clockOffset;
+    return at == null ? null : serverToWall(at);
   }
 
   /** At reveal the answer takes the question's place instead of piling up under it. */
@@ -2406,7 +2413,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
           ? state.settings.readingSpeed : 0);
         questionPresenter.setPaused(game.phase === 'paused');
         // Every screen runs the script from the server's shared start, not from when its state arrived.
-        questionPresenter.start(c.mediaStartsAt == null ? undefined : c.mediaStartsAt - clockOffset);
+        questionPresenter.start(c.mediaStartsAt == null ? undefined : serverToWall(c.mediaStartsAt));
       } else questionPresenter?.refresh();
     } else {
       questionPresenter?.dispose();
@@ -2732,19 +2739,32 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
    * and how late green showed. A late update means the lead is too short for this link; a late
    * paint with an early update points at the phone itself or its clock estimate.
    */
-  let signalArrival: { at: number; leadMs: number } | null = null;
+  let signalArrival: { at: number; leadMs: number; arrivedAt: number; readyMs?: number } | null = null;
   function noteSignalArrival(game: RoomState['game'] | undefined) {
     const at = game?.phase === 'buzzerOpen' ? game.buzzer.openedAt : null;
-    if (at && signalArrival?.at !== at) signalArrival = { at, leadMs: Math.round(at - nowServer()) };
+    if (!at || signalArrival?.at === at) return;
+    const now = nowServer();
+    signalArrival = { at, leadMs: Math.round(at - now), arrivedAt: now };
   }
-  function reportOpenSignal(at: number) {
-    if (state?.you?.role !== 'player' || signalArrival?.at !== at || !Number.isFinite(bestRtt)) return;
+  /**
+   * Once the update carrying the open moment is rendered: how long applying it took. An old phone
+   * can spend longer on that than on the network, so the server adds it to the lead it plans.
+   */
+  function noteSignalReady() {
+    if (signalArrival && signalArrival.readyMs == null) signalArrival.readyMs = Math.round(nowServer() - signalArrival.arrivedAt);
+  }
+  function reportOpenSignal(at: number, paintMs: number) {
+    if (state?.you?.role !== 'player' || signalArrival?.at !== at || !clock.calibrated) return;
     socket.emit('clock:signal', {
+      at,
       leadMs: signalArrival.leadMs,
-      paintMs: Math.round(nowServer() - at),
-      clockErrMs: Math.round(bestRtt / 2),
+      paintMs,
+      clockErrMs: Math.round(clock.bestRttMs / 2),
+      readyMs: signalArrival.readyMs,
     });
   }
+  /** When this screen turned green, sent with presses so a late screen is ranked from its own green. */
+  let greenPaint: { at: number; paintMs: number } | null = null;
 
   function showOpenSignal() {
     const game = state?.game;
@@ -2753,9 +2773,11 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     signalShownAt = at;
     $('#question').classList.replace('frame-reading', 'frame-open');
     updateOrientiers();
-    // A late join into long-open buttons gets no fanfare.
-    if (nowServer() - at > 1000) return;
-    reportOpenSignal(at);
+    const paintMs = Math.round(nowServer() - at);
+    // A late join into long-open buttons gets no fanfare, and no paint credit: it lost no reaction time.
+    if (paintMs > 1000) return;
+    greenPaint = { at, paintMs };
+    reportOpenSignal(at, paintMs);
     playTone(660, 220, 'triangle', 880);
     // A short buzz in the hand on Android; iPhones ignore it.
     if (state?.you?.role === 'player') navigator.vibrate?.(30);
@@ -2852,7 +2874,9 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     // Measured as an age on the monotonic clock, so wall-clock jumps cannot skew it.
     const age = Math.min(1000, Math.max(0, performance.now() - event.timeStamp));
     navigator.vibrate?.(15);
-    socket.emit('game:buzz', { clientAt: Math.round(nowServer() - age) }, buzzPress.press());
+    const openedAt = state?.game.buzzer?.openedAt;
+    const paintMs = greenPaint && greenPaint.at === openedAt ? greenPaint.paintMs : undefined;
+    socket.emit('game:buzz', { clientAt: Math.round(nowServer() - age), paintMs }, buzzPress.press());
   }
   $('#buzzer').addEventListener('pointerdown', triggerBuzz);
   // Keyboard and assistive clicks have no pointerdown; pointer clicks already buzz above.

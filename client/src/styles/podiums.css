@@ -47,6 +47,8 @@
 .badge.ping-badge.ping-good { color: var(--go); }
 .badge.ping-badge.ping-fair { color: var(--lamp); }
 .badge.ping-badge.ping-poor { color: var(--stop); }
+/* Left out of the buzzer pace: struck through, so the host sees the game no longer waits for it. */
+.badge.ping-badge.ping-lag { color: var(--stop); text-decoration: line-through; }
 
 /* The "picks" badge carries the amber; the outline only marks the seat. */
 .player.chooser { border-color: var(--paper); }

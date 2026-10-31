@@ -11,8 +11,10 @@ export interface Participant {
   pingMs: number | null;
   oneWayMs: number | null;
   jitterMs: number | null;
-  /** How this screen met the last green signals (server/game/buzzTiming.ts); null until reported. */
+  /** How this screen met the last green signals (server/game/latencyBoard.ts); null until reported. */
   signal: { leadMs: number; worstLeadMs: number; paintMs: number; clockErrMs: number } | null;
+  /** The buzzer no longer waits for this link: far laggier than the rest (ignoreLaggingLinks). */
+  lagging: boolean;
 }
 
 export interface ContentItem {
@@ -58,6 +60,8 @@ export interface RoomState {
     buzzSyncMode: 'server' | 'clientTimestamp';
     buzzSyncWindowMs: number;
     buzzOpenLeadMs: number;
+    paintCredit: boolean;
+    ignoreLaggingLinks: boolean;
     maxPlayers: number;
     [key: string]: string | number | boolean;
   };
@@ -238,7 +242,7 @@ export type ClientToServerEvents = {
 } & {
   'session:join': (payload: { nickname: string; asSpectator?: boolean }, ack: (result: JoinAck) => void) => void;
   'session:resume': (payload: { token: string }, ack: (result: { ok: boolean; resumed?: boolean }) => void) => void;
-  'game:buzz': (payload: { clientAt: number }, ack: (result: Ack) => void) => void;
+  'game:buzz': (payload: { clientAt: number; paintMs?: number }, ack: (result: Ack) => void) => void;
   'clock:ping': (payload: { rtt?: number }, ack: (result: { ok: boolean; serverTime: number }) => void) => void;
-  'clock:signal': (payload: { leadMs: number; paintMs: number; clockErrMs: number }) => void;
+  'clock:signal': (payload: { at: number; leadMs: number; paintMs: number; clockErrMs: number; readyMs?: number }) => void;
 };

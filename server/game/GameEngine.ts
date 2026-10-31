@@ -17,7 +17,7 @@ import type { AnswerOption, AnswerType, ContentItem, Package, Question, Question
 import { PHASES, type Phase, ROLES } from './constants.ts';
 import type { Participant, Room } from './Room.ts';
 import type { GameSettings } from './settings.ts';
-import { openLeadMs, syncWindowMs } from './buzzTiming.ts';
+import { MAX_PAINT_CREDIT_MS, openLeadMs, paintCreditMs, syncWindowMs } from './buzzTiming.ts';
 import { safeTimeout } from '../utils/safeTimer.ts';
 
 const CLIENT_CLOCK_TRUST_MS = 500;
@@ -258,6 +258,8 @@ export class GameEngine {
   clipReportHandle?: ReturnType<typeof setTimeout>;
   buzzWindowHandle?: ReturnType<typeof setTimeout>;
   buzzWindowEndsAt: number | null = null;
+  /** The latest scheduled open moment and its lead, to turn green-signal reports into delivery times. */
+  private openSchedule: { at: number; leadMs: number } | null = null;
   buzzer!: BuzzerState;
   finalWagers!: Map<string, number>;
   finalJudged!: Set<string>;
@@ -577,7 +579,7 @@ export class GameEngine {
       this.armClipReportGuard();
     }
     if (rearmMs) {
-      this.buzzer.openedAt = Date.now() + rearmMs;
+      this.scheduleOpen(rearmMs);
       this.room.emitEvent({ type: 'buzzerOpen', openedAt: this.buzzer.openedAt });
     }
     if (this.phase === PHASES.STAKE_AUCTION) {
@@ -1279,6 +1281,41 @@ export class GameEngine {
     }, delayMs, () => this.room.changed());
   }
 
+  /**
+   * Closes the device-time comparison as soon as no press still on its way could beat the leader:
+   * everyone who may press has, or each of them has had time to deliver an earlier press over
+   * their own link. A fixed window from the first arrival made every buzz wait for the slowest
+   * phone, even after that phone had pressed. The scheduled window stays the limit, so a player
+   * with no ping report yet keeps the full wait. Later presses only move the leader earlier, so
+   * each pass can only bring the close forward. With the paint credit on, a waiting press may also
+   * be credited for its late green: its screen's report for this open says by how much, and until
+   * that report comes the full credit is allowed for.
+   */
+  settleSyncWindow(now: number): void {
+    const limit = this.buzzWindowEndsAt ?? now + this.syncWindowMs();
+    const leaderAt = Math.min(...this.buzzer.pending.map((p) => p.effectiveAt));
+    let closeAt = now;
+    for (const player of this.room.players()) {
+      if (!player.connected || this.buzzer.attempted.has(player.id) ||
+          this.buzzer.pending.some((p) => p.playerId === player.id)) continue;
+      const inFlightMs = this.room.pressInFlightMs(player.id);
+      closeAt = Math.max(closeAt, inFlightMs == null ? limit : leaderAt + inFlightMs + this.creditAllowanceMs(player.id));
+    }
+    closeAt = Math.min(limit, closeAt);
+    clearTimeout(this.buzzWindowHandle);
+    if (closeAt > now) return this.scheduleBuzzWindow(closeAt - now);
+    const pool = this.buzzer.pending;
+    this.buzzer.pending = [];
+    this.grantPendingBuzz(pool);
+    this.room.changed();
+  }
+
+  /** How much paint credit a press still to come from this player may earn (see settleSyncWindow). */
+  private creditAllowanceMs(pid: string): number {
+    if (!this.settings.paintCredit || this.buzzer.openedAt == null) return 0;
+    return Math.min(MAX_PAINT_CREDIT_MS, this.room.latency.paintFor(pid, this.buzzer.openedAt) ?? MAX_PAINT_CREDIT_MS);
+  }
+
   expireBuzzer(): void {
     // A press before the countdown deadline counts even if its collection window is still open.
     // Time is up with no answerer: end the question and show what the answer was.
@@ -1310,7 +1347,7 @@ export class GameEngine {
     this.buzzer.typedAnswer = null;
     this.buzzer.typedAnswerClosed = false;
     this.buzzer.pending = [];
-    this.buzzer.openedAt = Date.now() + leadMs;
+    this.scheduleOpen(leadMs);
     const seconds =
       overrideSeconds != null
         ? overrideSeconds
@@ -1330,9 +1367,24 @@ export class GameEngine {
     if (this.current) this.current.mediaStartsAt = Date.now() + this.openLeadMs();
   }
 
-  /** The open lead for the players seated now: the host's setting, longer for a slow connection. */
+  /** Sets the open moment `leadMs` ahead and remembers the lead for the screens' delivery reports. */
+  private scheduleOpen(leadMs: number): void {
+    this.buzzer.openedAt = Date.now() + leadMs;
+    this.openSchedule = { at: this.buzzer.openedAt, leadMs };
+  }
+
+  /** The open moment `at` with the lead it was scheduled with; null for an earlier or unknown open. */
+  scheduledOpen(at: unknown): { at: number; scheduledLeadMs: number } | null {
+    const open = this.openSchedule;
+    return open && open.at === Number(at) ? { at: open.at, scheduledLeadMs: open.leadMs } : null;
+  }
+
+  /**
+   * The open lead for the players seated now: the host's setting, longer for a slow connection
+   * or for a screen measured to need longer (delivery from its green-signal reports).
+   */
   openLeadMs(): number {
-    return openLeadMs(this.settings.buzzOpenLeadMs, this.room.worstPlayerRttMs());
+    return openLeadMs(this.settings.buzzOpenLeadMs, this.room.worstPlayerRttMs(), this.room.worstPlayerDeliveryMs());
   }
 
   /** The comparison window for the players seated now: the host's setting, longer for a slow upload. */
@@ -1361,7 +1413,7 @@ export class GameEngine {
     return { result: 'falseStart' };
   }
 
-  buzz(playerId: string, meta: { clientAt?: number } = {}): { result: BuzzResult } {
+  buzz(playerId: string, meta: { clientAt?: number; paintMs?: number } = {}): { result: BuzzResult } {
     const now = Date.now();
     const player = this.room.participants.get(playerId);
     if (!player || player.role !== ROLES.PLAYER) return { result: 'ignored' };
@@ -1398,19 +1450,20 @@ export class GameEngine {
 
     if (this.buzzer.pending[0]?.mode === 'clientTimestamp' ||
         (!this.buzzer.pending.length && this.settings.buzzSyncMode === 'clientTimestamp' && this.settings.buzzSyncWindowMs > 0)) {
-      const effectiveAt = this.resolvePressTimestamp(now, meta?.clientAt);
-      const firstPress = this.buzzer.pending.length === 0;
+      const pressedAt = this.resolvePressTimestamp(now, meta?.clientAt);
+      // A screen that turned green late is ranked from its own green (host setting, capped).
+      const effectiveAt = pressedAt - (this.settings.paintCredit
+        ? paintCreditMs(pressedAt, this.buzzer.openedAt ?? pressedAt, meta?.paintMs) : 0);
       if (!this.buzzer.pending.some((p) => p.playerId === playerId)) {
         this.buzzer.pending.push({
           playerId,
           mode: 'clientTimestamp',
           serverAt: now,
           effectiveAt,
-          transitMs: Math.max(0, Math.round(now - effectiveAt)),
+          transitMs: Math.max(0, Math.round(now - pressedAt)),
         });
-      }
-      if (firstPress) {
-        this.scheduleBuzzWindow(this.syncWindowMs());
+        // A repeated press changes nothing, so it keeps the scheduled close.
+        this.settleSyncWindow(now);
       }
       return { result: 'queued' };
     }

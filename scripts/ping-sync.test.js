@@ -17,10 +17,11 @@ process.env.CACHE_DIR = path.join(root, 'cache');
 process.env.ROOM_STATE_FILE = path.join(root, 'room-state.json');
 
 await import('./make-sample-pack.ts');
-const [{ Room }, { registerSocketHandlers }, { loadPack }] = await Promise.all([
+const [{ Room }, { registerSocketHandlers }, { loadPack }, { ClockSync }] = await Promise.all([
   import('../server/game/Room.ts'),
   import('../server/socket/handlers.ts'),
   import('../server/packs/packManager.ts'),
+  import('../client/src/clockSync.ts'),
 ]);
 const loaded = await loadPack('Demo pack (v5 format).siq');
 after(async () => rm(root, { recursive: true, force: true }));
@@ -56,8 +57,9 @@ test('ping tracking records RTT, one-way latency, jitter, and exposes live telem
   room.recordPing(wifiPlayer.id, 90);
   room.recordPing(wifiPlayer.id, 100);
 
-  // The host's link never paces the buzzer; the slowest seated player's latest report does.
-  assert.equal(room.worstPlayerRttMs(), 100);
+  // The host's link never paces the buzzer; the slowest seated player does, planned at its high
+  // report plus twice its jitter: 100 + 2 × 7 ms.
+  assert.equal(room.worstPlayerRttMs(), 114);
 
   const snap = room.snapshotFor(host.id);
   const wifiView = snap.participants.find((p) => p.id === wifiPlayer.id);
@@ -213,9 +215,7 @@ test('multi-round test game over simulated network with 500-900ms additional pin
   function createNetworkClient(name, { oneWayMs = 0, jitterMs = 0, clockSkewMs = 0 } = {}) {
     const serverHandlers = new Map();
     const clientHandlers = new Map();
-    let clockOffsetMs = 0;
-    let bestRtt = Infinity;
-    let smoothRtt = null;
+    const clock = new ClockSync();
 
     const sampleOneWay = () => {
       const j = jitterMs > 0 ? Math.round((Math.random() * 2 - 1) * jitterMs) : 0;
@@ -225,7 +225,7 @@ test('multi-round test game over simulated network with 500-900ms additional pin
     // Unsynchronized local clock
     const localNow = () => Date.now() + clockSkewMs;
     // Synchronized server clock estimate on client
-    const serverNow = () => localNow() + clockOffsetMs;
+    const serverNow = () => clock.serverNow(localNow());
 
     const socket = {
       id: `sock-${name}`,
@@ -258,8 +258,8 @@ test('multi-round test game over simulated network with 500-900ms additional pin
       state: null,
       events: [],
       unlockedBuzzers: [],          // wallClockMs when client unlocked buzzer
-      get clockOffsetMs() { return clockOffsetMs; },
-      get smoothRtt() { return smoothRtt; },
+      get clockOffsetMs() { return clock.offsetMs; },
+      get smoothRtt() { return clock.smoothRttMs; },
       localNow,
       serverNow,
       // Client -> Server emit with ACK (delayed by oneWayMs each way => full RTT)
@@ -276,21 +276,12 @@ test('multi-round test game over simulated network with 500-900ms additional pin
           }, upDelay);
         });
       },
-      // Runs the client clock sync sample algorithm (matching syncClockSample in client/src/app.ts)
+      // Runs the client's own clock estimate (client/src/clockSync.ts) over the simulated link.
       async syncClockSample() {
-        const t0 = localNow();
-        const res = await client.emit('clock:ping', smoothRtt == null ? {} : { rtt: Math.round(smoothRtt) });
-        const t2 = localNow();
-        if (!res || typeof res.serverTime !== 'number') return;
-        const rtt = t2 - t0;
-        smoothRtt = smoothRtt == null ? rtt : smoothRtt * 0.7 + rtt * 0.3;
-        const sampleOffset = res.serverTime + rtt / 2 - t2;
-        if (rtt <= bestRtt) {
-          bestRtt = rtt;
-          clockOffsetMs = sampleOffset;
-        } else if (rtt <= bestRtt * 1.5 + 10) {
-          clockOffsetMs = clockOffsetMs * 0.8 + sampleOffset * 0.2;
-        }
+        const sentAt = localNow();
+        const smooth = clock.smoothRttMs;
+        const res = await client.emit('clock:ping', smooth == null ? {} : { rtt: Math.round(smooth) });
+        if (res?.ok) clock.add(sentAt, localNow(), res.serverTime);
       },
       // Presses the buzzer at a specific wall-clock moment, attaching client's synchronized serverNow()
       async pressBuzzer() {
