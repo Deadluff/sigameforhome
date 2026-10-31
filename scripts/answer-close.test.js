@@ -22,8 +22,16 @@ const SONG = { type: 'audio', value: 'song.mp3', url: '/media/song.mp3', placeme
 
 /** Theme 0 question 0 is a plain question; `answer` replaces what its reveal shows. */
 function revealed(t, answer = {}) {
+  const engine = presented(t, answer);
+  engine.revealAnswer();
+  assert.equal(engine.phase, 'reveal');
+  return engine;
+}
+
+/** Theme 0 question 0 with `changes` applied, past its intro: reading, or buzzers open. */
+function presented(t, changes = {}) {
   const pack = structuredClone(loaded.pack);
-  Object.assign(pack.rounds[0].themes[0].questions[0], answer);
+  Object.assign(pack.rounds[0].themes[0].questions[0], changes);
   const room = new Room();
   const host = room.join('Host').participant;
   room.attach(host.id, 'host-socket');
@@ -43,8 +51,6 @@ function revealed(t, answer = {}) {
     clearTimeout(engine.timer?.handle);
     engine.beginQuestion();
   }
-  engine.revealAnswer();
-  assert.equal(engine.phase, 'reveal');
   return engine;
 }
 
@@ -69,4 +75,60 @@ test('an answer without a clip closes on the reveal clock, even after the host r
 test('a point answer shows on the picture, so its clips do not hold the question', (t) => {
   const engine = revealed(t, { answerType: 'point', right: ['0.5,0.5'], answerContent: [SONG] });
   assert.equal(engine.timer?.name, 'reveal');
+});
+
+/*
+ * Only the host's device reports a clip's end. A host who drops, locks the phone, or whose
+ * browser blocks playback never does, so a hidden server guard stands in for the report.
+ */
+
+const OPTIONS = { answerType: 'select', options: [{ label: 'A', value: 'One' }, { label: 'B', value: 'Two' }], right: ['A'] };
+
+test('an answer clip with no reported end closes after the guard limit', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() });
+  const engine = revealed(t, { answerContent: [SONG] });
+  assert.equal(engine.timer, null, 'the guard is not a clock players see');
+  t.mock.timers.tick(179_000);
+  assert.equal(engine.phase, 'reveal', 'a whole song may still be playing');
+  t.mock.timers.tick(1_000);
+  assert.equal(engine.phase, 'board');
+});
+
+test('an answer clip with a pack-given duration closes shortly after it should end', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() });
+  const engine = revealed(t, { answerContent: [{ ...SONG, duration: 20 }] });
+  t.mock.timers.tick(29_000);
+  assert.equal(engine.phase, 'reveal');
+  t.mock.timers.tick(1_000);
+  assert.equal(engine.phase, 'board');
+});
+
+test('a reported answer end leaves no guard behind to close the next question', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() });
+  const engine = revealed(t, { answerContent: [SONG] });
+  engine.answerFinished(engine.current.presentationId);
+  assert.equal(engine.clipReportHandle, undefined);
+});
+
+test('a select question clip with no reported end still opens the buzzer', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() });
+  const engine = presented(t, { ...OPTIONS, content: [{ ...SONG, waitForFinish: false }] });
+  assert.equal(engine.phase, 'reading');
+  assert.equal(engine.timer, null);
+  t.mock.timers.tick(180_000);
+  assert.equal(engine.phase, 'buzzerOpen');
+});
+
+test('pausing over a clip wait drops the guard, and resuming waits afresh', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() });
+  const engine = revealed(t, { answerContent: [SONG] });
+  t.mock.timers.tick(170_000);
+  engine.pause();
+  t.mock.timers.tick(60_000);
+  assert.equal(engine.phase, 'paused', 'the guard does not fire while paused');
+  engine.resume();
+  t.mock.timers.tick(179_000);
+  assert.equal(engine.phase, 'reveal');
+  t.mock.timers.tick(1_000);
+  assert.equal(engine.phase, 'board');
 });

@@ -25,7 +25,15 @@ const CLIENT_CLOCK_TRUST_MS = 500;
 /** Host verdict multipliers for a correct answer: half credit, full, or double. */
 const REWARD_FACTORS = [0.5, 1, 2];
 const QUESTION_PHASES = new Set<Phase>([PHASES.READING, PHASES.BUZZER_OPEN, PHASES.ANSWERING, PHASES.FOR_ALL_ANSWERING, PHASES.FOR_ALL_JUDGE, PHASES.REVEAL]);
-
+/**
+ * The longest the server waits for the host's device to report that a clip ended. A host who
+ * drops, locks their phone, or whose browser blocks playback never reports it, and the room
+ * would sit on the question until someone pressed a button. Pack-given durations close sooner.
+ */
+const CLIP_REPORT_LIMIT_SECONDS = 180;
+/** Slack past a pack-given duration: media delay, buffering, and a slow host device. */
+const CLIP_REPORT_MARGIN_SECONDS = 10;
+const isClip = (item: ContentItem): boolean => item.type === 'audio' || item.type === 'video';
 
 /** How long a dropped bidder keeps their auction turn (device playtest F16). */
 const AUCTION_RECONNECT_GRACE_MS = 10_000;
@@ -238,6 +246,8 @@ export class GameEngine {
   chooserId!: string | null;
   current!: CurrentQuestionState | null;
   timer: ActiveTimer | null = null;
+  /** Hidden from players' clocks: it is not a deadline, only the latest the server will wait. */
+  clipReportHandle?: ReturnType<typeof setTimeout>;
   buzzWindowHandle?: ReturnType<typeof setTimeout>;
   buzzWindowEndsAt: number | null = null;
   buzzer!: BuzzerState;
@@ -479,6 +489,36 @@ export class GameEngine {
   clearTimer(): void {
     if (this.timer) clearTimeout(this.timer.handle);
     this.timer = null;
+    // Every step that clears the clock leaves the clip wait too (or re-arms it, see resume).
+    clearTimeout(this.clipReportHandle);
+    this.clipReportHandle = undefined;
+  }
+
+  /**
+   * Safety net for the waits only the host's device can end: question clips (contentFinished)
+   * and answer clips (answerFinished). If no report arrives, the server acts as if it had.
+   */
+  private armClipReportGuard(): void {
+    clearTimeout(this.clipReportHandle);
+    this.clipReportHandle = undefined;
+    const current = this.current;
+    if (!current) return;
+    const { question, presentationId } = current;
+    const reading = this.phase === PHASES.READING && this.readingEndsOnSignal(question);
+    const revealing = this.phase === PHASES.REVEAL && this.round?.type !== 'final' && this.hasAnswerClip(question);
+    if (!reading && !revealing) return;
+    const items = reading ? question.content : question.answerContent;
+    // A clip without a pack-given duration could be a whole song, so only the cap is safe.
+    const seconds = items.filter(isClip).every((item) => item.duration)
+      ? (reading ? this.estimateReadingSeconds(question) : this.estimateRevealSeconds(question)) +
+        CLIP_REPORT_MARGIN_SECONDS
+      : CLIP_REPORT_LIMIT_SECONDS;
+    this.clipReportHandle = safeTimeout('clip report', () => {
+      this.clipReportHandle = undefined;
+      // The same checks as a real report, so a stale guard changes nothing.
+      const { advanced } = reading ? this.contentFinished(presentationId) : this.answerFinished(presentationId);
+      if (advanced) this.room.changed();
+    }, seconds * 1000, () => this.room.changed());
   }
 
   pause(): void {
@@ -518,6 +558,9 @@ export class GameEngine {
             : saved.timerName === 'appeal' ? () => this.resolveAppeal()
               : saved.timerName === 'reveal' ? () => this.next() : undefined;
       this.startTimer(saved.timerName, Math.max(0.001, (saved.timerMs + rearmMs) / 1000), onExpire);
+    } else {
+      // Pause cleared a clip wait; a report sent while paused was dropped, so wait afresh.
+      this.armClipReportGuard();
     }
     if (rearmMs) {
       this.buzzer.openedAt = Date.now() + rearmMs;
@@ -1127,6 +1170,7 @@ export class GameEngine {
     // A media completion signal, not an estimated duration, ends a waitForFinish script.
     if (this.readingEndsOnSignal(question)) {
       this.clearTimer();
+      this.armClipReportGuard();
       return;
     }
     this.startTimer('reading', this.estimateReadingSeconds(question), () =>
@@ -1486,10 +1530,11 @@ export class GameEngine {
    * An answer clip (the song behind a music question) plays to its end: the host's device reports
    * that through answerFinished. Anything else stays up long enough to read it and to challenge
    * the verdict. The final waits for the host, because moving on from it ends the game.
+   * A hidden guard (armClipReportGuard) closes a clip answer whose end report never arrives.
    */
   private scheduleRevealClose(waitForClip = true): void {
     if (!this.current || this.round?.type === 'final') return;
-    if (waitForClip && this.hasAnswerClip(this.current.question)) return;
+    if (waitForClip && this.hasAnswerClip(this.current.question)) return this.armClipReportGuard();
     this.startTimer('reveal', this.estimateRevealSeconds(this.current.question), () => this.next());
   }
 
