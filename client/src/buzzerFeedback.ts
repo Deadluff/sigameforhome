@@ -56,7 +56,9 @@ export function phaseLabel({ game, youId, settings, now, touchOnly, nameOf }: Ph
     // Presses during the countdown are ignored, never punished.
     return label('buzz-reading', t('Get ready'), t('The button opens after the countdown.'));
   }
-  if (game.phase === 'reading') {
+  // The open signal is scheduled a moment ahead so all screens turn green together; until then it reads as reading.
+  const signalPending = game.phase === 'buzzerOpen' && now < (game.buzzer?.openedAt ?? 0);
+  if (game.phase === 'reading' || signalPending) {
     return settings.falseStart
       ? label('buzz-reading', t('Wait for green'), t('An early press blocks you for {seconds} s.', { seconds: settings.timeForBlockingButton }))
       : label('buzz-open', t('Buzz'), t('Press now to answer.'));

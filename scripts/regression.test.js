@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { after, test } from 'node:test';
+import { INSTANT_BUZZER } from './test-settings.ts';
 
 const root = await mkdtemp(path.join(os.tmpdir(), 'sigame-regression-'));
 process.env.PACKS_DIR = path.join(root, 'packs');
@@ -37,7 +38,7 @@ function createRoom(t, gameMode = 'simple', modifyPack = () => {}) {
   const pack = structuredClone(loaded.pack);
   modifyPack(pack);
   room.setPack({ ...loaded, pack });
-  room.updateSettings(host.id, { gameMode, timeForQuestionIntro: 0, timeForQuestionReady: 0 });
+  room.updateSettings(host.id, { ...INSTANT_BUZZER, gameMode, timeForQuestionIntro: 0, timeForQuestionReady: 0 });
   room.engine.start();
   // Engine timers keep Node alive after an assertion unless explicitly cleared.
   t.after(() => {

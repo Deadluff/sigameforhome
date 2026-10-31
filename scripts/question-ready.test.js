@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { after, test } from 'node:test';
+import { INSTANT_BUZZER } from './test-settings.ts';
 
 const root = await mkdtemp(path.join(os.tmpdir(), 'sigame-ready-'));
 process.env.PACKS_DIR = path.join(root, 'packs');
@@ -33,7 +34,7 @@ function createRoom(t, settings = {}) {
   const bob = room.join('Bob').participant;
   room.attach(bob.id, 'bob-socket');
   room.setPack({ ...loaded, pack });
-  room.updateSettings(host.id, {
+  room.updateSettings(host.id, { ...INSTANT_BUZZER,
     gameMode: 'classic', falseStart: true, timeForQuestionIntro: 0, timeForQuestionReady: 3, ...settings,
   });
   room.engine.start();

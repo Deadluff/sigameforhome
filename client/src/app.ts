@@ -251,6 +251,9 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   };
 
   const nowServer = () => Date.now() + clockOffset;
+  /** The buttons are open on the server but the scheduled green signal has not come yet. */
+  const signalPending = (game: RoomState['game']) =>
+    game.phase === 'buzzerOpen' && nowServer() < (game.buzzer.openedAt ?? 0);
 
   /* ---------------- session ---------------- */
 
@@ -421,10 +424,6 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     }
     if (evt.type === 'questionSelected') {
       playTone(440, 160, 'triangle', 660);
-    } else if (evt.type === 'buzzerOpen') {
-      playTone(660, 220, 'triangle', 880);
-      // A short buzz in the hand on Android; iPhones ignore it.
-      if (state?.you?.role === 'player') navigator.vibrate?.(30);
     } else if (evt.type === 'buzzAccepted') {
       playTone(520, 260, 'square', 780);
     } else if (evt.type === 'falseStart') {
@@ -2158,7 +2157,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     // Update glowing border frame around question card to match stage
     box.classList.remove('frame-reading', 'frame-open', 'frame-answering');
     if (game.phase === 'reading' || game.phase === 'ready') box.classList.add('frame-reading');
-    else if (game.phase === 'buzzerOpen') box.classList.add('frame-open');
+    else if (game.phase === 'buzzerOpen') box.classList.add(signalPending(game) ? 'frame-reading' : 'frame-open');
     else if (game.phase === 'answering') box.classList.add('frame-answering');
 
     if (!c) {
@@ -2392,7 +2391,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       // The table frame is the clock: its lit edge drains as the countdown runs.
       const stage = $('#game-stage');
       // The frame clock only shows the buzz window; other timers live in the banner.
-      stage.classList.toggle('timed', !!timer && remMs > 0 && game.phase === 'buzzerOpen');
+      stage.classList.toggle('timed', !!timer && remMs > 0 && game.phase === 'buzzerOpen' && !signalPending(game));
       const chooser = nameOf(game.chooserId);
       const canPick = you.canModerate || game.chooserId === you.id;
       const finalist = !!game.final?.eligibleIds.includes(you.id);
@@ -2469,6 +2468,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
           ? t('Private answers open after reading.')
           : !settings.falseStart ? t('You can buzz while the question plays.')
             : t('Wait for the green signal. An early press blocks you for {seconds} s.', { seconds: settings.timeForBlockingButton }));
+      } else if (signalPending(game)) {
+        setStage('reading', t('Get ready'), t('The buttons open in a moment.'));
       } else if (game.phase === 'buzzerOpen') {
         setStage('open', t('Buzz now'), you.role === 'player' ? (touchOnly ? t('Tap the button.') : t('Tap the button or press Space.')) : t('Players can press their buttons.'));
       } else if (game.phase === 'answering') {
@@ -2550,7 +2551,27 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
    * The frame's draining edge and the banner bar move every display frame. The 100 ms tick below
    * only updates the words and numbers; at 10 updates a second the edge visibly stepped.
    */
+  /*
+   * Every screen turns green in the first frame past the scheduled open moment. Only cheap updates
+   * run here: a full render on a slow phone took long enough to lose close presses.
+   */
+  let signalShownAt: number | null = null;
+  function showOpenSignal() {
+    const game = state?.game;
+    const at = game?.phase === 'buzzerOpen' ? game.buzzer.openedAt : null;
+    if (!at || at === signalShownAt || nowServer() < at) return;
+    signalShownAt = at;
+    $('#question').classList.replace('frame-reading', 'frame-open');
+    updateOrientiers();
+    // A late join into long-open buttons gets no fanfare.
+    if (nowServer() - at > 1000) return;
+    playTone(660, 220, 'triangle', 880);
+    // A short buzz in the hand on Android; iPhones ignore it.
+    if (state?.you?.role === 'player') navigator.vibrate?.(30);
+  }
+
   function frameClock() {
+    showOpenSignal();
     const t = state?.game?.timer;
     if (t && t.durationMs > 0) {
       const left = Math.max(0, Math.min(1, (t.endsAt - nowServer()) / t.durationMs));
@@ -2633,16 +2654,19 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
 
   /* ---------------- controls ---------------- */
 
-  function triggerBuzz() {
+  function triggerBuzz(event: Event) {
     // An offline press would be flushed unjoined on reconnect and silently rejected (audit CONN-2).
     if (!socket.connected) return;
+    // A busy slow phone runs the handler late; the event's own time is when the finger landed.
+    // Measured as an age on the monotonic clock, so wall-clock jumps cannot skew it.
+    const age = Math.min(1000, Math.max(0, performance.now() - event.timeStamp));
     navigator.vibrate?.(15);
-    socket.emit('game:buzz', { clientAt: Math.round(nowServer()) }, buzzPress.press());
+    socket.emit('game:buzz', { clientAt: Math.round(nowServer() - age) }, buzzPress.press());
   }
   $('#buzzer').addEventListener('pointerdown', triggerBuzz);
   // Keyboard and assistive clicks have no pointerdown; pointer clicks already buzz above.
   $('#buzzer').addEventListener('click', (event) => {
-    if (event.detail === 0) triggerBuzz();
+    if (event.detail === 0) triggerBuzz(event);
   });
   document.addEventListener('keydown', (e) => {
     const focused = document.activeElement;
@@ -2651,7 +2675,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       (focused.isContentEditable || !!focused.closest('input, textarea, select, button, a, [role="button"]'));
     if (e.code === 'Space' && state?.you?.role === 'player' && state.game.current?.type !== 'forAll' && !otherControl) {
       e.preventDefault();
-      if (!e.repeat) triggerBuzz();
+      if (!e.repeat) triggerBuzz(e);
     }
   });
 

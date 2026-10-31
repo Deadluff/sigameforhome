@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { after, test } from 'node:test';
+import { INSTANT_BUZZER } from './test-settings.ts';
 
 const root = await mkdtemp(path.join(os.tmpdir(), 'sigame-playtest-bugs-'));
 process.env.PACKS_DIR = path.join(root, 'packs');
@@ -26,7 +27,7 @@ function lobby(t) {
     return player;
   });
   room.setPack(loaded);
-  room.updateSettings(host.id, { gameMode: 'classic', timeForQuestionIntro: 0, timeForQuestionReady: 0 });
+  room.updateSettings(host.id, { ...INSTANT_BUZZER, gameMode: 'classic', timeForQuestionIntro: 0, timeForQuestionReady: 0 });
   t.after(() => {
     room.engine.reset();
     for (const timer of room.removalTimers.values()) clearTimeout(timer);

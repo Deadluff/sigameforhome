@@ -4,6 +4,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { after, test } from 'node:test';
+import { INSTANT_BUZZER } from './test-settings.ts';
 import AdmZip from 'adm-zip';
 
 const root = await mkdtemp(path.join(os.tmpdir(), 'sigame-answers-'));
@@ -55,7 +56,7 @@ function createRoom(t, settings = {}) {
   const bob = room.join('Bob').participant;
   room.attach(bob.id, 'bob-socket');
   room.setPack({ ...loaded, pack: structuredClone(loaded.pack) });
-  room.updateSettings(host.id, { gameMode: 'classic', oral: true, falseStart: true, timeForQuestionIntro: 0, timeForQuestionReady: 0, ...settings });
+  room.updateSettings(host.id, { ...INSTANT_BUZZER, gameMode: 'classic', oral: true, falseStart: true, timeForQuestionIntro: 0, timeForQuestionReady: 0, ...settings });
   room.engine.start();
   t.after(() => {
     room.engine.reset();

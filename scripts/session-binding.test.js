@@ -5,6 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { after, test } from 'node:test';
+import { INSTANT_BUZZER } from './test-settings.ts';
 
 const root = await mkdtemp(path.join(os.tmpdir(), 'sigame-socket-binding-'));
 process.env.PACKS_DIR = path.join(root, 'packs');
@@ -92,6 +93,7 @@ test('typed answer socket event accepts only the winner and keeps text private',
   const room = new Room();
   room.settings.timeForQuestionIntro = 0;
   room.settings.timeForQuestionReady = 0;
+  Object.assign(room.settings, INSTANT_BUZZER);
   let onConnection;
   const io = {
     sockets: { sockets: new Map() },
@@ -326,6 +328,7 @@ test('only the moderator can undo the current exact judgment', async (t) => {
   const room = new Room();
   room.settings.timeForQuestionIntro = 0;
   room.settings.timeForQuestionReady = 0;
+  Object.assign(room.settings, INSTANT_BUZZER);
   let onConnection;
   const io = {
     sockets: { sockets: new Map() },

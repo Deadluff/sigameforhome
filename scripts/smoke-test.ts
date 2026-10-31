@@ -6,6 +6,7 @@
  */
 import { io, type Socket } from 'socket.io-client';
 import type { RoomSnapshot } from '../server/game/Room.ts';
+import { INSTANT_BUZZER } from './test-settings.ts';
 
 const URL = process.env.URL ?? 'http://localhost:3000';
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -76,7 +77,7 @@ r = await host.emit('packs:load', { file: demo.file });
 check(r.ok, `pack loaded: ${demo.name}`);
 
 // The demo pack contains special and final questions, so use Simple mode for the opening checks.
-r = await host.emit('settings:update', { gameMode: 'simple', timeForQuestionIntro: 0, timeForQuestionReady: 0 });
+r = await host.emit('settings:update', { ...INSTANT_BUZZER, gameMode: 'simple', timeForQuestionIntro: 0, timeForQuestionReady: 0 });
 check(r.ok, 'host selected Simple mode for the demo pack');
 
 r = await host.emit('game:start');

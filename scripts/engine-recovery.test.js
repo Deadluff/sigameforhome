@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { after, test } from 'node:test';
+import { INSTANT_BUZZER } from './test-settings.ts';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const root = await mkdtemp(path.join(os.tmpdir(), 'sigame-engine-recovery-'));
@@ -28,7 +29,7 @@ function game(t) {
   });
   room.setPack({ ...loaded, pack: structuredClone(loaded.pack) });
   // These cases check reading timers directly, so skip the chosen-cell intro.
-  room.updateSettings(host.id, { gameMode: 'classic', timeForQuestionIntro: 0, timeForQuestionReady: 0 });
+  room.updateSettings(host.id, { ...INSTANT_BUZZER, gameMode: 'classic', timeForQuestionIntro: 0, timeForQuestionReady: 0 });
   room.engine.start();
   players.forEach((p) => { p.score = 600; });
   t.after(() => {

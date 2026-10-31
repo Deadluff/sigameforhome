@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { after, test } from 'node:test';
+import { INSTANT_BUZZER } from './test-settings.ts';
 
 const root = await mkdtemp(path.join(os.tmpdir(), 'sigame-stakes-'));
 process.env.PACKS_DIR = path.join(root, 'packs');
@@ -27,7 +28,7 @@ function table(t, scores) {
     return player;
   });
   room.setPack({ ...pack, pack: structuredClone(pack.pack) });
-  room.updateSettings(host.id, { gameMode: 'classic', timeForQuestionIntro: 0, timeForQuestionReady: 0 });
+  room.updateSettings(host.id, { ...INSTANT_BUZZER, gameMode: 'classic', timeForQuestionIntro: 0, timeForQuestionReady: 0 });
   room.engine.start();
   scores.forEach((score, index) => { players[index].score = score; });
   t.after(() => {

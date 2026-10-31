@@ -52,6 +52,7 @@ export interface RoomState {
     timeForQuestionReady: number;
     buzzSyncMode: 'server' | 'clientTimestamp';
     buzzSyncWindowMs: number;
+    buzzOpenLeadMs: number;
     maxPlayers: number;
     [key: string]: string | number | boolean;
   };
@@ -97,6 +98,8 @@ export interface RoomState {
       winnerId: string | null;
       typedAnswer: { text: string | null; submitted: boolean; closed: boolean } | null;
       winnerInfo: { mode: 'server' | 'clientTimestamp' | 'random'; reactionMs: number; transitMs?: number; contenders?: number } | null;
+      /** Server time the buttons turn green; it can be a little in the future. */
+      openedAt: number | null;
       attempted: string[];
       blockedUntil: number | null;
       blockedPlayers: { id: string; until: number }[];
@@ -204,7 +207,8 @@ export type GameEvent =
   | { type: 'stakeBid'; playerId: string; amount: number; allIn: boolean }
   | { type: 'stakeWon'; playerId: string; amount: number }
   | { type: 'giftAwarded'; playerId: string; price: number }
-  | { type: 'buzzerOpen' | 'specialSetup' | 'questionSelected' | 'roundEnd' };
+  | { type: 'buzzerOpen'; openedAt: number }
+  | { type: 'specialSetup' | 'questionSelected' | 'roundEnd' };
 
 export interface SteamProgress {
   stage: string;

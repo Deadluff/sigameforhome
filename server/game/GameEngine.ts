@@ -185,6 +185,7 @@ export interface GameView {
   buzzer: {
     winnerId: string | null;
     winnerInfo: WinnerInfo | null;
+    openedAt: number | null;
     attempted: string[];
     blockedUntil: number | null;
     blockedPlayers: Array<{ id: string; until: number }>;
@@ -511,6 +512,9 @@ export class GameEngine {
     this.phase = saved.phase;
     this.roundEndsAt = saved.roundMs == null ? null : Date.now() + saved.roundMs;
     this.scheduleRoundEnd();
+    // Players learn of the resume at different times, so the open signal is scheduled again.
+    const rearmMs = this.phase === PHASES.BUZZER_OPEN && !this.buzzer.pending.length && saved.timerName === 'buzzer'
+      ? this.settings.buzzOpenLeadMs : 0;
     if (saved.timerName && saved.timerMs != null) {
       const onExpire = saved.timerName === 'intro' ? () => this.beginQuestion()
         : saved.timerName === 'ready' ? () => this.startQuestionReading()
@@ -523,7 +527,11 @@ export class GameEngine {
           : saved.timerName === 'final' ? () => this.closeFinal()
             : saved.timerName === 'appeal' ? () => this.resolveAppeal()
               : saved.timerName === 'reveal' ? () => this.next() : undefined;
-      this.startTimer(saved.timerName, Math.max(0.001, saved.timerMs / 1000), onExpire);
+      this.startTimer(saved.timerName, Math.max(0.001, (saved.timerMs + rearmMs) / 1000), onExpire);
+    }
+    if (rearmMs) {
+      this.buzzer.openedAt = Date.now() + rearmMs;
+      this.room.emitEvent({ type: 'buzzerOpen', openedAt: this.buzzer.openedAt });
     }
     if (this.phase === PHASES.STAKE_AUCTION) {
       const bidder = this.room.participants.get(this.auctionTurnId() ?? '');
@@ -1216,7 +1224,12 @@ export class GameEngine {
     else this.revealAnswer({ showAnswer: true, autoNext: true });
   }
 
-  openBuzzer(overrideSeconds?: number): void {
+  /**
+   * Opens the buttons. The open moment is scheduled `leadMs` ahead so every screen turns green
+   * together on the synced clock: a slow phone or weak Wi-Fi no longer sees the signal late.
+   * Without the lead the fastest device won ~90 % of equal-speed presses (fairness simulation).
+   */
+  openBuzzer(overrideSeconds?: number, leadMs = this.settings.buzzOpenLeadMs): void {
     this.assert(this.phase === PHASES.READING || this.phase === PHASES.ANSWERING, 'Buttons cannot be opened now');
     this.assert(this.current?.type !== 'forAll', 'For-all questions do not use buttons');
     if (this.isAssignedQuestion()) {
@@ -1232,26 +1245,37 @@ export class GameEngine {
     this.buzzer.typedAnswer = null;
     this.buzzer.typedAnswerClosed = false;
     this.buzzer.pending = [];
-    this.buzzer.openedAt = Date.now();
+    this.buzzer.openedAt = Date.now() + leadMs;
     const seconds =
       overrideSeconds != null
         ? overrideSeconds
         : this.buzzer.remainingMs != null
           ? this.buzzer.remainingMs / 1000
           : this.settings.timeForThinkingOnQuestion;
-    this.startTimer('buzzer', seconds, () => this.expireBuzzer());
+    // The lead is waiting, not thinking time, so the countdown gets it on top.
+    this.startTimer('buzzer', seconds + leadMs / 1000, () => this.expireBuzzer());
     this.room.emitEvent({ type: 'buzzerOpen', openedAt: this.buzzer.openedAt });
   }
 
-  resolvePressTimestamp(serverNow: number, rawClientAt?: unknown): number {
-    const openedAt = this.buzzer.openedAt ?? serverNow;
+  /** When the player pressed, on the server clock, from their calibrated device time. */
+  clientPressTime(serverNow: number, rawClientAt?: unknown): number {
     const num = Number(rawClientAt);
     if (!Number.isFinite(num)) return serverNow;
     // A player's clock is trusted only a little way back, so a skewed or forged clientAt cannot
     // jump the queue by seconds (audit SEC-4).
-    const minAllowed = Math.max(openedAt, serverNow - CLIENT_CLOCK_TRUST_MS);
-    const maxAllowed = serverNow + 20;
-    return Math.min(maxAllowed, Math.max(minAllowed, num));
+    return Math.min(serverNow + 20, Math.max(serverNow - CLIENT_CLOCK_TRUST_MS, num));
+  }
+
+  resolvePressTimestamp(serverNow: number, rawClientAt?: unknown): number {
+    // An early press allowed by the rules (false starts off) counts as pressed at the signal.
+    return Math.max(this.buzzer.openedAt ?? serverNow, this.clientPressTime(serverNow, rawClientAt));
+  }
+
+  blockFalseStart(playerId: string, now: number): { result: BuzzResult } {
+    this.buzzer.blockedUntil.set(playerId, now + this.settings.timeForBlockingButton * 1000);
+    this.room.emitEvent({ type: 'falseStart', playerId });
+    this.room.changed();
+    return { result: 'falseStart' };
   }
 
   buzz(playerId: string, meta: { clientAt?: number } = {}): { result: BuzzResult } {
@@ -1262,18 +1286,20 @@ export class GameEngine {
     if (this.phase === PHASES.READING) {
       if (this.isAssignedQuestion()) return { result: 'ignored' };
       if (!this.settings.falseStart) {
-        this.openBuzzer();
+        // Someone already pressed, so there is nothing to wait for: open at once.
+        this.openBuzzer(undefined, 0);
         return this.buzz(playerId, meta);
       }
-      this.buzzer.blockedUntil.set(playerId, now + this.settings.timeForBlockingButton * 1000);
-      this.room.emitEvent({ type: 'falseStart', playerId });
-      this.room.changed();
-      return { result: 'falseStart' };
+      return this.blockFalseStart(playerId, now);
     }
 
     if (this.phase !== PHASES.BUZZER_OPEN) return { result: 'ignored' };
     if (this.buzzer.attempted.has(playerId)) return { result: 'ignored' };
     if ((this.buzzer.blockedUntil.get(playerId) ?? 0) > now) return { result: 'ignored' };
+    // Pressed before the scheduled signal. With device time this also catches a laggy press made
+    // before green that arrives after it; arrival order cannot tell those apart.
+    const pressedAt = this.settings.buzzSyncMode === 'clientTimestamp' ? this.clientPressTime(now, meta?.clientAt) : now;
+    if (this.settings.falseStart && pressedAt < (this.buzzer.openedAt ?? now)) return this.blockFalseStart(playerId, now);
 
     if (this.buzzer.pending[0]?.mode === 'random' ||
         (!this.buzzer.pending.length && this.settings.buttonPressMode === 'randomWithinInterval' && this.settings.buttonPressIntervalMs > 0)) {
@@ -1685,6 +1711,8 @@ export class GameEngine {
       buzzer: {
         winnerId: this.buzzer.winnerId,
         winnerInfo: this.buzzer.winnerInfo,
+        // Clients keep the button at "wait" until this moment on the synced clock.
+        openedAt: this.buzzer.openedAt,
         attempted: [...this.buzzer.attempted],
         blockedUntil: viewer ? (this.buzzer.blockedUntil.get(viewer.id) ?? null) : null,
         blockedPlayers: [...this.buzzer.blockedUntil.entries()]

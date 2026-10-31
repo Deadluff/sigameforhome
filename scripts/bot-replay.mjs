@@ -172,7 +172,8 @@ async function playPack(file, name) {
           if (n % 3 === 0) break;
           const free = players.filter((p) => !g.buzzer.attempted.includes(p.id));
           const p = free[n % Math.max(1, free.length)];
-          if (p) { await sleep(150); await act(p, 'game:buzz', { clientAt: Date.now() }, 'buzz'); }
+          // Wait for the scheduled green signal: a press before it is a false start.
+          if (p) { await sleep(Math.max(0, (g.buzzer.openedAt ?? 0) - Date.now()) + 150); await act(p, 'game:buzz', { clientAt: Date.now() }, 'buzz'); }
           break;
         }
         case 'answering': {

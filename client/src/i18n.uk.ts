@@ -532,6 +532,7 @@ export const uk: Record<string, string | [string, string, string]> = {
   'Opens after the question.': 'Відкриється після питання.',
   'The button opens after the countdown.': 'Кнопка відкриється після відліку.',
   'Wait for green': 'Чекайте зеленого',
+  'The buttons open in a moment.': 'Кнопки відкриються за мить.',
   'Press now to answer.': 'Тисніть, щоб відповісти.',
   'Tap here.': 'Торкніться тут.',
   'Tap here or press Space.': 'Торкніться тут або натисніть пробіл.',

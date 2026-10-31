@@ -16,6 +16,7 @@ export interface GameSettings {
   partialText: boolean;
   buzzSyncMode: BuzzSyncMode;
   buzzSyncWindowMs: number;
+  buzzOpenLeadMs: number;
   buttonPressMode: ButtonPressMode;
   buttonPressIntervalMs: number;
   playAllQuestionsInFinalRound: boolean;
@@ -88,12 +89,18 @@ export const SETTINGS_SCHEMA: Record<keyof GameSettings, SettingSchemaEntry> = O
   ignoreWrong: bool(false, 'Do not subtract points for wrong answers'),
   readingSpeed: int(20, 1, 100, 'Reading speed (characters/second)'),
   partialText: bool(false, 'Show question text gradually'),
+  // Device time is the default: arrival order let the fastest laptop win ~90 % of equal-speed
+  // presses against old phones and weak Wi-Fi (buzzer fairness simulation, 2026-10-31).
   buzzSyncMode: oneOf<BuzzSyncMode>(
-    'server',
+    'clientTimestamp',
     ['server', 'clientTimestamp'],
     'Who-clicked-first sync mode (server arrival vs client request time; client time trusts player clocks)',
   ),
-  buzzSyncWindowMs: int(120, 20, 500, 'Client timestamp sync collection window (ms)'),
+  // 200 ms covers the upload gap between a laptop and a phone on weak Wi-Fi (about 80 ms plus spikes).
+  buzzSyncWindowMs: int(200, 20, 500, 'Client timestamp sync collection window (ms)'),
+  // The open signal is scheduled this far ahead so every screen turns green at the same moment,
+  // however slow its network or its rendering. Presses stamped before it are false starts.
+  buzzOpenLeadMs: int(300, 0, 1000, 'Open signal lead: all screens turn green together (ms)'),
   buttonPressMode: oneOf<ButtonPressMode>('firstWins', ['firstWins', 'randomWithinInterval'], 'Button press resolution'),
   buttonPressIntervalMs: int(100, 0, 1000, 'Random window for simultaneous presses (ms)'),
   playAllQuestionsInFinalRound: bool(false, 'Play all questions in the final round'),
