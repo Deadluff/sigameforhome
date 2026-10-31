@@ -271,14 +271,12 @@ button.btn-ready[aria-pressed="true"] { background: var(--go); border-color: var
 .fit img { display: block; width: 100%; height: 100%; object-fit: contain; user-select: none; -webkit-user-select: none; -webkit-user-drag: none; }
 .q-media .media-wrap { position: relative; width: 100%; height: 100%; display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); place-items: center; }
 .q-media video { display: block; width: 100%; height: 100%; object-fit: contain; }
-.q-media .media-status { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); }
 /* Pack HTML expects a white page; the mask gradients above use #000/#fff as alpha, not colour. */
 .question-html { width: 100%; height: 100%; border: 0; border-radius: var(--r-control); background: #fff; }
 /* Background sound plays unseen; the audio cue stands in for it. */
 .q-background { display: none; }
-.media-status { margin-top: 8px; }
-/* Neutral: the host bar already holds the one amber button on screen. */
-.media-tap-btn { background: var(--set-raised); color: var(--paper); border-color: var(--rule-strong); font-weight: 800; }
+/* Says why a clip is silent (the browser wants a first touch). A note, never a control: touches pass through. */
+.sound-note { position: fixed; z-index: 40; left: 50%; bottom: max(16px, env(safe-area-inset-bottom)); transform: translateX(-50%); max-width: calc(100vw - 32px); padding: 8px 14px; border-radius: var(--r-control); background: var(--set-raised); border: 1px solid var(--rule); color: var(--paper); font-weight: 700; text-align: center; pointer-events: none; }
 
 /* A picture of the sound, not a control: still and dim until the clip plays, then the bars move. */
 .audio-cue { display: flex; align-items: center; justify-content: center; min-height: 0; pointer-events: none; }

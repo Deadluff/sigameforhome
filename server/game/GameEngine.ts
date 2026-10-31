@@ -85,6 +85,11 @@ export interface CurrentQuestionState {
   judgments: Judgment[];
   /** Option letters and picture clicks, kept so the reveal can show every attempt. */
   picks: AnswerPick[];
+  /**
+   * Server time the question script (in reading) or the answer (at reveal) starts on every screen.
+   * Clips start on this shared clock, so every device plays them together (see stampMediaStart).
+   */
+  mediaStartsAt?: number | null;
 }
 
 export interface AnswerPick {
@@ -148,6 +153,8 @@ interface PausedState {
   timerName: string | null;
   timerMs: number | null;
   buzzWindowMs?: number | null;
+  /** When the pause began; a pause restored after a server restart has none. */
+  pausedAt?: number;
 }
 
 export type BuzzResult = 'accepted' | 'falseStart' | 'queued' | 'ignored';
@@ -187,6 +194,7 @@ export interface GameView {
     showmanComments: string | null;
     selectionMode: string | null;
     picks: AnswerPick[];
+    mediaStartsAt: number | null;
   } | null;
   undoJudgment: { presentationId: string; judgmentId: number; playerId: string } | null;
   buzzer: {
@@ -530,6 +538,7 @@ export class GameEngine {
       timerMs: this.timer ? Math.max(0, this.timer.endsAt - Date.now()) : null,
       buzzWindowMs: this.buzzer.pending.length && this.buzzWindowEndsAt != null
         ? Math.max(0, this.buzzWindowEndsAt - Date.now()) : null,
+      pausedAt: Date.now(),
     };
     this.clearTimer();
     clearTimeout(this.buzzWindowHandle);
@@ -542,6 +551,10 @@ export class GameEngine {
     const saved = this.paused;
     this.paused = null;
     this.phase = saved.phase;
+    // Clips stood still during the pause, so their shared start moves later by as much.
+    if (this.current?.mediaStartsAt != null && saved.pausedAt != null) {
+      this.current.mediaStartsAt += Date.now() - saved.pausedAt;
+    }
     // Players learn of the resume at different times, so the open signal is scheduled again.
     const rearmMs = this.phase === PHASES.BUZZER_OPEN && !this.buzzer.pending.length && saved.timerName === 'buzzer'
       ? this.openLeadMs() : 0;
@@ -817,6 +830,7 @@ export class GameEngine {
     this.clearTimer();
     const { question } = this.current;
     this.phase = PHASES.READING;
+    this.stampMediaStart();
     // Only buzzer questions may skip reading; for-all and assigned questions always read first.
     if (this.current.type !== 'forAll' && !this.isAssignedQuestion() &&
         !this.settings.falseStart && !this.readingEndsOnSignal(question)) {
@@ -930,6 +944,7 @@ export class GameEngine {
       // Everyone passed or the high bidder left: never assign an offline answerer.
       this.phase = PHASES.REVEAL;
       this.current.answerShown = true;
+      this.stampMediaStart();
       this.scheduleRevealClose();
       return;
     }
@@ -1205,7 +1220,9 @@ export class GameEngine {
       this.armClipReportGuard();
       return;
     }
-    this.startTimer('reading', this.estimateReadingSeconds(question), () =>
+    // Screens start the script only at mediaStartsAt, so the estimate counts from then.
+    const leadMs = Math.max(0, (this.current?.mediaStartsAt ?? 0) - Date.now());
+    this.startTimer('reading', this.estimateReadingSeconds(question) + leadMs / 1000, () =>
       this.current?.type === 'forAll' ? this.openForAllAnswers() : this.openBuzzer());
   }
 
@@ -1303,6 +1320,14 @@ export class GameEngine {
     // The lead is waiting, not thinking time, so the countdown gets it on top.
     this.startTimer('buzzer', seconds + leadMs / 1000, () => this.expireBuzzer());
     this.room.emitEvent({ type: 'buzzerOpen', openedAt: this.buzzer.openedAt });
+  }
+
+  /**
+   * Schedules the shared start of the question's or the answer's clips. Like the buzzer signal it
+   * lies the open lead ahead, so the state reaches every screen first and all clips start together.
+   */
+  private stampMediaStart(): void {
+    if (this.current) this.current.mediaStartsAt = Date.now() + this.openLeadMs();
   }
 
   /** The open lead for the players seated now: the host's setting, longer for a slow connection. */
@@ -1548,6 +1573,7 @@ export class GameEngine {
     this.buzzWindowEndsAt = null;
     this.phase = PHASES.REVEAL;
     this.current.answerShown = true;
+    this.stampMediaStart();
     this.scheduleRevealClose();
   }
 
@@ -1784,6 +1810,9 @@ export class GameEngine {
         showmanComments: viewer?.role === ROLES.HOST ? c.question.info.showmanComments || null : null,
         selectionMode: c.question.typeParams?.selectionMode ?? null,
         picks: c.answerShown ? c.picks : [],
+        // While paused the start keeps moving, so a screen that joins mid-pause resumes in step.
+        mediaStartsAt: c.mediaStartsAt == null ? null
+          : c.mediaStartsAt + (this.paused?.pausedAt != null ? Date.now() - this.paused.pausedAt : 0),
       },
       undoJudgment: canModerate && this.canUndoJudgment() && c ? {
         presentationId: c.presentationId,

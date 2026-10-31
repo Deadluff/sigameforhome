@@ -16,6 +16,8 @@ import { auctionTurnHint, formatReaction } from './statusText';
 import { hostBannerText } from './hostBanner';
 import { keepInViewport } from './keepInViewport';
 import { addSteppers } from './numberStepper';
+import { addAmountSlider, syncAmountSlider } from './amountSlider';
+import { playWithSound, soundElement } from './soundGate';
 import { lang, serverText, setLang, t, tn, translatePage, type Lang } from './i18n';
 import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentItem,
   GameEvent, JoinAck, NoPayloadCommand, PackListItem, RoomState, ServerToClientEvents } from './types';
@@ -743,6 +745,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       revealTurnPanel($('#final-wager'), `wager:${game.current?.presentationId}`);
       const score = Math.max(0, participants.find((p) => p.id === you.id)?.score ?? 0);
       input('#final-amount').max = String(score);
+      syncAmountSlider(input('#final-amount'));
       // The saved wager sits in the field label: below the buttons it fell off small phone screens.
       $('#final-amount-label').textContent = final.wagered.includes(you.id)
         ? t('Saved: {wager}. You can change it (0 to {max}).', { wager: formatScore(final.yourWager ?? 0), max: formatScore(score) })
@@ -793,6 +796,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   button('#final-all-in').onclick = () => {
     const field = input('#final-amount');
     field.value = field.max;
+    syncAmountSlider(field);
     send('game:finalWager', { amount: Number(field.max) });
   };
   /*
@@ -929,6 +933,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
         (!bidInput.value || Number(bidInput.value) < auction.minimumNextBid || Number(bidInput.value) > maxRegular)) {
       bidInput.value = String(auction.minimumNextBid);
     }
+    syncAmountSlider(bidInput);
   }
 
   $('#stake-bid-form').addEventListener('submit', (event) => {
@@ -1724,13 +1729,14 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   // Settings change listeners.
   // A change saves silently otherwise; a short "Saved" mark on the field confirms it reached the room.
   const savedMarks = new WeakMap<Element, ReturnType<typeof setTimeout>>();
-  async function saveSetting(field: HTMLElement, patch: CommandPayloads['settings:update']) {
+  async function saveSetting(field: HTMLElement, patch: CommandPayloads['settings:update']): Promise<boolean> {
     const res = await send('settings:update', patch);
     const label = field.closest('label');
-    if (!res.ok || !label) return;
+    if (!res.ok || !label) return res.ok;
     clearTimeout(savedMarks.get(label));
     label.classList.add('saved');
     savedMarks.set(label, setTimeout(() => label.classList.remove('saved'), 1500));
+    return true;
   }
   select('#set-gameMode').addEventListener('change', () =>
     saveSetting(select('#set-gameMode'), { gameMode: select('#set-gameMode').value }));
@@ -1748,10 +1754,17 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   // Settings and the special question's value step by fixed amounts; bids and wagers are typed
   // (with All in), where +1 steps would only get in the way.
   addSteppers(document.querySelectorAll<HTMLInputElement>('input[type="number"][id^="set-"], #special-price'));
+  // Bids and wagers get a slider instead (see amountSlider).
+  addAmountSlider(input('#stake-bid-amount'));
+  addAmountSlider(input('#final-amount'));
   for (const key of numberSettingKeys) {
-    input(`#set-${key}`).addEventListener('change', () => {
-      const val = Number.parseInt(input(`#set-${key}`).value, 10);
-      if (Number.isFinite(val)) saveSetting(input(`#set-${key}`), { [key]: val });
+    input(`#set-${key}`).addEventListener('change', async () => {
+      const field = input(`#set-${key}`);
+      const val = Number.parseInt(field.value, 10);
+      // A cleared field or a refused value (fewer seats than seated players) shows the room's value
+      // again; the field is not refreshed while focused, so it would keep the rejected number.
+      const saved = Number.isFinite(val) && await saveSetting(field, { [key]: val });
+      if (!saved && state?.settings) field.value = String(state.settings[key]);
     });
   }
 
@@ -1888,19 +1901,26 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     });
   }
 
+  // Within this a screen counts as in step; Wi-Fi and decoders differ by tens of milliseconds.
+  const MEDIA_SYNC_TOLERANCE_S = 0.3;
+  /**
+   * `startAt` is the local time the clip's start is due on the room's shared clock (null: no schedule).
+   * Every screen waits for that moment, and one that is late or ahead (a reload, a slow load, a stall)
+   * jumps to where the room is. Small gaps are left alone, since a seek is audible.
+   */
   function createMediaPlayer(type: 'audio' | 'video', url: string,
-    previous?: { paused: boolean; currentTime: number }, autoStart = true) {
+    previous?: { paused: boolean; currentTime: number }, autoStart = true, startAt?: () => number | null) {
     const wrap = document.createElement('div');
     wrap.className = 'media-wrap';
 
-    const el = document.createElement(type);
-    // Pack media starts with the question; a blocked video shows a tap button, blocked audio waits for the next tap.
+    // A clip that starts by itself needs an element Safari lets play with sound (soundGate).
+    const el = autoStart ? soundElement(type) : document.createElement(type);
+    // Pack media starts with the question by itself; a browser that refuses sound gets it muted (soundGate).
     el.preload = 'auto';
     routeThroughVolume(el, url);
     // Muted, not skipped: the clip keeps its length, so reading and media timing stay the same on every device.
     el.muted = !playsSoundHere();
-    el.autoplay = autoStart && state?.game.phase !== 'paused' &&
-      state?.game.phase !== 'answering' && !previous?.paused;
+    // No autoplay attribute: it would start the clip on load, not at the shared moment (tryPlay does that).
     if (el instanceof HTMLVideoElement) {
       // Required for iPhone / iPad Safari inline playback
       el.playsInline = true;
@@ -1923,82 +1943,40 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     el.addEventListener('play', () => manuallyPausedMedia.delete(el));
     wrap.append(el);
 
-    const status = document.createElement('div');
-    status.className = 'media-status hidden';
-    wrap.append(status);
-
-    // Explicitly invoke .play() and handle iOS Safari autoplay restrictions
+    // Delayed metadata, timers and promise callbacks must respect game and manual pauses.
     const canAutoPlay = () => autoStart && el.isConnected &&
       state?.game.phase !== 'paused' && state?.game.phase !== 'answering' &&
       !manuallyPausedMedia.has(el);
+    const align = () => {
+      const at = startAt?.();
+      if (at == null) return;
+      const target = (Date.now() - at) / 1000;
+      if (Math.abs(target - el.currentTime) <= MEDIA_SYNC_TOLERANCE_S) return;
+      // Past the end means the clip is over here too; ending it lets the script move on.
+      try { el.currentTime = Math.max(0, Number.isFinite(el.duration) ? Math.min(target, el.duration) : target); }
+      catch { /* Some streams cannot seek. */ }
+    };
+    // 'playing' fires on the first start and after every stall or pause, the moments a screen falls out of step.
+    el.addEventListener('playing', align);
+    // WebKit can also lag a few hundred ms just after a start without any stall event, so check once a second too.
+    let alignedAt = 0;
+    el.addEventListener('timeupdate', () => {
+      if (Date.now() - alignedAt < 1000) return;
+      alignedAt = Date.now();
+      align();
+    });
+    let startTimer: ReturnType<typeof setTimeout> | undefined;
     const tryPlay = () => {
-      // Delayed metadata and promise callbacks must respect game and manual pauses.
       // A clip that is already playing (or whose play() is pending) needs no second attempt.
-      // Safari blocks unmuted autoplay and the fallback plays it muted; a second play() then
-      // resolved and hid the "Tap to unmute" button, leaving the clip silent with no way to unmute.
+      // Safari once let a second play() undo its muted fallback, leaving the clip silent for good.
       if (!canAutoPlay() || !el.paused) return;
-      const p = el.play();
-      if (p && typeof p.then === 'function') {
-        p.then(() => {
-          status.classList.add('hidden');
-        }).catch(() => {
-          if (!canAutoPlay()) return;
-          // iOS Safari blocked unmuted autoplay -> fall back to muted autoplay + unmute button
-          if (type === 'video' && !el.muted) {
-            el.muted = true;
-            el.play()
-              .then(() => {
-                status.className = 'media-status';
-                status.innerHTML = '';
-                const btn = Object.assign(document.createElement('button'), {
-                  type: 'button',
-                  className: 'media-tap-btn',
-                  textContent: `🔇 ${t('Tap to unmute')}`,
-                });
-                btn.onclick = () => {
-                  el.muted = false;
-                  el.play().catch(() => {});
-                  status.classList.add('hidden');
-                };
-                status.append(btn);
-              })
-              .catch(() => { if (canAutoPlay()) showTapToPlay(); });
-          } else if (type === 'audio') {
-            retryOnNextGesture();
-          } else {
-            showTapToPlay();
-          }
-        });
+      const wait = (startAt?.() ?? 0) - Date.now();
+      if (wait > 0) {
+        clearTimeout(startTimer);
+        startTimer = setTimeout(tryPlay, wait);
+        return;
       }
-    };
-
-    const showTapToPlay = () => {
-      status.className = 'media-status';
-      status.innerHTML = '';
-      const btn = Object.assign(document.createElement('button'), {
-        type: 'button',
-        className: 'media-tap-btn',
-        textContent: `▶️ ${type === 'video' ? t('Play video') : t('Play audio')}`,
-      });
-      btn.onclick = () => {
-        el.muted = false;
-        el.play()
-          .then(() => status.classList.add('hidden'))
-          .catch(() => {});
-      };
-      status.append(btn);
-    };
-
-    // Audio shows no play button (the level meter is only a picture), so a clip the browser
-    // blocked starts on the player's next tap or key press anywhere on the page.
-    const retryOnNextGesture = () => {
-      const retry = () => {
-        document.removeEventListener('pointerdown', retry, true);
-        document.removeEventListener('keydown', retry, true);
-        if (el.paused && !el.ended) tryPlay();
-      };
-      document.addEventListener('pointerdown', retry, true);
-      document.addEventListener('keydown', retry, true);
+      playWithSound(el, tryPlay);
     };
 
     // Attempt playback as soon as metadata or data arrives
@@ -2011,7 +1989,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   }
 
   function contentElement(it: ContentItem,
-    previous?: { paused: boolean; currentTime: number }, autoStart = true): HTMLElement {
+    previous?: { paused: boolean; currentTime: number }, autoStart = true, startAt?: () => number | null): HTMLElement {
     // Pictures sit in a ratio-keeping frame so pins and the answer ring land on the right pixel.
     if (it.type === 'image' && it.url) {
       const frame = imageFrame(it.url);
@@ -2019,7 +1997,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       return frame;
     }
     if ((it.type === 'audio' || it.type === 'video') && it.url) {
-      return createMediaPlayer(it.type, it.url, previous, autoStart);
+      return createMediaPlayer(it.type, it.url, previous, autoStart, startAt);
     }
     if (it.type === 'html' && it.url) {
       // Pack HTML stays in a sandbox; its ticketed path lets relative assets load.
@@ -2073,7 +2051,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     return slots;
   }
 
-  function placeContent(slots: StageSlots, item: ContentItem, index: number, autoStart: boolean): HTMLElement {
+  function placeContent(slots: StageSlots, item: ContentItem, index: number, autoStart: boolean,
+    startAt?: () => number | null): HTMLElement {
     const target = slotFor(item);
     const slot = slots[target];
     if (target === 'media') {
@@ -2088,7 +2067,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     previousContentMedia.delete(index);
     // A non-blocking background track may still be playing when its ticket rotates.
     const resumeBackground = target === 'background' && previous?.paused === false;
-    const element = contentElement(item, previous, autoStart || resumeBackground);
+    const element = contentElement(item, previous, autoStart || resumeBackground, startAt);
     wrapper.append(element);
     slot.append(wrapper);
     syncStageShape(slots);
@@ -2126,7 +2105,9 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     _replay: boolean, done: () => void) {
     if (!stageSlots) return;
     const slots = stageSlots;
-    const element = placeContent(slots, item, index, active);
+    // Clips follow the script's shared timeline, which a late or reloaded screen joins in step.
+    const presenter = questionPresenter;
+    const element = placeContent(slots, item, index, active, () => presenter?.startOf(index) ?? null);
     if (active && isTextItem(item)) {
       // The presenter controls timing; updating one text node avoids restarting this item.
       return (visibleText: string) => { element.textContent = visibleText; fitText(slots.prompt); };
@@ -2177,6 +2158,12 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     return rest.filter((alt) => alt.trim() && !seen.includes(alt.trim().toLocaleLowerCase()));
   }
 
+  /** Answer clips start together at the reveal's shared moment; a resume moves it, so it is read live. */
+  function answerStartsAt(): number | null {
+    const at = activeState().game.current?.mediaStartsAt;
+    return at == null ? null : at - clockOffset;
+  }
+
   /** At reveal the answer takes the question's place instead of piling up under it. */
   function renderAnswerStage(slots: StageSlots, c: CurrentQuestion) {
     slots.box.classList.add('showing-answer');
@@ -2200,7 +2187,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     if (c.answerType !== 'point' && answerMedia.length) {
       answerMedia.forEach((item, index) => {
         if (slotFor(item) === 'media' && answerMedia.slice(index + 1).some((later) => slotFor(later) === 'media')) return;
-        placeContent(slots, item, ANSWER_INDEX + index, true);
+        placeContent(slots, item, ANSWER_INDEX + index, true, answerStartsAt);
       });
     } else {
       renderStaticContent({ ...slots, prompt: document.createElement('div') }, c.content);
@@ -2405,7 +2392,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
         state.settings.partialText && !matchMedia('(prefers-reduced-motion: reduce)').matches
           ? state.settings.readingSpeed : 0);
         questionPresenter.setPaused(game.phase === 'paused');
-        questionPresenter.start();
+        // Every screen runs the script from the server's shared start, not from when its state arrived.
+        questionPresenter.start(c.mediaStartsAt == null ? undefined : c.mediaStartsAt - clockOffset);
       } else questionPresenter?.refresh();
     } else {
       questionPresenter?.dispose();

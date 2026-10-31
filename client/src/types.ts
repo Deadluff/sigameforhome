@@ -96,6 +96,8 @@ export interface RoomState {
       showmanComments: string | null;
       selectionMode: string | null;
       picks: { playerId: string; value: string; correct: boolean }[];
+      /** Server time the question script (reading) or the answer (reveal) starts on every screen. */
+      mediaStartsAt: number | null;
     } | null;
     buzzer: {
       winnerId: string | null;

@@ -32,6 +32,9 @@
 #stake-bid-form .field { flex: 1 1 160px; }
 #final-wager { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
 #final-wager .field { flex: 1 1 200px; }
+/* The slider takes its own full-width row under the field and buttons; taller for thumbs on phones. */
+#stake-bid-form .amount-slider, #final-wager .amount-slider { flex: 1 1 100%; width: 100%; height: 32px; }
+.amount-slider:disabled { opacity: .4; cursor: default; }
 /* Step controls (special setup, final) are groups inside the host bar, not extra panels. */
 .bar-group { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
 .bar-group .field { flex-direction: row; align-items: center; gap: 8px; }

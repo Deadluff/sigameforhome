@@ -33,27 +33,28 @@
 }
 @keyframes volume-in { from { opacity: 0; transform: translateY(-4px) scale(.98); } }
 .volume-pop #volume-mute { min-width: 36px; min-height: 36px; border-radius: var(--r-control); }
-.volume-pop input[type="range"] {
+/* The bid and wager sliders (amountSlider.ts) share the volume slider's look. */
+:is(.volume-pop input[type="range"], .amount-slider) {
   --fill: 100%;
   -webkit-appearance: none; appearance: none; width: 168px; height: 24px; margin: 0; background: transparent; cursor: pointer;
 }
-.volume-pop input[type="range"]::-webkit-slider-runnable-track {
+:is(.volume-pop input[type="range"], .amount-slider)::-webkit-slider-runnable-track {
   height: 6px; border-radius: 999px;
   background: linear-gradient(to right, var(--lamp) var(--fill), rgb(var(--rule-rgb) / .28) var(--fill));
 }
-.volume-pop input[type="range"]::-moz-range-track { height: 6px; border-radius: 999px; background: rgb(var(--rule-rgb) / .28); }
-.volume-pop input[type="range"]::-moz-range-progress { height: 6px; border-radius: 999px; background: var(--lamp); }
-.volume-pop input[type="range"]::-webkit-slider-thumb {
+:is(.volume-pop input[type="range"], .amount-slider)::-moz-range-track { height: 6px; border-radius: 999px; background: rgb(var(--rule-rgb) / .28); }
+:is(.volume-pop input[type="range"], .amount-slider)::-moz-range-progress { height: 6px; border-radius: 999px; background: var(--lamp); }
+:is(.volume-pop input[type="range"], .amount-slider)::-webkit-slider-thumb {
   -webkit-appearance: none; width: 18px; height: 18px; margin-top: -6px; border-radius: 50%; border: 0;
   background: var(--lamp-soft); box-shadow: 0 0 0 4px rgb(var(--lamp-rgb) / .22), 0 2px 6px rgba(0, 0, 0, .45);
   transition: transform .15s, box-shadow .15s;
 }
-.volume-pop input[type="range"]::-moz-range-thumb {
+:is(.volume-pop input[type="range"], .amount-slider)::-moz-range-thumb {
   width: 18px; height: 18px; border-radius: 50%; border: 0;
   background: var(--lamp-soft); box-shadow: 0 0 0 4px rgb(var(--lamp-rgb) / .22), 0 2px 6px rgba(0, 0, 0, .45);
 }
 @media (hover: hover) and (pointer: fine) {
-  .volume-pop input[type="range"]:hover::-webkit-slider-thumb { transform: scale(1.12); box-shadow: 0 0 0 6px rgb(var(--lamp-rgb) / .3), 0 2px 6px rgba(0, 0, 0, .45); }
+  :is(.volume-pop input[type="range"], .amount-slider):hover::-webkit-slider-thumb { transform: scale(1.12); box-shadow: 0 0 0 6px rgb(var(--lamp-rgb) / .3), 0 2px 6px rgba(0, 0, 0, .45); }
 }
 .volume-pop input[type="range"]:focus-visible::-webkit-slider-thumb { transform: scale(1.12); box-shadow: 0 0 0 6px rgb(var(--lamp-rgb) / .3), 0 2px 6px rgba(0, 0, 0, .45); }
 .volume-pop input[type="range"]:focus-visible { outline: none; }
@@ -137,6 +138,16 @@
    * and status stay put above it. The padding keeps an answering podium's 2 px lift unclipped.
    */
   .host-col > .players { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 3px 0; }
+  /*
+   * macOS hides overlay scrollbars until you scroll, so a clipped scoreboard looked complete (playtest:
+   * "there should be scroll"). A styled WebKit/Blink bar stays visible. Chrome ignores these pseudo-elements
+   * once the standard properties are set, so those go to Firefox only.
+   */
+  .host-col > .players::-webkit-scrollbar { width: 6px; }
+  .host-col > .players::-webkit-scrollbar-thumb { border-radius: 999px; background: var(--rule-strong); }
+  @supports not selector(::-webkit-scrollbar) {
+    .host-col > .players { scrollbar-width: thin; scrollbar-color: var(--rule-strong) transparent; }
+  }
   /*
    * A scroll box clips whatever pokes out of it, so the podium menu that opens beside its podium is
    * pinned to the screen instead; app.ts places it next to its button. The podium drops its answering

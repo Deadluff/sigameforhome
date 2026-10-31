@@ -180,7 +180,7 @@ export function fitText(box: HTMLElement, minPx = 16): void {
 
 /**
  * Audio has no picture, so a level meter shows it is playing. It is only a picture, never a control:
- * a blocked clip starts on the player's next tap anywhere (see createMediaPlayer), not from here.
+ * a clip the browser kept silent gets its sound on the player's next touch anywhere (see soundGate).
  */
 export function audioCue(media: () => HTMLMediaElement[]): HTMLDivElement {
   const cue = Object.assign(document.createElement('div'), { className: 'audio-cue' });

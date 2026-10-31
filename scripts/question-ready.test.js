@@ -144,3 +144,25 @@ test('with the countdown set to 0 reading starts at once', (t) => {
   pick(engine, PLAIN);
   assert.equal(engine.phase, 'reading');
 });
+
+test('reading and the reveal stamp a shared clip start one open lead ahead; a pause moves it', (t) => {
+  const { room, engine, alice } = createRoom(t, { buzzOpenLeadMs: 300 });
+  pick(engine, PLAIN);
+  assert.equal(room.snapshotFor(alice.id).game.current.mediaStartsAt, null, 'no start before reading');
+  const before = Date.now();
+  finishReady(engine);
+  const startsAt = room.snapshotFor(alice.id).game.current.mediaStartsAt;
+  assert.ok(startsAt >= before + 300 && startsAt <= Date.now() + 300, 'the start lies the open lead ahead');
+  // The reading clock counts from the shared start, so a timed script is not cut by the lead.
+  assert.ok(engine.timer.endsAt - startsAt >= engine.estimateReadingSeconds(engine.current.question) * 1000 - 5);
+
+  engine.pause();
+  engine.paused.pausedAt -= 2000; // as if paused two seconds ago
+  const shown = room.snapshotFor(alice.id).game.current.mediaStartsAt;
+  assert.ok(shown >= startsAt + 2000, 'a screen joining mid-pause sees the start moved by the pause so far');
+  engine.resume();
+  assert.ok(engine.current.mediaStartsAt >= startsAt + 2000, 'resume moves the start by the whole pause');
+
+  engine.revealAnswer();
+  assert.ok(engine.current.mediaStartsAt >= Date.now() + 250, 'the answer gets its own shared start');
+});
