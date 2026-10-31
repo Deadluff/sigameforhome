@@ -403,10 +403,30 @@ test('restart replays an interrupted stake auction from the board', async (t) =>
   assert.equal(restored.engine.isAvailable(0, 4), true);
 });
 
-test('restart keeps a paused round clock stopped until play resumes', async (t) => {
+test('restart fits saved settings to the current limits and drops retired ones', async (t) => {
+  const { room } = createRoom(t);
+  const stateFile = path.join(root, 'old-settings-state.json');
+  await persistRoom(room, stateFile)();
+  // A save from before the 2026-10-31 timer limits, with the retired round clock.
+  const saved = JSON.parse(await readFile(stateFile, 'utf8'));
+  Object.assign(saved.settings, { timeForThinkingOnQuestion: 1, timeForBlockingButton: 30,
+    timeForPrintingAnswer: 300, readingSpeed: 'fast', timeOfRound: 660 });
+  await writeFile(stateFile, JSON.stringify(saved));
+
+  const restored = new Room();
+  t.after(() => restored.engine.reset());
+  await restoreRoom(restored, stateFile);
+  assert.equal(restored.settings.timeForThinkingOnQuestion, 3);
+  assert.equal(restored.settings.timeForBlockingButton, 10);
+  assert.equal(restored.settings.timeForPrintingAnswer, 120);
+  assert.equal(restored.settings.readingSpeed, 20);
+  assert.equal('timeOfRound' in restored.settings, false);
+});
+
+// Rounds have no clock: only an empty board or the host's Next ends one.
+test('restart keeps a paused round paused, and no clock ends it after resume', async (t) => {
   const { room } = createRoom(t);
   const stateFile = path.join(root, 'paused-round-state.json');
-  room.engine.roundEndsAt = Date.now() + 30;
   room.engine.pause();
   await persistRoom(room, stateFile)();
 
@@ -419,11 +439,19 @@ test('restart keeps a paused round clock stopped until play resumes', async (t) 
   assert.equal(restored.engine.phase, 'paused');
   restored.engine.resume();
   assert.equal(restored.engine.phase, 'board');
-  const deadline = Date.now() + 1000;
-  while (restored.engine.phase !== 'roundEnd' && Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  assert.equal(restored.engine.phase, 'roundEnd');
+  assert.equal('roundEndsAt' in restored.engine.getView(null, true), false);
+});
+
+test('a round with questions left never ends on time, however long it runs', (t) => {
+  const { room, host } = createRoom(t);
+  const realNow = Date.now;
+  t.after(() => { Date.now = realNow; });
+  // Hours pass between picks; the old 11-minute round clock would have ended the round.
+  Date.now = () => realNow() + 3 * 60 * 60 * 1000;
+  room.engine.selectQuestion(host.id, true, 0, 0);
+  room.engine.next();
+  assert.equal(room.engine.phase, 'board');
+  assert.equal(room.engine.roundHasQuestionsLeft(), true);
 });
 
 test('restart replays an interrupted for-all answer session from the board', async (t) => {

@@ -125,7 +125,9 @@ test('written answer deadline closes input but leaves the host verdict open', as
   const { room, host, players: [alice] } = game(t);
   const engine = room.engine;
   engine.stop();
-  room.updateSettings(host.id, { oral: false, timeForPrintingAnswer: 1 });
+  room.updateSettings(host.id, { oral: false });
+  // Below the 5 s host minimum, set directly so the deadline passes quickly.
+  room.settings.timeForPrintingAnswer = 1;
   engine.start();
   engine.selectQuestion(host.id, true, 0, 0);
   engine.openBuzzer();
@@ -142,7 +144,9 @@ test('pausing a written answer keeps its remaining submission time', async (t) =
   const { room, host, players: [alice] } = game(t);
   const engine = room.engine;
   engine.stop();
-  room.updateSettings(host.id, { oral: false, timeForPrintingAnswer: 1 });
+  room.updateSettings(host.id, { oral: false });
+  // Below the 5 s host minimum, set directly so the deadline passes quickly.
+  room.settings.timeForPrintingAnswer = 1;
   engine.start();
   engine.selectQuestion(host.id, true, 0, 0);
   engine.openBuzzer();
@@ -271,8 +275,9 @@ test('a queued press before the buzzer deadline is accepted when its random wind
   room.updateSettings(host.id, {
     buttonPressMode: 'randomWithinInterval',
     buttonPressIntervalMs: 1000,
-    timeForThinkingOnQuestion: 1,
   });
+  // Below the 3 s host minimum, set directly so the deadline passes quickly.
+  room.settings.timeForThinkingOnQuestion = 1;
   const engine = room.engine;
   engine.selectQuestion(host.id, true, 0, 0);
   engine.openBuzzer();
@@ -288,8 +293,9 @@ test('timestamp-synced presses retain their ordering when the buzzer deadline en
   room.updateSettings(host.id, {
     buzzSyncMode: 'clientTimestamp',
     buzzSyncWindowMs: 500,
-    timeForThinkingOnQuestion: 1,
   });
+  // Below the 3 s host minimum, set directly so the deadline cuts the window short.
+  room.settings.timeForThinkingOnQuestion = 1;
   const engine = room.engine;
   engine.selectQuestion(host.id, true, 0, 0);
   engine.openBuzzer();

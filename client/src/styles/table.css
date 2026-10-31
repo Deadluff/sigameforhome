@@ -182,18 +182,26 @@ button.btn-ready[aria-pressed="true"] { background: var(--go); border-color: var
 }
 #question .q-meta .q-type { display: inline-block; margin-left: 8px; padding: 1px 10px; border-radius: 999px; background: var(--set-sunk); color: var(--paper); font-size: var(--t-xs); vertical-align: 1px; }
 #question p { margin: 0; }
-/* Get-ready strip: the question is already up, this counts down to reading. Its bar drains on the
-   server clock (set by script every tick), so every screen ends the countdown together. */
+/* Get-ready strip: the question is already up, this counts down to reading. The ring around the
+   number drains on the server clock (--left, set every frame on #game-stage by frameClock), so every
+   screen ends the countdown together. */
 #question .q-ready {
-  position: relative; display: flex; align-items: baseline; justify-content: center; gap: 12px;
-  margin: 0 auto; padding: 6px 22px 10px; border-radius: 999px; overflow: hidden;
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  margin: 0 auto; padding: 6px 8px 6px 22px; border-radius: 999px;
   background: var(--lamp); color: var(--on-lamp); font-weight: 800;
 }
 #question .q-ready-label { font-size: clamp(16px, 1.8vw, 26px); letter-spacing: .02em; }
-#question .q-ready-count { font-size: clamp(24px, 3vw, 44px); line-height: 1; font-variant-numeric: tabular-nums; min-width: 1ch; }
-#question .q-ready-bar {
-  position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: var(--on-lamp); opacity: .55;
-  transform-origin: left; transition: transform .1s linear;
+#question .q-ready-count {
+  position: relative; display: grid; place-items: center; width: 1.75em; aspect-ratio: 1;
+  font-size: clamp(18px, 2.2vw, 30px); line-height: 1; font-variant-numeric: tabular-nums;
+}
+/* Clockwise from the top: the lit part is the time left, the faint track the time spent. */
+#question .q-ready-count::before {
+  content: ""; position: absolute; inset: 0; border-radius: 50%;
+  background: conic-gradient(var(--on-lamp) calc(var(--left, 1) * 360deg),
+    color-mix(in srgb, var(--on-lamp) 18%, transparent) 0);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3.5px), #000 calc(100% - 3px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 3.5px), #000 calc(100% - 3px));
 }
 
 /* The prompt is the headline of the screen: big, pinned at the top, shrunk by script only if it must. */
@@ -251,10 +259,10 @@ button.btn-ready[aria-pressed="true"] { background: var(--go); border-color: var
 /* Neutral: the host bar already holds the one amber button on screen. */
 .media-tap-btn { background: var(--set-raised); color: var(--paper); border-color: var(--rule-strong); font-weight: 800; }
 
-.audio-cue { flex-direction: column; gap: 14px; min-height: 0; background: transparent; border: 0; color: var(--mist); font-size: var(--t-m); }
-@media (hover: hover) and (pointer: fine) { .audio-cue:not(:disabled):hover { background: transparent; color: var(--paper); } }
-.audio-cue.playing { cursor: default; pointer-events: none; }
-.audio-cue .bars { display: flex; align-items: flex-end; gap: 8px; height: clamp(48px, 22cqh, 140px); }
+/* A picture of the sound, not a control: still and dim until the clip plays, then the bars move. */
+.audio-cue { display: flex; align-items: center; justify-content: center; min-height: 0; pointer-events: none; }
+.audio-cue .bars { display: flex; align-items: flex-end; gap: 8px; height: clamp(48px, 22cqh, 140px); opacity: .45; transition: opacity .3s; }
+.audio-cue.playing .bars { opacity: 1; }
 .audio-cue .bars i { width: clamp(10px, 1.8cqw, 22px); height: 30%; border-radius: 3px; background: var(--lamp); }
 .audio-cue.playing .bars i { animation: level .9s ease-in-out infinite alternate; }
 .audio-cue.playing .bars i:nth-child(2) { animation-delay: -.3s; }
@@ -295,6 +303,19 @@ button.btn-ready[aria-pressed="true"] { background: var(--go); border-color: var
 .option.right b { color: var(--go); }
 .option.wrong { border-color: var(--stop); color: var(--mist); text-decoration: line-through; }
 .q-actions { display: flex; justify-content: center; }
+/* Select questions: the picture or clip on the left, the options in a column on the right. */
+.q-split { display: flex; gap: 10px; min-height: 0; }
+#question.has-media .q-split { flex: 1 1 0; }
+#question.has-media .q-split > .q-options {
+  flex: 0 0 clamp(220px, 34%, 420px); display: flex; flex-direction: column; justify-content: center; min-height: 0;
+}
+#question.has-media .q-split .option { flex: 0 1 auto; min-height: 0; font-size: var(--t-s); }
+#question:not(.has-media) .q-split > .q-options { flex: 1 1 auto; }
+/* The options wait for the clip (keeping their place, so nothing jumps), then arrive one by one. */
+.q-options.waiting .option { visibility: hidden; }
+.q-options.arriving .option { animation: option-in .3s ease-out both; animation-delay: calc(var(--i, 0) * var(--step, 300ms)); }
+@keyframes option-in { from { opacity: 0; transform: translateX(24px); } }
+@media (prefers-reduced-motion: reduce) { @keyframes option-in { from { opacity: 0; } } }
 
 /* Reveal: the answer replaces the prompt in the same place, in the "correct" colour. */
 #question.showing-answer { box-shadow: inset 0 0 0 3px var(--go); }
@@ -344,4 +365,13 @@ button.btn-ready[aria-pressed="true"] { background: var(--go); border-color: var
   .q-prompt { font-size: clamp(17px, 5.2vw, 26px); }
   #question:not(.has-media) .q-prompt { font-size: clamp(20px, 6.4vw, 32px); }
   .option { min-height: 44px; font-size: var(--t-s); }
+  /* An upright phone has no room for a side column: the options stack under the picture or clip.
+     A phone on its side keeps the column, which suits its wide, short screen. */
+  @media (orientation: portrait) {
+    .q-split { flex-direction: column; gap: 6px; }
+    /* Two columns keep the clip a usable size; until the options arrive the clip has the whole card. */
+    #question.has-media .q-split > .q-options { flex: none; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    #question.has-media .q-split .option { min-height: 44px; gap: 8px; padding: 6px 10px; }
+    .q-split > .q-options.waiting { display: none !important; }
+  }
 }

@@ -113,42 +113,26 @@ test('players mark themselves ready in the lobby; a start or role change clears 
 
 /* ------------------------------------------------------------------- pass */
 
-test('the answerer passes: no penalty, out for this question, buttons reopen for the rest', (t) => {
+// Only the host passes, for the answerer who says "pass"; players have no Pass of their own.
+test('the host passes for the answerer: no penalty, out for this question, buttons reopen for the rest', (t) => {
   const { room, host, players: [alice, bob, cara], engine } = lobby(t);
   engine.start();
   engine.selectQuestion(host.id, true, 0, 0);
   engine.openBuzzer();
+  assert.throws(() => engine.passAnswer(), /Nobody is answering/, 'nobody is answering yet');
   engine.buzz(alice.id);
-  assert.throws(() => engine.passAnswer(bob.id), /Only the current answerer/);
-  engine.passAnswer(alice.id);
-  assert.equal(alice.score, 0);
-  assert.equal(engine.phase, 'buzzerOpen');
-  assert.equal(engine.buzz(alice.id).result, 'ignored');
-  assert.equal(engine.current.judgments.length, 0, 'a pass is not a verdict');
-
-  engine.buzz(bob.id);
-  engine.passAnswer(bob.id);
-  engine.buzz(cara.id);
-  engine.passAnswer(cara.id);
-  assert.equal(engine.phase, 'reveal', 'nobody left: the answer is shown');
-  assert.equal(room.players().every((p) => p.score === 0), true);
-});
-
-test('the host can pass for the answerer under the same rules', (t) => {
-  const { host, players: [alice, bob], engine } = lobby(t);
-  engine.start();
-  engine.selectQuestion(host.id, true, 0, 0);
-  engine.openBuzzer();
-  assert.throws(() => engine.passAnswer(host.id, true), /Only the current answerer/, 'nobody is answering yet');
-  engine.buzz(alice.id);
-  engine.passAnswer(host.id, true);
+  engine.passAnswer();
   assert.equal(alice.score, 0);
   assert.equal(engine.phase, 'buzzerOpen');
   assert.equal(engine.buzz(alice.id).result, 'ignored', 'the passed player is out for this question');
+  assert.equal(engine.current.judgments.length, 0, 'a pass is not a verdict');
 
   engine.buzz(bob.id);
-  engine.current.type = 'secret';
-  assert.throws(() => engine.passAnswer(host.id, true), /must be answered/);
+  engine.passAnswer();
+  engine.buzz(cara.id);
+  engine.passAnswer();
+  assert.equal(engine.phase, 'reveal', 'nobody left: the answer is shown');
+  assert.equal(room.players().every((p) => p.score === 0), true);
 });
 
 test('an assigned question cannot be passed', (t) => {
@@ -158,7 +142,7 @@ test('an assigned question cannot be passed', (t) => {
   engine.openBuzzer();
   engine.buzz(alice.id);
   engine.current.type = 'secret';
-  assert.throws(() => engine.passAnswer(alice.id), /must be answered/);
+  assert.throws(() => engine.passAnswer(), /must be answered/);
 });
 
 test('the admin panel (packs and settings) belongs to the host, not an owner who sits as a player', (t) => {

@@ -185,17 +185,16 @@
               <summary>Timers</summary>
               <div class="settings-grid">
                 <!-- The pick clocks only inform; they were fixed at 30 s until the host could set them (playtest F15). -->
-                <label class="field"><span>Time to pick</span><span class="unit-input"><input type="number" id="set-timeForChoosingQuestion" min="1" max="300" /><em>sec</em></span></label>
-                <label class="field"><span>Final theme pick</span><span class="unit-input"><input type="number" id="set-timeForChoosingFinalTheme" min="1" max="300" /><em>sec</em></span></label>
-                <label class="field"><span>Pick reveal</span><span class="unit-input"><input type="number" id="set-timeForQuestionIntro" min="0" max="5" /><em>sec</em></span></label>
-                <label class="field"><span>Get ready</span><span class="unit-input"><input type="number" id="set-timeForQuestionReady" min="0" max="10" /><em>sec</em></span></label>
-                <label class="field"><span>Reading speed</span><span class="unit-input"><input type="number" id="set-readingSpeed" min="1" max="100" /><em>chars/s</em></span></label>
-                <label class="field"><span>Time to buzz</span><span class="unit-input"><input type="number" id="set-timeForThinkingOnQuestion" min="1" max="120" /><em>sec</em></span></label>
-                <label class="field"><span>Time to answer</span><span class="unit-input"><input type="number" id="set-timeForPrintingAnswer" min="1" max="300" /><em>sec</em></span></label>
-                <label class="field"><span>Time to bid</span><span class="unit-input"><input type="number" id="set-timeForMakingStake" min="1" max="300" /><em>sec</em></span></label>
-                <label class="field"><span>Special answer</span><span class="unit-input"><input type="number" id="set-timeForThinkingOnSpecial" min="1" max="300" /><em>sec</em></span></label>
-                <label class="field"><span>Final answer</span><span class="unit-input"><input type="number" id="set-timeForFinalThinking" min="1" max="300" /><em>sec</em></span></label>
-                <label class="field wide"><span>Round length (0 = no limit)</span><span class="unit-input"><input type="number" id="set-timeOfRound" min="0" max="7200" /><em>sec</em></span></label>
+                <label class="field"><span>Time to pick</span><span class="unit-input"><input type="number" id="set-timeForChoosingQuestion" min="5" max="120" /><em>sec</em></span></label>
+                <label class="field"><span>Final theme pick</span><span class="unit-input"><input type="number" id="set-timeForChoosingFinalTheme" min="5" max="120" /><em>sec</em></span></label>
+                <label class="field"><span>Pick reveal</span><span class="unit-input"><input type="number" id="set-timeForQuestionIntro" min="0" max="10" /><em>sec</em></span></label>
+                <label class="field"><span>Get ready</span><span class="unit-input"><input type="number" id="set-timeForQuestionReady" min="0" max="15" /><em>sec</em></span></label>
+                <label class="field"><span>Reading speed</span><span class="unit-input"><input type="number" id="set-readingSpeed" min="5" max="60" /><em>chars/s</em></span></label>
+                <label class="field"><span>Time to buzz</span><span class="unit-input"><input type="number" id="set-timeForThinkingOnQuestion" min="3" max="30" /><em>sec</em></span></label>
+                <label class="field"><span>Time to answer</span><span class="unit-input"><input type="number" id="set-timeForPrintingAnswer" min="5" max="120" /><em>sec</em></span></label>
+                <label class="field"><span>Time to bid</span><span class="unit-input"><input type="number" id="set-timeForMakingStake" min="5" max="60" /><em>sec</em></span></label>
+                <label class="field"><span>Special answer</span><span class="unit-input"><input type="number" id="set-timeForThinkingOnSpecial" min="10" max="120" /><em>sec</em></span></label>
+                <label class="field"><span>Final answer</span><span class="unit-input"><input type="number" id="set-timeForFinalThinking" min="15" max="180" /><em>sec</em></span></label>
               </div>
             </details>
             <details class="lobby-details">
@@ -260,11 +259,6 @@
       </div>
 
       <div class="dock">
-        <!-- The answerer may give up without losing points; others can still buzz. -->
-        <section id="answer-pass" class="card hidden">
-          <p>Don't know it? Pass and lose nothing; the others can still buzz.</p>
-          <button id="btn-pass-answer" type="button">Pass</button>
-        </section>
         <section id="typed-answer" class="card hidden" aria-labelledby="typed-answer-title">
           <h3 id="typed-answer-title">Written answer</h3>
           <p id="typed-answer-status" role="status" aria-live="polite"></p>
@@ -327,7 +321,8 @@
           <button data-act="judge-half" type="button" class="reward" title="Correct for half the value">½</button>
           <button data-act="judge-double" type="button" class="reward" title="Correct for double the value">×2</button>
           <button data-act="judge-bad" type="button" class="verdict verdict-bad" data-icon="cross" title="Wrong (N)">Wrong</button>
-          <!-- For an answerer who says "pass" out loud: no points lost, the others may still buzz. -->
+          <!-- For an answerer who says "pass" out loud: no points lost, the others may still buzz.
+               Only the host passes; players have no Pass button of their own. -->
           <button data-act="game:passAnswer" type="button" class="quiet" title="The answerer passes: no points lost, others can still buzz">Pass</button>
           <button data-act="game:openBuzzer" id="btn-open-buzzer" type="button" data-icon="zap">Open buzzer now</button>
           <button data-act="game:reveal" type="button" class="quiet" data-icon="eye">Show answer</button>

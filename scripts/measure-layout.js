@@ -15,7 +15,7 @@
   const inView = (r) => r.top >= -1 && r.left >= -1 && r.bottom <= vh + 1 && r.right <= vw + 1;
 
   const question = document.querySelector('#question:not(.hidden) .q-prompt');
-  const actions = [...document.querySelectorAll('#screen-game .dock > .card:not(.hidden), #host-controls:not(.hidden), #buzzer:not(.hidden)')]
+  const actions = [...document.querySelectorAll('#screen-game .dock > .card:not(.hidden), #host-controls:not(.hidden):not(.slot-reserved), #buzzer:not(.hidden):not(.slot-reserved)')]
     .filter(shown);
   const topbar = [...document.querySelectorAll('.topbar > *')].filter(shown).map((el) => ({ el, r: box(el) }));
   const overlaps = [];

@@ -14,6 +14,8 @@ import { releasePointerFocus } from './pointerFocus';
 import { createDraftSender } from './draftSender';
 import { auctionTurnHint, formatReaction } from './statusText';
 import { hostBannerText } from './hostBanner';
+import { keepInViewport } from './keepInViewport';
+import { addSteppers } from './numberStepper';
 import { lang, serverText, setLang, t, tn, translatePage, type Lang } from './i18n';
 import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentItem,
   GameEvent, JoinAck, NoPayloadCommand, PackListItem, RoomState, ServerToClientEvents } from './types';
@@ -81,6 +83,9 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   let state: RoomState | null = null;
   let clockOffset = 0; // serverTime - Date.now()
   let bestRtt = Infinity;
+  // Typical round trip, sent with each probe so the server can fit the buzzer open lead and
+  // comparison window to the slowest phone (server/game/buzzTiming.ts).
+  let smoothRtt: number | null = null;
   let actionUncertain = false;
   const uncertainActionMessage = t('Action outcome unknown. It may still have applied; check the game state before retrying.');
   const unsentActionMessage = t('Action was not sent. Reconnect before trying again.');
@@ -89,15 +94,18 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   function syncClockSample() {
     if (!socket.connected) return;
     const sentAt = Date.now();
-    socket.emit('clock:ping', {}, (res) => {
+    socket.emit('clock:ping', smoothRtt == null ? {} : { rtt: Math.round(smoothRtt) }, (res) => {
       if (!res?.ok || !Number.isFinite(res.serverTime)) return;
       const receivedAt = Date.now();
       const rtt = receivedAt - sentAt;
+      smoothRtt = smoothRtt == null ? rtt : smoothRtt * 0.7 + rtt * 0.3;
       const sampleOffset = res.serverTime + rtt / 2 - receivedAt;
       if (rtt <= bestRtt) {
         bestRtt = rtt;
         clockOffset = sampleOffset;
-      } else {
+      } else if (rtt <= bestRtt * 1.5 + 10) {
+        // A slow sample's offset can be wrong by half its extra delay (uneven up/down links), so
+        // only near-best samples refine the estimate; blending every sample let jitter creep in.
         clockOffset = clockOffset * 0.8 + sampleOffset * 0.2;
       }
     });
@@ -105,6 +113,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
 
   async function calibrateClockBurst() {
     bestRtt = Infinity;
+    // A reconnect may be on another network; measure the round trip afresh.
+    smoothRtt = null;
     for (let i = 0; i < 4; i++) {
       syncClockSample();
       await new Promise((resolve) => setTimeout(resolve, 120));
@@ -168,6 +178,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     event.stopPropagation();
     const open = $('#volume-pop').classList.toggle('hidden') === false;
     button('#btn-volume').setAttribute('aria-expanded', String(open));
+    // On a phone the speaker sits mid-bar, so the right-aligned menu ran off the left edge.
+    if (open) keepInViewport($('#volume-pop'));
   };
   document.addEventListener('click', (event) => {
     if (!(event.target as Element).closest?.('.volume')) {
@@ -469,7 +481,6 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     renderBoard();
     renderQuestion();
     renderTypedAnswer();
-    renderAnswerPass();
     renderStakeAuction();
     renderForAll();
     renderAppeals();
@@ -579,22 +590,25 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     const { you, game } = state;
     const mod = you.canModerate && game.phase !== 'lobby';
     $('#host-controls').classList.toggle('hidden', !mod);
+    if (!mod) $('#host-controls').classList.remove('slot-reserved');
     $('#host-tools').classList.toggle('hidden', !mod || tvMode);
     if (!mod) return renderHostMenu();
     button('#btn-pause').classList.toggle('hidden', game.phase === 'paused');
     button('#btn-pause').disabled = game.phase === 'gameOver';
     button('#btn-resume').classList.toggle('hidden', game.phase !== 'paused');
-    button('#btn-undo-judgment').classList.toggle('hidden', !game.undoJudgment);
+    // A stand-in host never rules on their own answer; the server refuses it (Room.assertNotOwnRuling).
+    const ownAnswer = game.phase === 'answering' && game.buzzer.winnerId === you.id;
+    button('#btn-undo-judgment').classList.toggle('hidden', !game.undoJudgment || game.undoJudgment.playerId === you.id);
     for (const button of $('#host-controls').querySelectorAll('button')) {
       const action = button.dataset.act;
       // Tapped answers judge themselves; written ones wait for the text or its deadline.
       const tapAnswer = (game.current?.answerType ?? 'text') !== 'text';
-      if (action?.startsWith('judge-')) button.disabled = game.phase !== 'answering' ||
+      if (action?.startsWith('judge-')) button.disabled = game.phase !== 'answering' || ownAnswer ||
         ((!state.settings.oral || tapAnswer) && !game.buzzer.typedAnswer?.submitted && !game.buzzer.typedAnswer?.closed);
-      // Mirrors GameEngine.passAnswer and the answerer's own Pass card (renderAnswerPass).
-      if (action === 'game:passAnswer') button.disabled = game.phase !== 'answering' || !!game.current?.assignedId ||
+      // Mirrors GameEngine.passAnswer.
+      if (action === 'game:passAnswer') button.disabled = game.phase !== 'answering' || ownAnswer || !!game.current?.assignedId ||
         !!game.buzzer.typedAnswer?.submitted || !!game.buzzer.typedAnswer?.closed;
-      if (action === 'game:reveal') button.disabled = game.current?.type === 'forAll' ||
+      if (action === 'game:reveal') button.disabled = game.current?.type === 'forAll' || ownAnswer ||
         !(['reading', 'buzzerOpen', 'answering'].includes(game.phase) ||
           (game.phase === 'reveal' && !game.current?.answerShown));
       // Nothing to skip while the picked cell is still animating; once the card is up, the host may skip it.
@@ -628,8 +642,9 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       control.classList.toggle('hidden', control.disabled);
     }
     // An empty bar is just a blue strip; hide it until this step has something to press.
+    // It keeps its slot (layout.css, .slot-reserved) so the table does not resize every step.
     const busy = [...$('#host-controls').children].some((el) => !el.classList.contains('hidden'));
-    $('#host-controls').classList.toggle('hidden', !busy);
+    $('#host-controls').classList.toggle('slot-reserved', !busy);
     renderHostMenu();
   }
 
@@ -988,7 +1003,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
           judgeButton.textContent = label;
           judgeButton.setAttribute('aria-label', correct ? t('{name}: mark answer correct', { name: player.name })
             : t('{name}: mark answer wrong', { name: player.name }));
-          judgeButton.disabled = game.phase !== 'forAllJudge';
+          judgeButton.disabled = game.phase !== 'forAllJudge' || player.id === you.id;
           judgeButton.onclick = () => send('game:judgeForAll', { playerId: player.id, correct });
           row.append(judgeButton);
         }
@@ -1223,7 +1238,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       // Naming the person keeps the menu readable when it floats over the board.
       panel.append(Object.assign(document.createElement('strong'), { className: 'menu-title', textContent: p.name }));
       actions.append(summary, panel);
-      if (you.canModerate && p.role === 'player') {
+      // A stand-in host does not change their own score.
+      if (you.canModerate && p.role === 'player' && p.id !== you.id) {
         const row = document.createElement('div');
         row.className = 'row';
         const plus = Object.assign(document.createElement('button'), { type: 'button', textContent: '+100' });
@@ -1355,6 +1371,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
         type: 'button', className: correct ? 'ok' : 'bad', textContent: correct ? '✓' : '✗',
       });
       b.setAttribute('aria-label', `${correct ? t('Correct') : t('Wrong')}: ${name}`);
+      // A stand-in host does not judge their own final answer.
+      b.disabled = playerId === state?.you?.id;
       b.onclick = () => send('game:judgeFinal', { playerId, correct });
       return b;
     };
@@ -1380,13 +1398,22 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       if (!menu.contains(event.target as Node)) menu.open = false;
     }
   });
+  // A podium low in the scoreboard column opened its menu past the bottom of the screen (1024x768),
+  // so an open menu slides up (or down) until it fits. 'toggle' does not bubble, hence the capture.
+  // A re-render rebuilds the menu already open, which fires 'toggle' again and refits it.
+  document.addEventListener('toggle', (event) => {
+    const menu = event.target as HTMLElement;
+    if (!(menu instanceof HTMLDetailsElement) || !menu.matches('.player-menu') || !menu.open) return;
+    const panel = menu.querySelector<HTMLElement>('.player-menu-panel');
+    if (panel) keepInViewport(panel);
+  }, true);
 
   /* ---------------- lobby settings & packs ---------------- */
 
   const numberSettingKeys = [
     'maxPlayers', 'timeForBlockingButton', 'buzzSyncWindowMs', 'readingSpeed', 'timeForThinkingOnQuestion',
     'timeForPrintingAnswer', 'timeForMakingStake', 'timeForThinkingOnSpecial',
-    'timeForFinalThinking', 'timeOfRound', 'timeForQuestionIntro', 'timeForQuestionReady', 'timeForChoosingQuestion', 'timeForChoosingFinalTheme',
+    'timeForFinalThinking', 'timeForQuestionIntro', 'timeForQuestionReady', 'timeForChoosingQuestion', 'timeForChoosingFinalTheme',
   ] as const;
   let packsLoaded = false;
   let knownPacks: PackListItem[] = [];
@@ -1628,7 +1655,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       select('#set-buzzSyncMode').value = s.buzzSyncMode;
     }
     $('#set-buzzSyncMode-desc').textContent = s.buzzSyncMode === 'clientTimestamp'
-      ? t('Presses within {ms} ms are compared by device time. Fairer on mixed Wi‑Fi.', { ms: s.buzzSyncWindowMs })
+      ? t('Presses within {ms} ms are compared by device time, longer for a slow connection. Fairer on mixed Wi‑Fi.', { ms: s.buzzSyncWindowMs })
       : t('Simplest. A slower connection can lose a close press.');
 
     for (const key of numberSettingKeys) {
@@ -1682,6 +1709,9 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       saveSetting(input(`#set-${key}`), { [key]: input(`#set-${key}`).checked });
     });
   }
+  // Settings and the special question's value step by fixed amounts; bids and wagers are typed
+  // (with All in), where +1 steps would only get in the way.
+  addSteppers(document.querySelectorAll<HTMLInputElement>('input[type="number"][id^="set-"], #special-price'));
   for (const key of numberSettingKeys) {
     input(`#set-${key}`).addEventListener('change', () => {
       const val = Number.parseInt(input(`#set-${key}`).value, 10);
@@ -1828,7 +1858,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     wrap.className = 'media-wrap';
 
     const el = document.createElement(type);
-    // Pack media starts with the question; show a tap button only if autoplay is blocked.
+    // Pack media starts with the question; a blocked video shows a tap button, blocked audio waits for the next tap.
     el.preload = 'auto';
     routeThroughVolume(el, url);
     // Muted, not skipped: the clip keeps its length, so reading and media timing stay the same on every device.
@@ -1894,6 +1924,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
                 status.append(btn);
               })
               .catch(() => { if (canAutoPlay()) showTapToPlay(); });
+          } else if (type === 'audio') {
+            retryOnNextGesture();
           } else {
             showTapToPlay();
           }
@@ -1916,6 +1948,18 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
           .catch(() => {});
       };
       status.append(btn);
+    };
+
+    // Audio shows no play button (the level meter is only a picture), so a clip the browser
+    // blocked starts on the player's next tap or key press anywhere on the page.
+    const retryOnNextGesture = () => {
+      const retry = () => {
+        document.removeEventListener('pointerdown', retry, true);
+        document.removeEventListener('keydown', retry, true);
+        if (el.paused && !el.ended) tryPlay();
+      };
+      document.addEventListener('pointerdown', retry, true);
+      document.addEventListener('keydown', retry, true);
     };
 
     // Attempt playback as soon as metadata or data arrives
@@ -2121,6 +2165,66 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     const note = [c.comments, c.sources?.length ? t('Sources: {list}', { list: c.sources.join(', ') }) : ''].filter(Boolean).join(' ');
     if (note) slots.prompt.after(Object.assign(document.createElement('p'), { className: 'q-note', textContent: note, title: note }));
     syncStageShape(slots);
+    reportAnswerEnd(slots, c);
+  }
+
+  // The question whose options have started to arrive; a card rebuilt after that shows them at once.
+  let optionsShownId: string | null = null;
+  const OPTION_STEP_MS = 300;
+
+  // A reveal held back until the question's clips end; media events do not bubble, so the card listens in capture.
+  let pendingOptionReveal: (() => void) | null = null;
+  const onClipEnd = () => {
+    const reveal = pendingOptionReveal;
+    pendingOptionReveal = null;
+    reveal?.();
+  };
+  $('#question').addEventListener('ended', onClipEnd, true);
+  $('#question').addEventListener('error', onClipEnd, true);
+
+  /**
+   * Once the text has played and every clip has ended, the options arrive one by one; `done` runs
+   * when the last is in. A question without options calls `done` at once, as before.
+   */
+  function revealOptions(presentationId: string, done: () => void) {
+    const tiles = document.querySelector<HTMLElement>('#question .q-options.waiting');
+    if (!tiles) { optionsShownId = presentationId; done(); return; }
+    const clipPlaying = [...document.querySelectorAll<HTMLMediaElement>('#question audio, #question video')]
+      .some((clip) => !clip.ended && !clip.error);
+    if (clipPlaying) {
+      pendingOptionReveal = () => revealOptions(presentationId, done);
+      return;
+    }
+    optionsShownId = presentationId;
+    tiles.style.setProperty('--step', `${OPTION_STEP_MS}ms`);
+    tiles.classList.replace('waiting', 'arriving');
+    setTimeout(done, tiles.childElementCount * OPTION_STEP_MS);
+  }
+
+  /** Mirrors the server's hasAnswerClip: other answers close on the server's own clock. */
+  function answerHasClip(c: CurrentQuestion): boolean {
+    return c.answerType !== 'point' &&
+      (c.answerContent ?? []).some((item) => item.type === 'audio' || item.type === 'video');
+  }
+
+  /**
+   * The server closes a question once its answer clips have played out, and only the host's device
+   * can tell. A broken or missing clip counts as ended, so it never holds the question open.
+   */
+  function reportAnswerEnd(slots: StageSlots, c: CurrentQuestion) {
+    if (!state?.you?.canModerate || state.game.phase !== 'reveal' || !answerHasClip(c)) return;
+    const clips =[...slots.box.querySelectorAll<HTMLElement>('[data-content-index]')]
+      .filter((item) => Number(item.dataset.contentIndex) >= ANSWER_INDEX)
+      .flatMap((item) => [...item.querySelectorAll<HTMLMediaElement>('audio, video')]);
+    const report = () => {
+      if (clips.some((clip) => !clip.ended && !clip.error)) return;
+      socket.emit('game:contentFinished', { presentationId: c.presentationId, part: 'answer' }, () => {});
+    };
+    clips.forEach((clip) => {
+      clip.addEventListener('ended', report, { once: true });
+      clip.addEventListener('error', report, { once: true });
+    });
+    report();
   }
 
   /** Pins for every picture attempt, the target ring at reveal, and the tap target for the answerer. */
@@ -2203,7 +2307,9 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     previousContentMedia = new Map(box.dataset.questionId === questionId
       ? [...box.querySelectorAll<HTMLElement>('[data-content-index]')].flatMap((item) => {
         const media = item.querySelector<HTMLMediaElement>('audio, video');
-        return media ? [[Number(item.dataset.contentIndex),
+        // A clip that never played (the get-ready card shows it still) has no state to keep;
+        // carrying its "paused" over would read as a manual pause and block the clip's autostart.
+        return media && media.played.length ? [[Number(item.dataset.contentIndex),
           { paused: media.paused, currentTime: media.currentTime }] as const] : [];
       }) : []);
     if (pendingPick && pendingPick.presentationId !== questionId) pendingPick = null;
@@ -2223,13 +2329,13 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     if (typeLabel) heading.append(Object.assign(document.createElement('span'), { className: 'q-type', textContent: typeLabel }));
     box.append(heading);
     // The get-ready countdown sits under the heading so the question itself stays readable.
-    // updateOrientiers ticks its number and bar; the card is rebuilt when reading starts.
+    // updateOrientiers ticks its number; the ring around it drains on the frame clock's --left.
+    // The card is rebuilt when reading starts.
     if (getReady) {
       const ready = Object.assign(document.createElement('div'), { className: 'q-ready', role: 'status' });
       ready.append(
         Object.assign(document.createElement('span'), { className: 'q-ready-label', textContent: t('Get ready') }),
         Object.assign(document.createElement('b'), { className: 'q-ready-count' }),
-        Object.assign(document.createElement('i'), { className: 'q-ready-bar' }),
       );
       box.append(ready);
     }
@@ -2242,9 +2348,13 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
         questionPresenter?.dispose();
         presenterId = c.presentationId;
         presenterFinishedId = null;
+        pendingOptionReveal = null;
         questionPresenter = new ContentPresenter(c.content, renderOrderedContent, () => {
-          presenterFinishedId = c.presentationId;
-          acknowledgePresentedContent();
+          // The options are part of the question: the host reports it read only once they are all in.
+          revealOptions(c.presentationId, () => {
+            presenterFinishedId = c.presentationId;
+            acknowledgePresentedContent();
+          });
         }, state.settings.timeForMediaDelay * 1000,
         state.settings.partialText && !matchMedia('(prefers-reduced-motion: reduce)').matches
           ? state.settings.readingSpeed : 0);
@@ -2268,10 +2378,17 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     if (contentVisible && c.answerType === 'select' && c.answerOptions.length) {
       const wrongPicks = new Set(c.picks.filter((pick) => !pick.correct).map((pick) => pick.value));
       const right = new Set((c.answerShown ? c.right ?? [] : []).map((label) => label.toUpperCase()));
-      box.append(optionTiles(c.answerOptions.map((option) => ({
+      const tiles = optionTiles(c.answerOptions.map((option) => ({
         ...option,
         state: right.has(option.label.toUpperCase()) ? 'right' : wrongPicks.has(option.label) ? 'wrong' : 'idle',
-      })), canTap ? (label) => send('game:answer', { answer: label }) : null));
+      })), canTap ? (label) => send('game:answer', { answer: label }) : null);
+      // While the question still plays its options wait, keeping their place; revealOptions brings them in.
+      // The get-ready countdown comes before the clip, so the options wait through it too.
+      if ((presenting || getReady) && optionsShownId !== questionId) tiles.classList.add('waiting');
+      // The options stand in a column beside the picture or clip (a phone stacks them under it, in CSS).
+      const split = Object.assign(document.createElement('div'), { className: 'q-split' });
+      slots.media.replaceWith(split);
+      split.append(slots.media, tiles);
     }
     if (canTap && c.answerType === 'point') {
       const actions = Object.assign(document.createElement('div'), { className: 'q-actions' });
@@ -2334,15 +2451,6 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
             : t('Waiting for {name} to submit an answer.', { name: winnerName });
   }
 
-  // Mirrors GameEngine.passAnswer: only the buzzed-in answerer, never on an assigned question.
-  function renderAnswerPass() {
-    const { game, you } = activeState();
-    const typed = game.buzzer.typedAnswer;
-    const visible = !tvMode && game.phase === 'answering' && game.buzzer.winnerId === you.id &&
-      !game.current?.assignedId && !typed?.submitted && !typed?.closed;
-    $('#answer-pass').classList.toggle('hidden', !visible);
-  }
-
   $('#typed-answer-form').addEventListener('submit', async (event) => {
     event.preventDefault();
     const field = textarea('#typed-answer-input');
@@ -2384,7 +2492,6 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       const readyCount = document.querySelector<HTMLElement>('#question .q-ready-count');
       if (readyCount && timer?.name === 'ready') {
         readyCount.textContent = String(Math.max(1, Math.ceil(remMs / 1000)));
-        $('#question .q-ready-bar').style.transform = `scaleX(${(pct / 100).toFixed(3)})`;
       }
       // With no clock the bar shows a fixed state (set below); a running clock is drawn by frameClock.
       if (!timer) $('#stage-progress-fill').style.width = `${pct}%`;
@@ -2474,6 +2581,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
         setStage('open', t('Buzz now'), you.role === 'player' ? (touchOnly ? t('Tap the button.') : t('Tap the button or press Space.')) : t('Players can press their buttons.'));
       } else if (game.phase === 'answering') {
         const winnerId = game.buzzer.winnerId;
+        // A stand-in host who is answering waits for a verdict like any player.
+        const judges = you.canModerate && winnerId !== you.id;
         const info = game.buzzer.winnerInfo;
         const reaction = info?.reactionMs != null ? ` ${t('Reaction {time}.', { time: formatReaction(info.reactionMs) })}` : '';
         const title = winnerId === you.id ? t('Your answer') : t('{name} answers', { name: nameOf(winnerId) });
@@ -2485,15 +2594,15 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
         } else if (!settings.oral) {
           const typed = game.buzzer.typedAnswer;
           setStage('answering', title, typed?.submitted
-            ? you.canModerate ? t('Answer submitted. Choose Correct or Wrong.') : t('Answer submitted. Waiting for the verdict.')
+            ? judges ? t('Answer submitted. Choose Correct or Wrong.') : t('Answer submitted. Waiting for the verdict.')
             : typed?.closed ? t('Time is up. Waiting for the verdict.')
               : winnerId === you.id ? t('Type your answer before time runs out.') : t('Waiting for a written answer.'));
         } else if (!timer || remMs <= 0) {
           // The host still judges after the answer clock ends; make that handoff explicit.
           $('#stage-countdown').textContent = '0';
-          setStage('answering', title, you.canModerate ? t('Time is up. Choose Correct or Wrong.') : t('Time is up. Waiting for the verdict.'));
+          setStage('answering', title, judges ? t('Time is up. Choose Correct or Wrong.') : t('Time is up. Waiting for the verdict.'));
         } else {
-          setStage('answering', title, (you.canModerate ? t('Listen, then choose Correct or Wrong.')
+          setStage('answering', title, (judges ? t('Listen, then choose Correct or Wrong.')
             : winnerId === you.id ? t('Say your answer out loud.') : t('Listen to the answer.')) + reaction);
         }
       } else if (game.phase === 'finalQuestion') {
@@ -2508,8 +2617,11 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       } else if (game.phase === 'reveal') {
         if (game.current?.answerShown) {
           // The answer itself is on the table; saying it here too would print it twice.
-          setStage('reveal', t('Answer shown'),
-            timer ? t('Back to the board in a moment.') : you.canModerate ? t('Press Next to continue.') : t('Waiting for the host.'));
+          // Outside the final an answer clip has no clock: the question closes when the clip ends.
+          const clipLeft = !timer && game.round?.type !== 'final' && !!game.current && answerHasClip(game.current);
+          setStage('reveal', t('Answer shown'), timer ? t('Back to the board in a moment.')
+            : clipLeft ? t('Back to the board when the answer ends.')
+              : you.canModerate ? t('Press Next to continue.') : t('Waiting for the host.'));
           if (!timer) $('#stage-progress-fill').style.width = '100%';
         } else {
           setStage('idle', t('No one got it'), you.canModerate
@@ -2527,7 +2639,12 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     const showBuzzer = you.role === 'player' && ['intro', 'ready', 'reading', 'buzzerOpen', 'answering'].includes(game.phase) &&
       (settings.oral || game.phase !== 'answering') &&
       game.current?.type !== 'forAll' && game.round?.type !== 'final';
-    buzzerBtn.classList.toggle('hidden', !showBuzzer);
+    // A player's idle buzzer keeps its slot (layout.css, .slot-reserved) so the table does not resize
+    // each time the buttons come and go. For-all and final questions bring their own answer cards.
+    const keepSlot = you.role === 'player' && game.phase !== 'lobby' && game.phase !== 'gameOver' &&
+      game.current?.type !== 'forAll' && game.round?.type !== 'final';
+    buzzerBtn.classList.toggle('hidden', !showBuzzer && !keepSlot);
+    buzzerBtn.classList.toggle('slot-reserved', !showBuzzer && keepSlot);
     buzzerBtn.classList.toggle('moderator-buzzer', !!you?.canModerate);
     if (!showBuzzer) return;
 
@@ -2542,7 +2659,9 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     $('#buzzer-sub').textContent = view.sub;
     // "Wait" stays on screen from the pick until the buttons open, so the thumb has a home and nothing jumps.
     // Other idle states (already answered, someone else answering) only cover the podiums, so they hide.
-    buzzerBtn.classList.toggle('hidden', buzzerBtn.classList.contains('buzz-idle'));
+    const idle = buzzerBtn.classList.contains('buzz-idle');
+    buzzerBtn.classList.toggle('hidden', idle && !keepSlot);
+    buzzerBtn.classList.toggle('slot-reserved', idle && keepSlot);
   }
 
   /* ---------------- fast tick for smooth countdown bars ---------------- */
@@ -2793,7 +2912,6 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     const me = state?.participants.find((p) => p.id === state?.you?.id);
     if (me) send('player:ready', { ready: !me.ready });
   });
-  $('#btn-pass-answer').addEventListener('click', () => send('game:passAnswer'));
 
   $('#steam-form').addEventListener('submit', (e) => {
     e.preventDefault();

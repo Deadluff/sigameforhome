@@ -46,7 +46,6 @@ export interface RoomState {
     timeForChoosingFinalTheme: number;
     timeForThinkingOnSpecial: number;
     timeForFinalThinking: number;
-    timeOfRound: number;
     timeForMediaDelay: number;
     timeForQuestionIntro: number;
     timeForQuestionReady: number;
@@ -194,7 +193,7 @@ export interface CommandPayloads {
   'game:judgeForAll': { playerId: string; correct: boolean };
   'game:appealRequest': { judgmentId: number };
   'game:appealVote': { support: boolean };
-  'game:contentFinished': { presentationId: string };
+  'game:contentFinished': { presentationId: string; part?: 'answer' };
 }
 
 export type CommandEvent = NoPayloadCommand | keyof CommandPayloads;
@@ -232,5 +231,5 @@ export type ClientToServerEvents = {
   'session:join': (payload: { nickname: string; asSpectator?: boolean }, ack: (result: JoinAck) => void) => void;
   'session:resume': (payload: { token: string }, ack: (result: { ok: boolean; resumed?: boolean }) => void) => void;
   'game:buzz': (payload: { clientAt: number }, ack: (result: Ack) => void) => void;
-  'clock:ping': (payload: Record<string, never>, ack: (result: { ok: boolean; serverTime: number }) => void) => void;
+  'clock:ping': (payload: { rtt?: number }, ack: (result: { ok: boolean; serverTime: number }) => void) => void;
 };

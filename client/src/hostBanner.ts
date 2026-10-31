@@ -12,6 +12,10 @@ export function hostBannerText(state: Pick<RoomState, 'you' | 'participants' | '
   if (!state.you || state.game.phase === 'lobby' || state.game.phase === 'gameOver') return null;
   const host = state.participants.find((p) => p.role === 'host');
   if (!host || host.connected || state.you.role === 'host') return null;
+  // A stand-in cannot rule on their own answer (Room.assertNotOwnRuling), so say why the verdict waits.
+  if (state.you.canModerate && state.game.phase === 'answering' && state.game.buzzer.winnerId === state.you.id) {
+    return t('The host is offline. Your answer waits for their verdict.');
+  }
   if (state.you.canModerate) return t('The host is offline. You can run the game until they are back.');
   return t('Host reconnecting — the game waits.');
 }

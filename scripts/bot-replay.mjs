@@ -86,9 +86,9 @@ async function playPack(file, name) {
   let res = await host.emit('packs:load', { file });
   if (!res.ok) { issue(`load ${name}: ${res.error}`); return; }
   res = await host.emit('settings:update', {
-    gameMode: 'classic', timeForQuestionIntro: 1, timeForQuestionReady: 1, timeForThinkingOnQuestion: 2, timeForPrintingAnswer: 5,
-    timeOfRound: 0, timeForMediaDelay: 0, timeForChoosingQuestion: 30, timeForFinalThinking: 10,
-    timeForMakingStake: 10, timeForThinkingOnSpecial: 5, timeForGivingACat: 30, falseStart: true,
+    gameMode: 'classic', timeForQuestionIntro: 1, timeForQuestionReady: 1, timeForThinkingOnQuestion: 3, timeForPrintingAnswer: 5,
+    timeForMediaDelay: 0, timeForChoosingQuestion: 30, timeForFinalThinking: 15,
+    timeForMakingStake: 10, timeForThinkingOnSpecial: 10, timeForGivingACat: 30, falseStart: true,
     playAllQuestionsInFinalRound: FINALS,
   });
   if (!res.ok) issue(`settings ${name}: ${res.error}`);

@@ -180,3 +180,18 @@ test('the host can award half or double the value for a correct answer', (t) => 
 });
 
 // The pick intro has its own suite: scripts/question-intro.test.js.
+
+test('a select question with a clip reads until the host device reports the clip and options are in', (t) => {
+  for (const falseStart of [true, false]) {
+    const { room } = createRoom(t, { falseStart });
+    const engine = room.engine;
+    // Its options appear one by one only after the clip ends, so no estimate may open the buttons first.
+    engine.pack.rounds[0].themes[0].questions[1].content.push({ type: 'video', value: 'v.mp4', url: '/media/v.mp4' });
+    engine.selectQuestion(null, true, 0, 1);
+    if (engine.phase === 'intro') { clearTimeout(engine.timer?.handle); engine.beginQuestion(); }
+    assert.equal(engine.phase, 'reading', `falseStart ${falseStart}`);
+    assert.equal(engine.timer, null, 'no reading estimate');
+    assert.deepEqual(engine.contentFinished(engine.current.presentationId), { advanced: true });
+    assert.equal(engine.phase, 'buzzerOpen');
+  }
+});

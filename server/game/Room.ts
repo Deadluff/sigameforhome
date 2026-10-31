@@ -13,6 +13,7 @@ import { applySettingsPatch, defaultSettings, type GameSettings } from './settin
 import { takeGraceMode } from './seatGrace.ts';
 import { clearHandover, handoverReady, startHandover } from './moderationHandover.ts';
 import { assertNicknameFree, normalizeNickname } from './nickname.ts';
+import { LatencyBoard } from './buzzTiming.ts';
 import { safeTimeout } from '../utils/safeTimer.ts';
 
 /** Moments with no live answer, wager or bid, where seats may change hands. */
@@ -78,6 +79,8 @@ export class Room extends EventEmitter {
   settings: GameSettings = defaultSettings();
   loadedPack: LoadedPack | null = null;
   engine: GameEngine;
+  /** Not persisted: round trips belong to live connections. */
+  latency = new LatencyBoard();
   removalTimers = new Map<string, ReturnType<typeof setTimeout>>();
   changeScheduled = false;
 
@@ -90,6 +93,11 @@ export class Room extends EventEmitter {
 
   players(): Participant[] {
     return [...this.participants.values()].filter((p) => p.role === ROLES.PLAYER);
+  }
+
+  /** The slowest round trip among seated, connected players; their screens set the buzzer pace. */
+  worstPlayerRttMs(): number | null {
+    return this.latency.worst(this.players().filter((p) => p.connected).map((p) => p.id));
   }
 
   host(): Participant | null {
@@ -122,6 +130,20 @@ export class Room extends EventEmitter {
    */
   canManage(pid: string | null | undefined): boolean {
     return this.canModerate(pid);
+  }
+
+  /**
+   * A player standing in for an absent host must not rule on their own answer or score: they
+   * could mark themselves correct, pass, or end the question to dodge a miss. The host never
+   * answers, so this only ever stops a stand-in. Someone else (the returning host) rules instead.
+   */
+  assertNotOwnRuling(actorId: string, targetId: string | null | undefined): void {
+    if (targetId && targetId === actorId) throw new Error('Someone else must rule on your own answer');
+  }
+
+  /** Whoever is on the spot right now: the buzzed-in answerer, while they answer. */
+  currentAnswererId(): string | null {
+    return this.engine.phase === PHASES.ANSWERING ? this.engine.buzzer.winnerId : null;
   }
 
   /* ------------------------------------------------------------ sessions */
@@ -177,6 +199,7 @@ export class Room extends EventEmitter {
     if (!p) return null;
     // A new socket must not revive media URLs captured from an earlier connection.
     p.mediaTicket = crypto.randomBytes(24).toString('base64url');
+    this.latency.forget(pid);
     const previous = p.socketId && p.socketId !== socketId ? p.socketId : null;
     p.socketId = socketId;
     p.connected = true;
@@ -415,6 +438,7 @@ export class Room extends EventEmitter {
 
   adjustScore(actorId: string, targetId: string, delta: number): void {
     if (!this.canModerate(actorId)) throw new Error('Only the host can change scores');
+    this.assertNotOwnRuling(actorId, targetId);
     const p = this.participants.get(targetId);
     if (!p) throw new Error('Unknown participant');
     // Leave room for the bounded pack's remaining question values to change the score.

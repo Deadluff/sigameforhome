@@ -91,6 +91,11 @@
 .lang-switch button[aria-pressed="false"] { color: var(--mist); }
 /* The sound menu gains a second row for the language, so it becomes a grid: mute, range and level stay on one line. */
 .volume-pop { display: grid; grid-template-columns: auto auto auto; }
+/*
+ * A 320 px phone is narrower than the menu: the range gives up width so mute and level stay on screen.
+ * The width stays fixed, not fluid: the menu is absolutely placed and shrinks to fit, so a fluid range collapsed.
+ */
+.volume-pop input[type="range"] { width: min(168px, calc(100vw - 160px)); }
 .volume-pop .keep-awake, .volume-pop .lang-switch { grid-column: 1 / -1; }
 .volume-pop .lang-switch { justify-content: flex-end; }
 .entry-card .lang-switch { align-self: center; }
@@ -112,6 +117,12 @@
 #host-controls, .buzzer { position: sticky; bottom: max(8px, env(safe-area-inset-bottom)); z-index: 4; }
 /* A player who also moderates gets both toolbars; only the host toolbar stays pinned. */
 .buzzer.moderator-buzzer { position: static; }
+/*
+ * An idle bar (nothing to press this step). Phones scroll, so it simply goes away there. The
+ * one-screen layouts below keep its space instead: the table fills whatever height is left, so a
+ * bar coming and going made the whole table jump.
+ */
+#host-controls.slot-reserved, .buzzer.slot-reserved { display: none; }
 
 /* Desktop play fits one screen, like the show: the table absorbs whatever height the rest leaves. */
 @media (min-width: 861px) and (min-height: 620px) {
@@ -131,6 +142,30 @@
   #screen-game:not([data-phase="lobby"]):not([data-phase="gameOver"]) { height: calc(100dvh - 32px); }
   #screen-game:not([data-phase="lobby"]):not([data-phase="gameOver"]) .stage-layout { flex: 1 1 0; min-height: 0; grid-template-rows: auto minmax(0, 1fr); }
   #screen-game:not([data-phase="lobby"]):not([data-phase="gameOver"]) #game-stage { min-height: 0; height: auto; }
+}
+
+/* Both one-screen layouts above: idle bars keep their slot so the table never changes size. */
+@media (min-width: 861px) and (min-height: 620px), (min-width: 601px) and (max-width: 860px) and (min-height: 700px) {
+  #host-controls.slot-reserved, .buzzer.slot-reserved { display: flex; visibility: hidden; }
+  /* One row of 44 px controls, or the special-setup form (2 px taller), whether busy or reserved. */
+  #host-controls { min-height: 64px; }
+  /* An answer card takes the player's attention (and room) instead; an empty slot would only squeeze the table. */
+  #screen-game:has(.dock > .card:not(.hidden)) .buzzer.slot-reserved { display: none; }
+  /*
+   * The appeal card comes up at reveal, right after a verdict, so it takes the buzzer's slot at the
+   * buzzer's height instead of pushing the table up. Compact: podiums already show every verdict,
+   * so only the rows a player can act on stay; a long vote scrolls inside the slot.
+   */
+  #screen-game:has(.buzzer.slot-reserved) #appeals:not(.hidden) {
+    height: 104px; padding: 10px 16px; gap: 6px; align-content: center; overflow-y: auto;
+  }
+  #screen-game:has(.buzzer.slot-reserved) #appeals .appeal-judgment:not(:has(button)) { display: none; }
+  /* With one row left, its divider and padding (dock.css) only cost slot height. */
+  #screen-game:has(.buzzer.slot-reserved) #appeals .appeal-judgment { padding: 0; border-top: 0; }
+  /* At reveal the status is the generic "players may request a review", which the button already says;
+     during a vote the status sentence names the appeal, so the title goes instead. */
+  #screen-game:not([data-phase="appealVote"]):has(.buzzer.slot-reserved) #appeal-status,
+  #screen-game[data-phase="appealVote"]:has(.buzzer.slot-reserved) #appeals-title { display: none; }
 }
 
 @media (max-width: 860px) {

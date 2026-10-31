@@ -152,6 +152,13 @@
 
 /* Moderator menu: a corner button opens a popover, so the podium never changes shape. */
 .player-menu { position: absolute; top: 6px; right: 6px; z-index: 3; }
+/*
+ * The podium with an open menu rises above everything on the page except the top-bar menus and
+ * dialogs. Lifting only the menu was not enough: the podium itself is the stacking context once it
+ * answers (its transform), and at z 3 the menu lost to the pinned host bar (4), the table's clock
+ * frame (4), its round splash (6), the lobby's sticky start bar, and the next podiums' own menu buttons.
+ */
+.player:has(> .player-menu[open]) { z-index: 20; }
 .player-menu summary {
   display: grid; place-items: center; width: 32px; min-height: 32px; padding: 0; border-radius: 8px;
   color: var(--mist); font-size: var(--t-l); line-height: 1; list-style: none;
@@ -200,6 +207,18 @@
   .players .player.judging { width: 240px; grid-template-areas: "avatar name" "avatar score" "verdict verdict"; }
   /* On a phone your own score comes first; everyone else scrolls. */
   .player.you { order: -1; }
-  /* The podium row scrolls sideways and would clip a popover, so on phones the menu is a bottom sheet. */
-  .player-menu-panel, #host-seat .player-menu-panel { position: fixed; top: auto; left: 8px; right: 8px; bottom: max(8px, env(safe-area-inset-bottom)); width: auto; z-index: 20; }
+}
+
+/*
+ * The podium row scrolls sideways and would clip a popover, so on phones the menu is a bottom sheet.
+ * Landscape phones too: their scoreboard sits in the right column, so the side popover opened off
+ * screen, and the column scrolls, which clipped it. Keep the second query in step with landscape.css.
+ */
+@media (max-width: 600px), (orientation: landscape) and (max-height: 500px) {
+  .player-menu-panel, #host-seat .player-menu-panel, .host-col .players .player-menu-panel {
+    position: fixed; top: auto; left: auto; right: max(8px, env(safe-area-inset-right)); bottom: max(8px, env(safe-area-inset-bottom));
+    width: min(420px, calc(100vw - 16px)); max-height: calc(100dvh - 16px); overflow-y: auto; z-index: 20;
+  }
+  /* A transform makes the podium the sheet's containing block, so the answering lift waits while the menu is open. */
+  .player:has(> .player-menu[open]) { transform: none; }
 }
