@@ -178,6 +178,8 @@
   background: var(--set-sunk); border: 1px solid var(--rule-strong); box-shadow: 0 14px 36px rgba(0, 0, 0, .6);
 }
 .player-menu .menu-title { padding: 2px 2px 0; color: var(--mist); font-size: var(--t-xs); font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Buzzer timing for the host; wraps, since a phone menu is too narrow for one line. */
+.player-menu .menu-signal { display: block; padding: 0 2px; color: var(--mist); font-size: var(--t-xs); line-height: 1.3; }
 /* The host seat sits high on the page, so its menu opens downward. */
 #host-seat .player-menu-panel { bottom: auto; top: calc(100% + 6px); }
 .player-menu .row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }

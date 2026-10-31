@@ -11,6 +11,8 @@ export interface Participant {
   pingMs: number | null;
   oneWayMs: number | null;
   jitterMs: number | null;
+  /** How this screen met the last green signals (server/game/buzzTiming.ts); null until reported. */
+  signal: { leadMs: number; worstLeadMs: number; paintMs: number; clockErrMs: number } | null;
 }
 
 export interface ContentItem {
@@ -238,4 +240,5 @@ export type ClientToServerEvents = {
   'session:resume': (payload: { token: string }, ack: (result: { ok: boolean; resumed?: boolean }) => void) => void;
   'game:buzz': (payload: { clientAt: number }, ack: (result: Ack) => void) => void;
   'clock:ping': (payload: { rtt?: number }, ack: (result: { ok: boolean; serverTime: number }) => void) => void;
+  'clock:signal': (payload: { leadMs: number; paintMs: number; clockErrMs: number }) => void;
 };

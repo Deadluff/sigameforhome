@@ -2,7 +2,7 @@
  * Socket.io transport: maps client events to Room / GameEngine calls.
  */
 import type { Server, Socket } from 'socket.io';
-import { PHASES, type Role } from '../game/constants.ts';
+import { PHASES, ROLES, type Role } from '../game/constants.ts';
 import type { Participant, Room } from '../game/Room.ts';
 import { SETTINGS_SCHEMA } from '../game/settings.ts';
 import { renameParticipant } from '../game/nickname.ts';
@@ -142,6 +142,11 @@ export function registerSocketHandlers(io: Server, room: Room, limits: SocketLim
     on<{ rtt?: unknown }>('clock:ping', 'none', ({ rtt }, pid) => {
       if (pid && room.participants.get(pid)?.socketId === socket.id) room.recordPing(pid, rtt);
       return { serverTime: Date.now() };
+    });
+
+    // Buzzer telemetry: each player's screen reports how it met the scheduled green signal.
+    on<{ leadMs?: unknown; paintMs?: unknown; clockErrMs?: unknown }>('clock:signal', 'member', (report, pid) => {
+      if (room.participants.get(pid)?.role === ROLES.PLAYER) room.recordSignal(pid, report);
     });
 
     /* ---- session ---- */

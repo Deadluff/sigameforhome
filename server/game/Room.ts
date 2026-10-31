@@ -13,7 +13,7 @@ import { applySettingsPatch, defaultSettings, type GameSettings } from './settin
 import { takeGraceMode } from './seatGrace.ts';
 import { clearHandover, handoverReady, startHandover } from './moderationHandover.ts';
 import { assertNicknameFree, normalizeNickname } from './nickname.ts';
-import { LatencyBoard } from './buzzTiming.ts';
+import { LatencyBoard, type SignalStats } from './buzzTiming.ts';
 import { safeTimeout } from '../utils/safeTimer.ts';
 
 /** Moments with no live answer, wager or bid, where seats may change hands. */
@@ -61,6 +61,8 @@ export interface RoomSnapshot {
     pingMs: number | null;
     oneWayMs: number | null;
     jitterMs: number | null;
+    /** How this screen met the last green signals; null until it reports one. */
+    signal: SignalStats | null;
   }>;
   settings: GameSettings;
   pack: {
@@ -107,6 +109,14 @@ export class Room extends EventEmitter {
   /** Records a probe's round trip; the shown ping re-broadcasts only when it moves noticeably. */
   recordPing(pid: string, rtt: unknown): void {
     if (this.latency.report(pid, rtt)) this.changed();
+  }
+
+  /**
+   * Records how a screen met a green signal. It never re-broadcasts: every player reports right as
+   * the buttons open, and a redraw then would slow the presses. The next room update carries it.
+   */
+  recordSignal(pid: string, report: { leadMs?: unknown; paintMs?: unknown; clockErrMs?: unknown }): void {
+    this.latency.reportSignal(pid, report);
   }
 
   host(): Participant | null {
@@ -567,6 +577,7 @@ export class Room extends EventEmitter {
             pingMs: ping?.pingMs ?? null,
             oneWayMs: ping?.oneWayMs ?? null,
             jitterMs: ping?.jitterMs ?? null,
+            signal: p.connected ? this.latency.signal(p.id) : null,
           };
         }),
       settings: this.settings,

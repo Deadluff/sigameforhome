@@ -28,10 +28,34 @@ export interface PingStats {
   jitterMs: number;
 }
 
+/** Reports beyond this are a stalled tab or a forged value, not a timing figure. */
+const MAX_SIGNAL_MS = 5000;
+
+/**
+ * How one screen met the scheduled green signal, as the client measured it. It tells apart an
+ * update that arrived after the open moment (raise the lead) from a screen that painted late.
+ */
+export interface SignalStats {
+  /** How far ahead of the open moment the room update arrived; negative means it came late. */
+  leadMs: number;
+  /** The smallest lead among recent questions. */
+  worstLeadMs: number;
+  /** How long after the open moment the screen turned green, by its own clock estimate. */
+  paintMs: number;
+  /** Half the client's best probe round trip: how far its clock estimate can be off. */
+  clockErrMs: number;
+}
+
+const signalFigure = (raw: unknown, min: number): number | null => {
+  const value = Number(raw);
+  return Number.isFinite(value) ? Math.max(min, Math.min(MAX_SIGNAL_MS, Math.round(value))) : null;
+};
+
 /** Each client's smoothed round trip, as it reports it with its clock probes. */
 export class LatencyBoard {
   private readonly rtts = new Map<string, number>();
   private readonly samples = new Map<string, number[]>();
+  private readonly signals = new Map<string, { leads: number[]; paintMs: number; clockErrMs: number }>();
 
   /** Returns true when the shown ping moved enough to be worth a room update. */
   report(pid: string, raw: unknown): boolean {
@@ -48,6 +72,24 @@ export class LatencyBoard {
   forget(pid: string): void {
     this.rtts.delete(pid);
     this.samples.delete(pid);
+    this.signals.delete(pid);
+  }
+
+  /** Records one green signal's timing; malformed reports are dropped. */
+  reportSignal(pid: string, raw: { leadMs?: unknown; paintMs?: unknown; clockErrMs?: unknown }): void {
+    const leadMs = signalFigure(raw.leadMs, -MAX_SIGNAL_MS);
+    const paintMs = signalFigure(raw.paintMs, 0);
+    const clockErrMs = signalFigure(raw.clockErrMs, 0);
+    if (leadMs == null || paintMs == null || clockErrMs == null) return;
+    const leads = [...(this.signals.get(pid)?.leads ?? []), leadMs].slice(-JITTER_SAMPLES);
+    this.signals.set(pid, { leads, paintMs, clockErrMs });
+  }
+
+  /** The latest green signal's timing with the worst recent lead; null before the first report. */
+  signal(pid: string): SignalStats | null {
+    const s = this.signals.get(pid);
+    if (!s) return null;
+    return { leadMs: s.leads[s.leads.length - 1], worstLeadMs: Math.min(...s.leads), paintMs: s.paintMs, clockErrMs: s.clockErrMs };
   }
 
   /** The latest round trip with its spread over recent reports; null before the first report. */

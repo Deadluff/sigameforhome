@@ -20,7 +20,7 @@ import { addAmountSlider, syncAmountSlider } from './amountSlider';
 import { playWithSound, soundElement } from './soundGate';
 import { lang, serverText, setLang, t, tn, translatePage, type Lang } from './i18n';
 import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentItem,
-  GameEvent, JoinAck, NoPayloadCommand, PackListItem, RoomState, ServerToClientEvents } from './types';
+  GameEvent, JoinAck, NoPayloadCommand, PackListItem, Participant, RoomState, ServerToClientEvents } from './types';
 
 /* Client UI with clear reading/buzzer orientiers & pre-game falseStart setting. */
 (() => {
@@ -399,6 +399,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     const key = `${s.game?.phase}:${s.game?.timer?.name ?? ''}:${s.game?.current?.presentationId ?? ''}`;
     if (key !== stepKey) { stepKey = key; stepChangedAt = Date.now(); }
     if (!Number.isFinite(bestRtt)) clockOffset = s.serverTime - Date.now();
+    noteSignalArrival(s.game);
     const c = s.game?.current;
     if (c && ['intro', 'ready', 'reading'].includes(s.game.phase)) {
       lastPick = { round: s.game.roundIndex, theme: c.themeIndex, question: c.questionIndex };
@@ -1160,6 +1161,14 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     }
   };
 
+  /** A player's last green-signal timing in words; empty until their screen reports one. */
+  const signed = (ms: number) => (ms > 0 ? `+${ms}` : String(ms));
+  function signalText(p: Participant): string {
+    const s = p.signal;
+    return s ? t('Green signal: lead {lead} ms (worst {worst}) · shown {paint} ms late · clock ±{clock} ms',
+      { lead: signed(s.leadMs), worst: signed(s.worstLeadMs), paint: s.paintMs, clock: s.clockErrMs }) : '';
+  }
+
   function renderPlayers() {
     const state = activeState();
     const { participants, game, you } = state;
@@ -1232,8 +1241,9 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       else if (p.pingMs != null && (you.canModerate || p.id === you.id)) {
         const quality = p.pingMs <= 25 ? 'ping-good' : p.pingMs <= 70 ? 'ping-fair' : 'ping-poor';
         badge(`ping-badge ${quality}`, t('{ms} ms', { ms: p.pingMs }));
-        (slot.lastElementChild as HTMLElement).title = t('Round trip {rtt} ms · one way {oneWay} ms · jitter ±{jitter} ms',
-          { rtt: p.pingMs, oneWay: p.oneWayMs ?? Math.round(p.pingMs / 2), jitter: p.jitterMs ?? 0 });
+        (slot.lastElementChild as HTMLElement).title = [t('Round trip {rtt} ms · one way {oneWay} ms · jitter ±{jitter} ms',
+          { rtt: p.pingMs, oneWay: p.oneWayMs ?? Math.round(p.pingMs / 2), jitter: p.jitterMs ?? 0 }), signalText(p)]
+          .filter(Boolean).join('\n');
       }
       el.append(slot);
       // Final answers are judged on each podium, next to the answer and wager they belong to.
@@ -1259,6 +1269,9 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       const title = p.connected && p.pingMs != null
         ? t('{name} · {ms} ms (±{jitter})', { name: p.name, ms: p.pingMs, jitter: p.jitterMs ?? 0 }) : p.name;
       panel.append(Object.assign(document.createElement('strong'), { className: 'menu-title', textContent: title }));
+      // Phones have no hover for the badge's title, so the host reads the buzzer timing here.
+      const signal = you.canModerate && p.connected ? signalText(p) : '';
+      if (signal) panel.append(Object.assign(document.createElement('small'), { className: 'menu-signal', textContent: signal }));
       actions.append(summary, panel);
       // A stand-in host does not change their own score.
       if (you.canModerate && p.role === 'player' && p.id !== you.id) {
@@ -2714,6 +2727,25 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
    * run here: a full render on a slow phone took long enough to lose close presses.
    */
   let signalShownAt: number | null = null;
+  /*
+   * Buzzer telemetry for the host podium: how far ahead of the open moment the room update came,
+   * and how late green showed. A late update means the lead is too short for this link; a late
+   * paint with an early update points at the phone itself or its clock estimate.
+   */
+  let signalArrival: { at: number; leadMs: number } | null = null;
+  function noteSignalArrival(game: RoomState['game'] | undefined) {
+    const at = game?.phase === 'buzzerOpen' ? game.buzzer.openedAt : null;
+    if (at && signalArrival?.at !== at) signalArrival = { at, leadMs: Math.round(at - nowServer()) };
+  }
+  function reportOpenSignal(at: number) {
+    if (state?.you?.role !== 'player' || signalArrival?.at !== at || !Number.isFinite(bestRtt)) return;
+    socket.emit('clock:signal', {
+      leadMs: signalArrival.leadMs,
+      paintMs: Math.round(nowServer() - at),
+      clockErrMs: Math.round(bestRtt / 2),
+    });
+  }
+
   function showOpenSignal() {
     const game = state?.game;
     const at = game?.phase === 'buzzerOpen' ? game.buzzer.openedAt : null;
@@ -2723,6 +2755,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     updateOrientiers();
     // A late join into long-open buttons gets no fanfare.
     if (nowServer() - at > 1000) return;
+    reportOpenSignal(at);
     playTone(660, 220, 'triangle', 880);
     // A short buzz in the hand on Android; iPhones ignore it.
     if (state?.you?.role === 'player') navigator.vibrate?.(30);

@@ -82,6 +82,58 @@ test('only a noticeable ping change re-broadcasts the room', (t) => {
   assert.equal(broadcasts, 1);
 });
 
+test('green signal telemetry shows lead, worst lead, paint delay and clock error per player', (t) => {
+  const { room, host, wifiPlayer } = setupGame(t);
+  let broadcasts = 0;
+  room.changed = () => { broadcasts++; };
+  const signalOf = () => room.snapshotFor(host.id).participants.find((p) => p.id === wifiPlayer.id)?.signal;
+
+  assert.equal(signalOf(), null, 'nothing shows before the first report');
+  room.recordSignal(wifiPlayer.id, { leadMs: 180, paintMs: 9, clockErrMs: 12 });
+  room.recordSignal(wifiPlayer.id, { leadMs: -40, paintMs: 57, clockErrMs: 15 });
+  room.recordSignal(wifiPlayer.id, { leadMs: 120.4, paintMs: 8, clockErrMs: 15 });
+  assert.deepEqual(signalOf(), { leadMs: 120, worstLeadMs: -40, paintMs: 8, clockErrMs: 15 });
+  assert.equal(broadcasts, 0, 'reports arrive as the buttons open, so they never redraw every screen');
+
+  // Malformed reports are dropped; absurd ones are clamped.
+  room.recordSignal(wifiPlayer.id, { leadMs: 'x', paintMs: 1, clockErrMs: 1 });
+  room.recordSignal(wifiPlayer.id, { leadMs: -1e9, paintMs: -5, clockErrMs: 1 });
+  assert.deepEqual(signalOf(), { leadMs: -5000, worstLeadMs: -5000, paintMs: 0, clockErrMs: 1 });
+
+  // A new connection may be on another network, so old figures go.
+  room.attach(wifiPlayer.id, 'wifi-socket-2');
+  assert.equal(signalOf(), null);
+});
+
+test('clock:signal over the socket records only a seated player', async (t) => {
+  const room = new Room();
+  t.after(() => { for (const timer of room.removalTimers.values()) clearTimeout(timer); });
+  let onConnection;
+  const sockets = new Map();
+  registerSocketHandlers({ sockets: { sockets }, on: (event, cb) => { if (event === 'connection') onConnection = cb; },
+    to: () => ({ emit() {} }) }, room);
+  const connect = (id) => {
+    const handlers = new Map();
+    const socket = { id, data: {}, handshake: { address: '127.0.0.1' }, join() {}, leave() {}, emit() {},
+      on: (event, fn) => handlers.set(event, fn), disconnect() {} };
+    sockets.set(id, socket);
+    onConnection(socket);
+    return (event, payload) => new Promise((resolve) => handlers.get(event)(payload, resolve));
+  };
+  const hostSend = connect('host-sock');
+  await hostSend('session:join', { nickname: 'Host' });
+  await hostSend('role:choose', { role: 'host' });
+  const playerSend = connect('player-sock');
+  await playerSend('session:join', { nickname: 'iPhone' });
+
+  const report = { leadMs: -60, paintMs: 70, clockErrMs: 20 };
+  assert.equal((await playerSend('clock:signal', report)).ok, true);
+  assert.equal((await hostSend('clock:signal', report)).ok, true);
+  const signals = Object.fromEntries(room.snapshotFor(room.ownerId).participants.map((p) => [p.name, p.signal]));
+  assert.deepEqual(signals.iPhone, { leadMs: -60, worstLeadMs: -60, paintMs: 70, clockErrMs: 20 });
+  assert.equal(signals.Host, null, 'the host never paces the buzzer, so it reports nothing');
+});
+
 test('fair buzzer reconciliation awards slower-ping player who pressed earlier in synchronized time', async (t) => {
   const { room, engine, host, fastPlayer, wifiPlayer } = setupGame(t);
 

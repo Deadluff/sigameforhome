@@ -522,6 +522,7 @@ export const uk: Record<string, string | [string, string, string]> = {
   '{ms} ms': '{ms} мс',
   'Round trip {rtt} ms · one way {oneWay} ms · jitter ±{jitter} ms': 'Затримка туди й назад {rtt} мс · в один бік {oneWay} мс · коливання ±{jitter} мс',
   '{name} · {ms} ms (±{jitter})': '{name} · {ms} мс (±{jitter})',
+  'Green signal: lead {lead} ms (worst {worst}) · shown {paint} ms late · clock ±{clock} ms': 'Зелений сигнал: запас {lead} мс (найгірший {worst}) · показано із запізненням {paint} мс · годинник ±{clock} мс',
   '{s} s': '{s} с',
 
   /* ---------- player buzzer ---------- */
