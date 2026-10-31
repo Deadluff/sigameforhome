@@ -501,6 +501,14 @@ export class Room extends EventEmitter {
     this.changed();
   }
 
+  /** The host sets an exact score, e.g. back to 0; a delta field could not express "0 points". */
+  setScore(actorId: string, targetId: string, score: number): void {
+    const p = this.participants.get(targetId);
+    if (!p) throw new Error('Unknown participant');
+    if (!Number.isSafeInteger(score)) throw new Error('Score must be a whole number');
+    this.adjustScore(actorId, targetId, score - p.score);
+  }
+
   /* ------------------------------------------------------------- output */
 
   changed(): void {

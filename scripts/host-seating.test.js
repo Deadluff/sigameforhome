@@ -130,3 +130,13 @@ test('unseating the last unjudged finalist closes the final', (t) => {
   room.setRole(host.id, alice.id, 'spectator');
   assert.equal(engine.phase, 'reveal');
 });
+
+test('the host sets an exact score, 0 included; nobody else can', (t) => {
+  const { room, host, players: [alice, bob] } = started(t);
+  room.setScore(host.id, alice.id, 0);
+  assert.equal(alice.score, 0);
+  room.setScore(host.id, alice.id, -400);
+  assert.equal(alice.score, -400);
+  assert.throws(() => room.setScore(bob.id, alice.id, 0), /Only the host/);
+  assert.throws(() => room.setScore(host.id, alice.id, 1.5), /whole number/);
+});

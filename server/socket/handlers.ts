@@ -192,6 +192,8 @@ export function registerSocketHandlers(io: Server, room: Room, limits: SocketLim
     on<{ targetId: string; delta: number }>('score:adjust', 'moderator', ({ targetId, delta }, pid) =>
       room.adjustScore(pid, targetId, Number(delta)),
     );
+    on<{ targetId: string; score: number }>('score:set', 'moderator', ({ targetId, score }, pid) =>
+      room.setScore(pid, targetId, Number(score)));
 
     /* ---- settings & packs ---- */
 

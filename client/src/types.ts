@@ -188,6 +188,7 @@ export interface CommandPayloads {
   'role:choose': { role: 'host' | 'player' };
   'role:set': { targetId: string; role: 'host' | 'player' | 'spectator' };
   'score:adjust': { targetId: string; delta: number };
+  'score:set': { targetId: string; score: number };
   'packs:load': { file: string };
   'settings:update': Partial<RoomState['settings']>;
   'steam:download': { link: string };

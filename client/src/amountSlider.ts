@@ -10,7 +10,10 @@ export function addAmountSlider(field: HTMLInputElement): void {
   const slider = Object.assign(document.createElement('input'), { type: 'range', className: 'amount-slider', tabIndex: -1 });
   // The field itself takes the arrow keys, so the slider stays out of the tab order and screen readers.
   slider.setAttribute('aria-hidden', 'true');
-  field.form?.append(slider);
+  // Right under the field, so the submit button ends the form instead of sitting between field and slider.
+  const label = field.closest('label');
+  if (label) label.after(slider);
+  else field.form?.append(slider);
   sliders.set(field, slider);
   slider.addEventListener('input', () => {
     // Notches run from min in round steps; the last notch means "everything", so max stays reachable

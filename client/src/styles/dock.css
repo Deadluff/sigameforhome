@@ -32,6 +32,8 @@
 #stake-bid-form .field { flex: 1 1 160px; }
 #final-wager { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
 #final-wager .field { flex: 1 1 200px; }
+/* The main action spans the row, so it reads as the form's submit rather than a twin of All in. */
+#final-wager-submit { flex: 1 1 auto; }
 /* The slider takes its own full-width row under the field and buttons; taller for thumbs on phones. */
 #stake-bid-form .amount-slider, #final-wager .amount-slider { flex: 1 1 100%; width: 100%; height: 32px; }
 .amount-slider:disabled { opacity: .4; cursor: default; }
@@ -112,7 +114,7 @@
   .buzzer { min-height: 96px; }
   #buzzer-main { font-size: var(--t-l); }
   #stake-bid-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  #stake-bid-form .field { grid-column: 1 / -1; }
+  #stake-bid-form .field, #stake-bid-form .amount-slider { grid-column: 1 / -1; }
   .for-all-response { grid-template-columns: 1fr 1fr; }
   .for-all-response p { grid-column: 1 / -1; }
 }

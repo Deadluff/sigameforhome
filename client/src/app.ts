@@ -729,6 +729,9 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     requestAnimationFrame(() => panel.scrollIntoView({ block: 'nearest', behavior }));
   }
 
+  /** The wager the server holds for you in this final, or null before you place one. */
+  let placedWager: number | null = null;
+
   function renderFinal() {
     const state = activeState();
     const { game, you, participants } = state;
@@ -744,12 +747,17 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     if (wagering && finalist) {
       revealTurnPanel($('#final-wager'), `wager:${game.current?.presentationId}`);
       const score = Math.max(0, participants.find((p) => p.id === you.id)?.score ?? 0);
-      input('#final-amount').max = String(score);
-      syncAmountSlider(input('#final-amount'));
-      // The saved wager sits in the field label: below the buttons it fell off small phone screens.
-      $('#final-amount-label').textContent = final.wagered.includes(you.id)
-        ? t('Saved: {wager}. You can change it (0 to {max}).', { wager: formatScore(final.yourWager ?? 0), max: formatScore(score) })
+      const field = input('#final-amount');
+      field.max = String(score);
+      placedWager = final.wagered.includes(you.id) ? final.yourWager ?? 0 : null;
+      // After a reload the field is empty; show the placed amount so the button can say it is in.
+      if (placedWager !== null && !field.value && document.activeElement !== field) field.value = String(placedWager);
+      syncAmountSlider(field);
+      // The placed wager sits in the field label: below the buttons it fell off small phone screens.
+      $('#final-amount-label').textContent = placedWager !== null
+        ? t('Placed: {wager}. You can change it (0 to {max}).', { wager: formatScore(placedWager), max: formatScore(score) })
         : t('Your final wager, 0 to {max}', { max: formatScore(score) });
+      syncWagerButton();
     }
     // Finalists write their answer so the host judges what was actually said.
     const answering = game.phase === 'finalQuestion' && finalist && !final.judged.includes(you.id);
@@ -780,7 +788,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     const names = (list: { name: string }[]) => list.map((p) => p.name).join(', ');
     const total = finalists.length;
     $('#final-host-status').textContent = !total ? t('Nobody has a positive score, so nobody plays the final.')
-      : wagering ? t('{done} of {total} wagers saved', { done: total - waiting.length, total }) +
+      : wagering ? t('{done} of {total} wagers placed', { done: total - waiting.length, total }) +
         (waiting.length ? ` · ${t('Waiting for {names}', { names: names(waiting) })}` : '')
         : game.phase === 'finalQuestion' ? t('{done} of {total} answers in', { done: answered, total }) +
           (unsent.length ? ` · ${t('Not sent: {names}', { names: names(unsent) })}` : '') +
@@ -789,6 +797,21 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
           : t('Judge each answer on the podiums');
   }
 
+  /**
+   * "Save wager" read like a draft, and the button looked the same after pressing it. The button now
+   * turns into a green "Wager placed" while the field holds the amount the server has, and asks to
+   * "Change wager" once the field or slider moves away from it.
+   */
+  function syncWagerButton(): void {
+    const field = input('#final-amount');
+    const placed = placedWager !== null && field.value.trim() !== '' && Number(field.value) === placedWager;
+    const submit = button('#final-wager-submit');
+    submit.textContent = placed ? t('Wager placed') : placedWager !== null ? t('Change wager') : t('Place wager');
+    submit.classList.toggle('primary', !placed);
+    submit.classList.toggle('ok', placed);
+  }
+  // 'input' bubbles from both the number field and its slider.
+  $('#final-wager').addEventListener('input', syncWagerButton);
   $('#final-wager').addEventListener('submit', (event) => {
     event.preventDefault();
     send('game:finalWager', { amount: Number(input('#final-amount').value) });
@@ -1286,7 +1309,18 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
         minus.onclick = () => send('score:adjust', { targetId: p.id, delta: -100 });
         plus.setAttribute('aria-label', t('Add 100 points to {name}', { name: p.name }));
         minus.setAttribute('aria-label', t('Subtract 100 points from {name}', { name: p.name }));
-        row.append(plus, minus);
+        // A reset wipes points, so the host confirms it; the dialog names the score so it can be restored.
+        const reset = Object.assign(document.createElement('button'), { type: 'button', className: 'menu-reset', textContent: t('Reset to 0') });
+        reset.setAttribute('aria-label', t('Reset {name} to 0 points', { name: p.name }));
+        reset.disabled = p.score === 0;
+        reset.onclick = async () => {
+          if (await askConfirm({
+            title: t('Reset {name} to 0 points?', { name: p.name }),
+            body: t('{name} has {score} points now.', { name: p.name, score: formatScore(p.score) }),
+            confirmLabel: t('Reset to 0'), danger: true,
+          })) send('score:set', { targetId: p.id, score: 0 });
+        };
+        row.append(plus, minus, reset);
         // An inline field replaces the old prompt() so the host never loses sight of the board.
         const form = Object.assign(document.createElement('form'), { className: 'score-form' });
         const field = Object.assign(document.createElement('input'), {
@@ -1295,15 +1329,37 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
         field.dataset.playerId = p.id;
         field.setAttribute('aria-label', t('Custom score change for {name}', { name: p.name }));
         const apply = Object.assign(document.createElement('button'), { type: 'submit', textContent: t('Apply') });
-        form.append(field, apply);
+        // "Set" takes the number as the exact score, so the host can also set 0 or any amount directly.
+        const exact = Object.assign(document.createElement('button'), { type: 'submit', value: 'set', textContent: t('Set') });
+        exact.setAttribute('aria-label', t('Set the exact score for {name}', { name: p.name }));
+        form.append(field, apply, exact);
+        // The new scores arrive in a snapshot before the ack and rebuild this menu from the typed text,
+        // so the field is cleared before sending; a refused change puts the text back in the live field.
+        const submitScore = async (payload: { event: 'score:set'; score: number } | { event: 'score:adjust'; delta: number }) => {
+          const typed = field.value;
+          field.value = '';
+          const res = payload.event === 'score:set'
+            ? await send('score:set', { targetId: p.id, score: payload.score })
+            : await send('score:adjust', { targetId: p.id, delta: payload.delta });
+          const live = document.querySelector<HTMLInputElement>(`.score-form input[data-player-id="${p.id}"]`);
+          if (!res.ok && live && !live.value) live.value = typed;
+        };
         form.onsubmit = async (event) => {
           event.preventDefault();
-          const delta = Number(field.value.trim());
-          if (!field.value.trim() || !Number.isSafeInteger(delta) || delta === 0) {
+          const value = Number(field.value.trim());
+          if ((event.submitter as HTMLButtonElement | null)?.value === 'set') {
+            if (!field.value.trim() || !Number.isSafeInteger(value)) {
+              toast(t('Enter a whole-number score, for example 0 or 1200.'));
+              return;
+            }
+            await submitScore({ event: 'score:set', score: value });
+            return;
+          }
+          if (!field.value.trim() || !Number.isSafeInteger(value) || value === 0) {
             toast(t('Enter a whole-number score change, for example -250 or 350.'));
             return;
           }
-          if ((await send('score:adjust', { targetId: p.id, delta })).ok) field.value = '';
+          await submitScore({ event: 'score:adjust', delta: value });
         };
         panel.append(row, form);
         if (focusedDraft === p.id) queueMicrotask(() => field.focus());

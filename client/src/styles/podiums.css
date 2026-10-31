@@ -187,8 +187,13 @@
 .player-menu .row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .player-menu button { width: 100%; min-height: 36px; padding: 6px 8px; font-size: var(--t-xs); }
 .score-form, .rename-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+/* The menu is narrow: two buttons beside the field squeezed it to nothing, so the field takes its
+   own line and Apply (add the change) and Set (exact score) share the line below. */
+.score-form { grid-template-columns: 1fr 1fr; }
+.score-form input { grid-column: 1 / -1; }
+.player-menu .row .menu-reset { grid-column: 1 / -1; }
 .score-form input, .rename-form input { min-height: 36px; padding: 6px 8px; font-size: 14px; }
-.score-form button, .rename-form button { width: auto; }
+.rename-form button { width: auto; }
 .give-seat-form select { min-width: 0; min-height: 36px; padding: 6px 8px; font-size: 14px; }
 .player-menu-panel .menu-hint { color: var(--mist); font-size: var(--t-xs); font-weight: 700; }
 
