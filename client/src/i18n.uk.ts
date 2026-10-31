@@ -236,6 +236,8 @@ export const uk: Record<string, string | [string, string, string]> = {
   'New name for {name}': 'Нове ім’я для {name}',
   'Make player': 'Зробити гравцем',
   'Make {name} a player': 'Зробити {name} гравцем',
+  'Move to spectators': 'Перевести в глядачі',
+  'Move {name} to spectators': 'Перевести {name} в глядачі',
   'Back on a new device?': 'Повернувся з нового пристрою?',
   "Who gets {name}'s seat": 'Хто отримає місце {name}',
   'Give seat': 'Передати місце',

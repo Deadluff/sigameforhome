@@ -1,9 +1,9 @@
 /**
- * Which seat actions the host may take now (audit QOL-2).
+ * Seat actions for the seat menus (audit QOL-2).
  *
- * Seating someone, or removing an offline player, mid-question would cut into a live answerer,
- * judgments or wagers. Those actions wait for a calm moment: the lobby, the board, a round end,
- * final theme removal, game over, or a pause taken at one of those.
+ * The host seats, unseats and removes people at any moment; the server moves on any turn the seat
+ * held. A player claiming the empty host seat for themselves still waits for a calm moment: the
+ * lobby, the board, a round end, final theme removal, game over, or a pause taken at one of those.
  */
 import { t } from './i18n';
 import type { RoomState } from './types';

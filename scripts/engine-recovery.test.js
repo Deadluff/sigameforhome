@@ -40,17 +40,20 @@ function game(t) {
 }
 
 test('a removed answerer does not become the next chooser', (t) => {
-  const { room, host, players: [alice, bob] } = game(t);
+  const { room, host, players: [alice] } = game(t);
   const engine = room.engine;
   engine.selectQuestion(host.id, true, 0, 0);
   engine.openBuzzer();
   engine.buzz(alice.id);
   assert.equal(engine.phase, 'answering');
   room.remove(alice.id);
-  engine.judge(true);
+  // The removed answerer's turn passes at once; nobody else answers.
+  assert.equal(engine.phase, 'buzzerOpen');
+  engine.revealAnswer();
   engine.next();
-  assert.equal(engine.chooserId, bob.id);
-  engine.selectQuestion(bob.id, false, 0, 1);
+  assert.notEqual(engine.chooserId, alice.id);
+  assert.equal(room.participants.get(engine.chooserId)?.role, 'player');
+  engine.selectQuestion(engine.chooserId, false, 0, 1);
   assert.equal(engine.phase, 'reading');
 });
 

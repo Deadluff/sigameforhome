@@ -1314,18 +1314,26 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
         panel.append(rename);
         if (focusedName === p.id) queueMicrotask(() => rename.querySelector('input')?.focus());
       }
-      // A newcomer who landed as a spectator gets a seat between questions (QOL-2, QOL-3).
+      // A newcomer who landed as a spectator gets a seat (QOL-2, QOL-3). The host seats people at any
+      // moment, also mid-question; the server moves any turn on.
       const freeSeat = participants.filter((member) => member.role === 'player').length < state.settings.maxPlayers;
-      if (you.canModerate && p.role === 'spectator' && !p.displayOnly && freeSeat && betweenQuestions(game)) {
+      if (you.canModerate && p.role === 'spectator' && !p.displayOnly && freeSeat) {
         const seat = Object.assign(document.createElement('button'), { type: 'button', textContent: t('Make player') });
         seat.setAttribute('aria-label', t('Make {name} a player', { name: p.name }));
         seat.onclick = () => send('role:set', { targetId: p.id, role: 'player' });
         panel.append(seat);
       }
+      // The host frees a player seat at any moment; the score stays with them if they are seated again.
+      if (you.canModerate && p.role === 'player' && p.id !== you.id) {
+        const unseat = Object.assign(document.createElement('button'), { type: 'button', textContent: t('Move to spectators') });
+        unseat.setAttribute('aria-label', t('Move {name} to spectators', { name: p.name }));
+        unseat.onclick = () => send('role:set', { targetId: p.id, role: 'spectator' });
+        panel.append(unseat);
+      }
       // A player back on a new device takes their old seat and score with one click (playtest F7).
       const newcomers = participants.filter((member) => member.connected && member.id !== p.id &&
         member.role !== 'host' && !member.displayOnly);
-      if (you.canModerate && p.role === 'player' && !p.connected && newcomers.length && betweenQuestions(game)) {
+      if (you.canModerate && p.role === 'player' && !p.connected && newcomers.length) {
         panel.append(Object.assign(document.createElement('span'), { className: 'menu-hint', textContent: t('Back on a new device?') }));
         panel.append(giveSeatForm(p, newcomers, async (newcomerId) => {
           const name = newcomers.find((member) => member.id === newcomerId)?.name ?? t('They');
@@ -1337,8 +1345,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
           })) send('seat:give', { seatId: p.id, newcomerId });
         }));
       }
-      // An offline player's seat is removed only between questions; a connected guest can go any time.
-      if (you.canModerate && p.id !== you.id && (p.connected || p.role !== 'player' || betweenQuestions(game))) {
+      // The host removes anyone at any moment, also mid-question; the server moves any turn they held on.
+      if (you.canModerate && p.id !== you.id) {
         const kick = Object.assign(document.createElement('button'), { type: 'button', textContent: t('Remove from room') });
         kick.className = 'bad';
         kick.dataset.icon = 'cross';
@@ -1351,9 +1359,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
         panel.append(kick);
       }
       const vacantHostSeat = !participants.some((member) => member.role === 'host');
-      const canAppoint = state.game.phase === 'lobby'
-        ? p.role === 'player' || p.role === 'spectator'
-        : p.role === 'spectator';
+      // Mid-game too a player may be appointed; their score waits for them if they are seated again.
+      const canAppoint = p.role === 'player' || p.role === 'spectator';
       if (you.canModerate && vacantHostSeat && p.connected && !p.displayOnly && p.id !== you.id && canAppoint) {
         const appoint = Object.assign(document.createElement('button'), { type: 'button', textContent: t('Make host') });
         appoint.setAttribute('aria-label', t('Make {name} host', { name: p.name }));

@@ -150,8 +150,8 @@ test('a removed finalist cannot block the reveal', (t) => {
   engine.removeFinalTheme(host.id, true, 1);
   engine.setFinalWager(player.id, 200);
   engine.openFinal();
+  // Nobody is left to answer or judge, so the final closes and reveals by itself.
   room.remove(player.id);
-  engine.closeFinal();
   assert.equal(engine.phase, 'reveal');
 });
 

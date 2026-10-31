@@ -594,10 +594,9 @@ export class GameEngine {
         this.grantPendingBuzz(pool);
       }
     }
-    // Roster changes while paused may have satisfied the for-all completion rule.
-    this.advanceForAllAfterRosterChange();
-    // A finalist may have dropped an edit while paused, releasing a held final.
-    this.closeFinalWhenAllSent();
+    // Roster changes while paused may have satisfied the for-all completion rule, freed the answer
+    // turn, or ended an appeal; a finalist may have dropped an edit, releasing a held final.
+    this.settleRosterChange();
   }
 
   /* ---------------------------------------------------------------- flow */
@@ -988,6 +987,37 @@ export class GameEngine {
     }
   }
 
+  /**
+   * The host may unseat or remove a player at any moment, also mid-question. Whatever that seat
+   * held moves on, so the room never waits on someone who is gone: their answer turn passes with no
+   * penalty (an assigned question just ends), and a for-all, final or appeal that only waited on
+   * them closes. Seats that are merely offline keep their turn, as before.
+   */
+  settleRosterChange(): void {
+    const winnerId = this.buzzer.winnerId;
+    if (this.phase === PHASES.ANSWERING && winnerId && this.room.participants.get(winnerId)?.role !== ROLES.PLAYER) {
+      this.buzzer.attempted.add(winnerId);
+      this.room.emitEvent({ type: 'answerPassed', playerId: winnerId });
+      if (this.isAssignedQuestion()) this.revealAnswer();
+      else this.continueAfterMiss();
+    }
+    this.advanceForAllAfterRosterChange();
+    this.closeFinalWhenAllSent();
+    if (this.phase === PHASES.FINAL_JUDGE && this.finalEligibleIds().every((id) => this.finalJudged.has(id))) {
+      this.revealAnswer();
+    }
+    const appeal = this.appeal;
+    if (this.phase === PHASES.APPEAL_VOTE && appeal && appeal.eligibleVoterIds.every((id) =>
+      appeal.votes.has(id) || !this.room.participants.get(id)?.connected)) this.resolveAppeal();
+  }
+
+  /** The player must answer now, or an assigned question is waiting for them to answer. */
+  holdsAnswerTurn(playerId: string): boolean {
+    const phase = this.phase === PHASES.PAUSED ? this.paused?.phase : this.phase;
+    return (phase === PHASES.ANSWERING && this.buzzer.winnerId === playerId) ||
+      (!!this.current && this.current.assignedId === playerId && !this.current.answerShown);
+  }
+
   closeForAllAnswers(): void {
     this.assert(this.phase === PHASES.FOR_ALL_ANSWERING && this.forAll, 'Answers are closed');
     this.clearTimer();
@@ -1336,6 +1366,8 @@ export class GameEngine {
     this.assert(this.current?.type !== 'forAll', 'For-all questions do not use buttons');
     if (this.isAssignedQuestion()) {
       this.assert(this.current?.assignedId, 'No player is assigned');
+      // The host unseated the assigned player before their turn came: nobody answers, the answer shows.
+      if (this.room.participants.get(this.current.assignedId)?.role !== ROLES.PLAYER) return this.revealAnswer();
       this.grantAnswer(this.current.assignedId);
       return;
     }

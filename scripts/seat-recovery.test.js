@@ -61,7 +61,7 @@ test('the host gives the offline seat to the newcomer: score, id and turn stay',
   assert.equal(room.removalTimers.has(alice.id), false, 'no reconnect timer left on the seat');
 });
 
-test('a seat is given back only by the host, only when offline, only between questions', (t) => {
+test('a seat is given back only by the host, only when offline, at any moment', (t) => {
   const { room, host, alice } = lostPhone(t);
   const newcomer = room.join('Alice 2').participant;
   room.attach(newcomer.id, 'alice-new');
@@ -69,15 +69,15 @@ test('a seat is given back only by the host, only when offline, only between que
   assert.throws(() => room.giveSeat(host.id, host.id, newcomer.id), /Only a player seat/);
   assert.throws(() => room.giveSeat(host.id, alice.id, host.id), /host cannot take/);
 
-  room.engine.selectQuestion(host.id, true, 0, 0);
-  assert.throws(() => room.giveSeat(host.id, alice.id, newcomer.id), /question is over/);
-  room.engine.pause();
-  assert.throws(() => room.giveSeat(host.id, alice.id, newcomer.id), /question is over/);
-  room.engine.resume();
-  room.engine.reset();
-
   room.attach(alice.id, 'alice-old');
   assert.throws(() => room.giveSeat(host.id, alice.id, newcomer.id), /still connected/);
+
+  // The host may hand a seat back mid-question too, even while paused.
+  room.detach(alice.id, 'alice-old');
+  room.engine.selectQuestion(host.id, true, 0, 0);
+  room.engine.pause();
+  room.giveSeat(host.id, alice.id, newcomer.id);
+  assert.equal(room.participants.get(alice.id)?.connected, true);
 });
 
 class FakeSocket extends EventEmitter {

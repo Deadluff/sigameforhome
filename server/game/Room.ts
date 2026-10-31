@@ -319,7 +319,7 @@ export class Room extends EventEmitter {
     if (this.ownerId === pid) this.reassignOwner();
     this.promoteSpectators();
     if (wasAuctionTurn) this.engine.advanceStakeAuction();
-    this.engine.advanceForAllAfterRosterChange();
+    this.engine.settleRosterChange();
     this.changed();
   }
 
@@ -371,13 +371,17 @@ export class Room extends EventEmitter {
       throw new Error('Invalid role');
     }
     if (target.role === role) return;
-    // A player leaving their seat mid-question would cut into a live answer, wager or bid.
-    if (role === ROLES.HOST && target.role === ROLES.PLAYER && !this.betweenQuestions()) {
-      throw new Error('Wait until the question is over');
-    }
-
     const self = actorId === targetId;
     const moderator = this.canModerate(actorId);
+    // A player leaving their seat mid-question would cut into a live answer, wager or bid. The host
+    // may reseat anyone at any moment (the engine moves the turn on); a player moving themselves waits.
+    if (self && role === ROLES.HOST && target.role === ROLES.PLAYER && !this.betweenQuestions()) {
+      throw new Error('Wait until the question is over');
+    }
+    // Leaving the seat would pass a turn the player owes, dodging a wrong-answer penalty.
+    if (self && target.role === ROLES.PLAYER && this.engine.holdsAnswerTurn(targetId)) {
+      throw new Error('Wait until the question is over');
+    }
 
     if (role === ROLES.HOST) {
       const host = this.host();
@@ -405,7 +409,7 @@ export class Room extends EventEmitter {
     if (this.engine.phase !== PHASES.LOBBY) this.engine.ensureConnectedChooser();
     // A reseated bidder cannot act, so let the next eligible player bid immediately.
     if (wasAuctionTurn && role !== ROLES.PLAYER) this.engine.advanceStakeAuction();
-    this.engine.advanceForAllAfterRosterChange();
+    this.engine.settleRosterChange();
     this.changed();
   }
 
@@ -422,8 +426,9 @@ export class Room extends EventEmitter {
    * A player lost their device (dead phone, another browser) and rejoined under a new name. The host
    * gives them their old offline seat back (device playtest F7): the newcomer's session moves into
    * it, so the seat keeps its id, score and history, and the temporary seat disappears. The lost
-   * device's old token stops working. Between questions only, so no live answer, wager or bid
-   * changes hands. Returns the newcomer's socket id so the caller can rebind it.
+   * device's old token stops working. Any moment, also mid-question: the seat keeps whatever turn it
+   * holds, and a turn the temporary seat held passes. Returns the newcomer's socket id so the caller
+   * can rebind it.
    */
   giveSeat(actorId: string, seatId: string, newcomerId: string): string {
     if (!this.canModerate(actorId)) throw new Error('Only the host can give a seat back');
@@ -434,7 +439,6 @@ export class Room extends EventEmitter {
     if (seat.connected) throw new Error('That seat is still connected');
     if (newcomer.role === ROLES.HOST || newcomerId === actorId) throw new Error('The host cannot take a player seat');
     if (!newcomer.connected || !newcomer.socketId) throw new Error('The new device is not connected');
-    if (!this.betweenQuestions()) throw new Error('Wait until the question is over');
     const engine = this.engine;
 
     const socketId = newcomer.socketId;
@@ -447,6 +451,7 @@ export class Room extends EventEmitter {
     this.tokens.set(seat.token, seatId);
     if (engine.chooserId === newcomerId) engine.chooserId = seatId;
     if (this.ownerId === newcomerId) this.ownerId = seatId;
+    this.engine.settleRosterChange();
     this.attach(seatId, socketId);
     return socketId;
   }
