@@ -55,11 +55,12 @@
           <button data-act="game:prevRound" id="btn-prev-round" type="button" class="quiet round-arrow icon-only hidden" data-icon="prev" aria-label="Previous round" title="Previous round"></button>
           <span id="phase" class="topbar-round" role="status" aria-live="polite"></span>
           <button data-act="game:nextRound" id="btn-next-round" type="button" class="quiet round-arrow icon-only hidden" data-icon="next" aria-label="Next round" title="Next round"></button>
-          <!-- Pause and stop share the host pill, so the host bar only appears when a step needs it. -->
+          <!-- Pause, restart and stop share the host pill, so the host bar only appears when a step needs it. -->
           <span id="host-tools" class="host-tools hidden">
             <button data-act="game:pause" id="btn-pause" type="button" class="quiet icon-only" data-icon="pause" title="Pause"><span class="label">Pause</span></button>
             <button data-act="game:resume" id="btn-resume" type="button" class="primary" data-icon="play" title="Resume">Resume</button>
             <button id="btn-settings" type="button" class="quiet icon-only" data-icon="sliders" title="Game settings" aria-controls="manage"><span class="label">Game settings</span></button>
+            <button data-act="game:restart" id="btn-restart" type="button" class="quiet icon-only" data-icon="restart" title="Restart game"><span class="label">Restart game</span></button>
             <button data-act="game:stop" id="btn-stop" type="button" class="quiet icon-only" data-icon="stop" title="Stop game"><span class="label">Stop game</span></button>
           </span>
         </span>

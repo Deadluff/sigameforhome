@@ -166,7 +166,7 @@ export interface Ack {
 export type JoinAck = { ok: true; token: string } | { ok: false; error: string };
 
 export type NoPayloadCommand =
-  | 'session:leave' | 'packs:list' | 'game:start' | 'game:stop' | 'game:pause' | 'game:resume'
+  | 'session:leave' | 'packs:list' | 'game:start' | 'game:restart' | 'game:stop' | 'game:pause' | 'game:resume'
   | 'game:openFinal' | 'game:closeFinal' | 'game:openBuzzer'
   | 'game:reveal' | 'game:next' | 'game:prevRound' | 'game:nextRound' | 'game:stakePass' | 'game:closeForAll'
   | 'game:appealClose' | 'game:passAnswer';

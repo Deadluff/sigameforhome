@@ -550,6 +550,7 @@ export class GameEngine {
         : saved.timerName === 'ready' ? () => this.startQuestionReading()
         : saved.timerName === 'reading' ? () =>
         this.current?.type === 'forAll' ? this.openForAllAnswers() : this.openBuzzer()
+        : saved.timerName === 'givingCat' ? () => this.expireSpecialSetup()
         : saved.timerName === 'stake' ? () => this.passStake(this.auctionTurnId())
         : saved.timerName === 'forAll' ? () => this.closeForAllAnswers()
         : saved.timerName === 'buzzer' ? () => this.expireBuzzer()
@@ -588,6 +589,14 @@ export class GameEngine {
 
   start(): void {
     this.assert(this.phase === PHASES.LOBBY || this.phase === PHASES.GAME_OVER, 'Stop the current game before starting again');
+    this.restart();
+  }
+
+  /**
+   * The host's "reset game": same pack and players, scores zeroed, straight into round one, from any phase.
+   * Every check runs before reset(), so a refused restart leaves the current game as it was.
+   */
+  restart(): void {
     this.room.releaseExpiredSeats();
     this.assert(this.pack, 'Load a pack first');
     this.assert(this.pack.rounds.length > 0, 'This pack has no rounds');
@@ -783,7 +792,7 @@ export class GameEngine {
     }
     if (this.isAssignedQuestion()) {
       this.phase = PHASES.SPECIAL_SETUP;
-      this.startTimer('givingCat', this.settings.timeForGivingACat);
+      this.startTimer('givingCat', this.settings.timeForGivingACat, () => this.expireSpecialSetup());
       this.room.emitEvent({ type: 'specialSetup', themeIndex, questionIndex });
       return;
     }
@@ -1007,7 +1016,7 @@ export class GameEngine {
     const range = question.typeParams?.price;
     // A secret without a question is a gift of the pack's fixed value.
     const gift = type === 'secretNoQuestion';
-    const minimum = gift ? question.price : range?.minimum ?? question.price;
+    const minimum = this.specialMinimum();
     const maximum = gift ? question.price : range?.maximum ?? Math.max(question.price, player.score);
     const step = range?.step || 1;
     this.assert(Number.isSafeInteger(price) && price >= minimum && price <= maximum &&
@@ -1031,6 +1040,29 @@ export class GameEngine {
       return;
     }
     this.presentQuestion();
+  }
+
+  /** The lowest value a special question may get; the host's form starts at it too. */
+  specialMinimum(): number {
+    const { type, question } = this.current!;
+    // A secret without a question is a gift of the pack's fixed value.
+    return type === 'secretNoQuestion' ? question.price : question.typeParams?.price?.minimum ?? question.price;
+  }
+
+  /**
+   * Everyone sees the setup countdown, so running out must move the game on (playtest: it sat at
+   * zero with a blank table). An unassigned secret goes to a random eligible player, at the
+   * lowest value. With nobody eligible it waits for the host, who can still skip it.
+   */
+  expireSpecialSetup(): void {
+    if (this.phase !== PHASES.SPECIAL_SETUP || !this.current) return;
+    const { type, question } = this.current;
+    const excluded = type.startsWith('secret') && question.typeParams?.selectionMode === 'exceptCurrent'
+      ? this.chooserId : null;
+    const eligible = this.activePlayers().filter((p) => p.id !== excluded);
+    if (!eligible.length) return;
+    const player = eligible[Math.floor(Math.random() * eligible.length)];
+    this.configureSpecial(player.id, this.specialMinimum());
   }
 
   setFinalWager(playerId: string, amount: number): void {

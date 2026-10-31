@@ -80,6 +80,47 @@ test('accepted rejection appeal reverses later attempts and returns chooser to a
   assert.equal(room.snapshotFor(host.id).game.appeals.active, null);
 });
 
+// The appeal clock replaces the reveal clock. Builds that did not restart it left the room on the
+// answer after every appeal, waiting for the host ("appeal freezes the game").
+test('a resolved appeal closes the question on its own, however the vote ends', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const { players: [alice, bob, cara, dan], engine } = game(t);
+  const backToBoard = () => {
+    assert.equal(engine.phase, 'reveal');
+    assert.equal(engine.timer?.name, 'reveal', 'the reveal clock runs again after the vote');
+    t.mock.timers.tick(engine.timer.durationMs);
+    assert.equal(engine.phase, 'board');
+  };
+
+  // Every eligible player votes.
+  answer(engine, alice, false);
+  answer(engine, bob, true);
+  engine.requestAppeal(alice.id, 1);
+  engine.voteAppeal(bob.id, false);
+  engine.voteAppeal(cara.id, false);
+  engine.voteAppeal(dan.id, false);
+  backToBoard();
+
+  // The host closes the vote (game:appealClose).
+  engine.selectQuestion(alice.id, true, 0, 1);
+  answer(engine, alice, false);
+  answer(engine, bob, true);
+  engine.requestAppeal(alice.id, 1);
+  engine.resolveAppeal();
+  backToBoard();
+
+  // Nobody votes and the appeal clock runs out, across a pause.
+  engine.selectQuestion(alice.id, true, 1, 0);
+  answer(engine, alice, false);
+  answer(engine, bob, true);
+  engine.requestAppeal(alice.id, 1);
+  engine.pause();
+  engine.resume();
+  assert.equal(engine.timer?.name, 'appeal');
+  t.mock.timers.tick(engine.timer.durationMs);
+  backToBoard();
+});
+
 test('acceptance challenge requires four players; ties reject; accepted challenge reverses score', (t) => {
   const { room, players: [alice, bob, cara, dan], engine } = game(t);
   const priorChooser = engine.current.chooserBeforeQuestion;

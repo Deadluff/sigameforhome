@@ -2,8 +2,8 @@ import { io, type Socket } from 'socket.io-client';
 import { askConfirm, type ConfirmOptions } from './confirmDialog';
 import { ContentPresenter } from './contentPresenter';
 import { avatar, formatScore, questionTypeLabel, replicFor, roleLabels, sayReplic, toast, type ReplicTone } from './ui';
-import { audioCue, drawPins, drawRing, fitText, imageFrame, makePickable, optionText, optionTiles, parsePoint,
-  setBackdrop, type Pin } from './stageParts';
+import { audioCue, closeZoom, drawPins, drawRing, fitText, imageFrame, makePickable, makeZoomable, optionText,
+  optionTiles, parsePoint, setBackdrop, type Pin } from './stageParts';
 import { buzzerView, createPressTracker, phaseLabel } from './buzzerFeedback';
 import { createConnectionMonitor, noticeText } from './connection';
 import { fullscreenSupported, toggleFullscreen } from './fullscreen';
@@ -64,7 +64,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
 
   const controlCommands = new Set<string>([
     'game:pause', 'game:resume', 'game:openBuzzer', 'game:reveal',
-    'game:next', 'game:prevRound', 'game:nextRound', 'game:stop', 'game:closeForAll', 'game:appealClose',
+    'game:next', 'game:prevRound', 'game:nextRound', 'game:restart', 'game:stop', 'game:closeForAll', 'game:appealClose',
     'game:passAnswer',
   ] satisfies NoPayloadCommand[]);
   const isNoPayloadCommand = (value: string): value is NoPayloadCommand => controlCommands.has(value);
@@ -568,7 +568,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     menu.classList.toggle('hidden', !roundNav && tools.classList.contains('hidden'));
     const panel = $('#host-menu-panel');
     panel.replaceChildren();
-    for (const id of ['btn-prev-round', 'btn-next-round', 'btn-pause', 'btn-resume', 'btn-settings', 'btn-stop']) {
+    for (const id of ['btn-prev-round', 'btn-next-round', 'btn-pause', 'btn-resume', 'btn-settings', 'btn-restart', 'btn-stop']) {
       const real = button(`#${id}`);
       if (real.classList.contains('hidden') || (id !== 'btn-prev-round' && id !== 'btn-next-round' && tools.classList.contains('hidden'))) continue;
       const item = Object.assign(document.createElement('button'), {
@@ -579,7 +579,12 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       item.onclick = () => { menu.open = false; real.click(); };
       panel.append(item);
     }
+    if (menu.open) keepInViewport(panel);
   }
+  // The right-aligned 210 px panel ran 30 px off the left edge of a 375 px phone, because the Host button sits mid-bar.
+  $('#host-menu').addEventListener('toggle', () => {
+    if (($('#host-menu') as HTMLDetailsElement).open) keepInViewport($('#host-menu-panel'));
+  });
 
   /** The host action that is the obvious next step in this phase, or null when there is none. */
   function hostPrimaryAct(game: RoomState['game']): string | null {
@@ -1416,9 +1421,28 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   document.addEventListener('toggle', (event) => {
     const menu = event.target as HTMLElement;
     if (!(menu instanceof HTMLDetailsElement) || !menu.matches('.player-menu') || !menu.open) return;
-    const panel = menu.querySelector<HTMLElement>('.player-menu-panel');
-    if (panel) keepInViewport(panel);
+    placePlayerMenu(menu);
   }, true);
+  // The side scoreboard scrolls (layout.css), and its menus are pinned to the screen: they follow their podium.
+  // A resize can also switch a menu between pinned and anchored, which must drop the pinned coordinates.
+  const placeOpenPlayerMenus = () => {
+    for (const menu of document.querySelectorAll<HTMLDetailsElement>('.player-menu[open]')) placePlayerMenu(menu);
+  };
+  $('#players').addEventListener('scroll', placeOpenPlayerMenus, { passive: true });
+  addEventListener('resize', placeOpenPlayerMenus);
+  function placePlayerMenu(menu: HTMLDetailsElement) {
+    const panel = menu.querySelector<HTMLElement>('.player-menu-panel');
+    const button = menu.querySelector('summary');
+    if (!panel || !button) return;
+    panel.style.left = panel.style.top = '';
+    // Same spot the column's CSS gives the absolute panel: 12 px right of the button, 6 px above its top.
+    if (getComputedStyle(panel).getPropertyValue('--pinned-beside').trim() === '1') {
+      const box = button.getBoundingClientRect();
+      panel.style.left = `${box.right + 12}px`;
+      panel.style.top = `${box.top - 6}px`;
+    }
+    keepInViewport(panel);
+  }
 
   /* ---------------- lobby settings & packs ---------------- */
 
@@ -1909,7 +1933,10 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       !manuallyPausedMedia.has(el);
     const tryPlay = () => {
       // Delayed metadata and promise callbacks must respect game and manual pauses.
-      if (!canAutoPlay()) return;
+      // A clip that is already playing (or whose play() is pending) needs no second attempt.
+      // Safari blocks unmuted autoplay and the fallback plays it muted; a second play() then
+      // resolved and hid the "Tap to unmute" button, leaving the clip silent with no way to unmute.
+      if (!canAutoPlay() || !el.paused) return;
       const p = el.play();
       if (p && typeof p.then === 'function') {
         p.then(() => {
@@ -1986,7 +2013,11 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   function contentElement(it: ContentItem,
     previous?: { paused: boolean; currentTime: number }, autoStart = true): HTMLElement {
     // Pictures sit in a ratio-keeping frame so pins and the answer ring land on the right pixel.
-    if (it.type === 'image' && it.url) return imageFrame(it.url);
+    if (it.type === 'image' && it.url) {
+      const frame = imageFrame(it.url);
+      makeZoomable(frame, it.url);
+      return frame;
+    }
     if ((it.type === 'audio' || it.type === 'video') && it.url) {
       return createMediaPlayer(it.type, it.url, previous, autoStart);
     }
@@ -2284,6 +2315,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       renderedQuestionKey = null;
       stageSlots = null;
       decorateStage = null;
+      closeZoom();
       // A hidden card keeps playing its clips, so Next must stop and drop them on every device.
       box.querySelectorAll<HTMLMediaElement>('audio, video').forEach((media) => {
         media.pause();
@@ -2316,6 +2348,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     renderedQuestionKey = key;
 
     const questionId = c.presentationId;
+    // An enlarged picture may stay open while the same question re-renders, not into the next one.
+    if (box.dataset.questionId !== questionId) closeZoom();
     previousContentMedia = new Map(box.dataset.questionId === questionId
       ? [...box.querySelectorAll<HTMLElement>('[data-content-index]')].flatMap((item) => {
         const media = item.querySelector<HTMLMediaElement>('audio, video');
@@ -2381,6 +2415,11 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
         box.classList.add('showing-answer');
         slots.prompt.append(Object.assign(document.createElement('p'), {
           className: 'answer-title', textContent: `${recipient} +${formatScore(c.price)}`,
+        }));
+      } else if (game.phase === 'specialSetup') {
+        // The content stays hidden until a player is chosen; say what happens instead of a blank table.
+        slots.prompt.append(Object.assign(document.createElement('p'), {
+          textContent: t('The host picks a player. If time runs out, a random player gets it.'),
         }));
       } else if (c.answerShown && c.right) renderAnswerStage(slots, c);
       else if (contentVisible) renderStaticContent(slots, c.content);
@@ -2857,6 +2896,9 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     if (act === 'game:stop') {
       return { title: t('Stop this game?'), body: t('Scores and progress are reset for everyone.'), confirmLabel: t('Stop game'), danger: true };
     }
+    if (act === 'game:restart') {
+      return { title: t('Restart this game?'), body: t('Everyone’s score goes back to zero and the game starts again from round one.'), confirmLabel: t('Restart game'), danger: true };
+    }
     if (act === 'game:next' && phase === 'specialSetup') {
       return { title: t('Skip this special question?'), body: t('It is marked as played and nobody gets its points.'), confirmLabel: t('Skip question') };
     }
@@ -2898,7 +2940,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
         if (!(await askConfirm(question))) return;
         // Timers keep running behind the dialog. A "skip" or "next round" meant for the moment the host
         // saw must not hit whatever came after it (a new question, or the next round).
-        if (act !== 'game:stop' && gameMoment() !== asked) {
+        // Stop and restart discard the whole game, so they apply whatever moment it has reached.
+        if (act !== 'game:stop' && act !== 'game:restart' && gameMoment() !== asked) {
           toast(t('The game moved on while you decided. Nothing was changed.'));
           return;
         }

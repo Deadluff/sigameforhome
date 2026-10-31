@@ -131,6 +131,20 @@
   /* The table takes the height the rest leaves; the question card fits inside it without scrolling. */
   #screen-game:not([data-phase="lobby"]):not([data-phase="gameOver"]) #game-stage { min-height: 0; height: auto; }
   .host-col { min-height: 0; }
+  /*
+   * The scoreboard scrolls inside the column. Without it a long list (or a short table row, while the
+   * appeals panel is up) ran out of the column and painted over the panels under the table. Host seat
+   * and status stay put above it. The padding keeps an answering podium's 2 px lift unclipped.
+   */
+  .host-col > .players { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 3px 0; }
+  /*
+   * A scroll box clips whatever pokes out of it, so the podium menu that opens beside its podium is
+   * pinned to the screen instead; app.ts places it next to its button. The podium drops its answering
+   * lift while the menu is open: a transform would turn fixed back into "inside the podium".
+   * The flag tells app.ts apart from the phone sheet (podiums.css), which is fixed too but CSS-placed.
+   */
+  .host-col > .players .player-menu-panel { position: fixed; --pinned-beside: 1; }
+  .host-col > .players .player:has(> .player-menu[open]) { transform: none; }
 }
 
 /*

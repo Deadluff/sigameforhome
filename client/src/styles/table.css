@@ -247,6 +247,27 @@ button.btn-ready[aria-pressed="true"] { background: var(--go); border-color: var
 }
 /* No callout or drag on question pictures: a long press or double tap should not open a menu or move the page. */
 .q-media { touch-action: manipulation; -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; }
+/* Enlarge: the picture at window size (see makeZoomable). The button sits in the picture's own corner. */
+.fit:not(.pickable) { cursor: zoom-in; }
+.zoom-btn {
+  position: absolute; right: 6px; bottom: 6px; z-index: 3; min-height: 36px; min-width: 36px; padding: 8px;
+  border-radius: 999px; border-color: var(--rule-strong); background: rgb(var(--shade-rgb) / .62); cursor: zoom-in;
+}
+.zoom-view {
+  width: 100%; height: 100%; max-width: none; max-height: none; margin: 0; padding: env(safe-area-inset-top) env(safe-area-inset-right)
+    env(safe-area-inset-bottom) env(safe-area-inset-left);
+  border: 0; background: rgb(var(--shade-rgb) / .94); cursor: zoom-out;
+}
+.zoom-view::backdrop { background: transparent; }
+.zoom-view img { display: block; width: 100%; height: 100%; object-fit: contain; }
+/* A wide picture on an upright phone is turned sideways to use the screen's length; the player turns
+   the phone to read it. Touch only: a tall desktop window is not something people rotate. */
+@media (orientation: portrait) and (pointer: coarse) {
+  .zoom-view.wide img {
+    position: absolute; left: 50%; top: 50%; width: 100dvh; height: 100vw;
+    transform: translate(-50%, -50%) rotate(90deg);
+  }
+}
 .fit img { display: block; width: 100%; height: 100%; object-fit: contain; user-select: none; -webkit-user-select: none; -webkit-user-drag: none; }
 .q-media .media-wrap { position: relative; width: 100%; height: 100%; display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); place-items: center; }
 .q-media video { display: block; width: 100%; height: 100%; object-fit: contain; }

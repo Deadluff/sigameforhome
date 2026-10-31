@@ -36,6 +36,47 @@ export function imageFrame(url: string): HTMLElement {
   return frame;
 }
 
+/*
+ * A picture on the table is only as wide as the card, so small print in it (a list of countries,
+ * numbered flags) is hard to read. Any viewer can open it at window size; any tap closes it again,
+ * because the game may need the player back at once.
+ */
+let zoomView: HTMLDialogElement | null = null;
+
+function openZoom(url: string): void {
+  if (!zoomView) {
+    zoomView = Object.assign(document.createElement('dialog'), { className: 'zoom-view' });
+    zoomView.setAttribute('aria-label', t('Enlarged picture'));
+    zoomView.addEventListener('click', () => zoomView?.close());
+    document.body.append(zoomView);
+  }
+  const view = zoomView;
+  const img = Object.assign(document.createElement('img'), { src: url, alt: '', draggable: false });
+  // CSS turns a wide picture sideways on an upright phone, where it would otherwise stay card-sized.
+  const markWide = () => view.classList.toggle('wide', img.naturalWidth > img.naturalHeight);
+  view.classList.remove('wide');
+  img.addEventListener('load', markWide);
+  if (img.complete) markWide();
+  view.replaceChildren(img);
+  if (!view.open) view.showModal();
+}
+
+/** The question moved on, so its enlarged picture would be stale. */
+export function closeZoom(): void {
+  zoomView?.close();
+}
+
+/** Adds an enlarge button; a tap on the picture enlarges it too, unless that tap is a point answer. */
+export function makeZoomable(frame: HTMLElement, url: string): void {
+  const button = Object.assign(document.createElement('button'), { type: 'button', className: 'zoom-btn icon-only', title: t('Enlarge picture') });
+  button.dataset.icon = 'expand';
+  button.append(Object.assign(document.createElement('span'), { className: 'label', textContent: t('Enlarge picture') }));
+  // Stop here, or the same tap would also count as a pick on a point question.
+  button.addEventListener('click', (event) => { event.stopPropagation(); openZoom(url); });
+  frame.addEventListener('click', () => { if (!frame.classList.contains('pickable')) openZoom(url); });
+  frame.append(button);
+}
+
 /** Blurred copy of the picture behind it, so letterbox bars read as part of the image. */
 export function setBackdrop(slot: HTMLElement, url: string | null): void {
   if (url) slot.style.setProperty('--backdrop', `url("${url.replace(/["\\]/g, '\\$&')}")`);

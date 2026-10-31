@@ -67,6 +67,7 @@ export const uk: Record<string, string | [string, string, string]> = {
   'Resume': 'Продовжити',
   'Game settings': 'Налаштування гри',
   'Stop game': 'Зупинити гру',
+  'Restart game': 'Перезапустити гру',
   'Sound volume': 'Гучність',
   'Mute': 'Вимкнути звук',
   'Unmute': 'Увімкнути звук',
@@ -276,6 +277,8 @@ export const uk: Record<string, string | [string, string, string]> = {
   'Marked on the picture': 'Позначено на зображенні',
   'Only you see this': 'Це бачите лише ви',
   'Tap the picture where the answer is': 'Торкніться зображення там, де відповідь',
+  'Enlarge picture': 'Збільшити зображення',
+  'Enlarged picture': 'Збільшене зображення',
 
   /* ---------- host controls ---------- */
   'Host controls': 'Керування ведучого',
@@ -308,6 +311,8 @@ export const uk: Record<string, string | [string, string, string]> = {
   'Cancel': 'Скасувати',
   'OK': 'OK',
   'Stop this game?': 'Зупинити гру?',
+  'Restart this game?': 'Перезапустити гру?',
+  'Everyone’s score goes back to zero and the game starts again from round one.': 'Рахунок усіх обнулиться, і гра почнеться знову з першого раунду.',
   'Scores and progress are reset for everyone.': 'Рахунок і прогрес скинуться для всіх.',
   'Skip this special question?': 'Пропустити це особливе питання?',
   'It is marked as played and nobody gets its points.': 'Його буде позначено як зігране, очок ніхто не отримає.',
@@ -459,6 +464,7 @@ export const uk: Record<string, string | [string, string, string]> = {
   'A gift question': 'Питання-подарунок',
   'Choose who answers and the value below.': 'Оберіть нижче, хто відповідає і яка ціна.',
   'The host is setting up this question.': 'Ведучий налаштовує це питання.',
+  'The host picks a player. If time runs out, a random player gets it.': 'Ведучий обирає гравця. Якщо час вийде, питання отримає випадковий гравець.',
   'Press Next to continue.': 'Натисніть «Далі», щоб продовжити.',
   'The next round starts soon.': 'Наступний раунд скоро почнеться.',
   'You sit out the final': 'Ви не граєте у фіналі',

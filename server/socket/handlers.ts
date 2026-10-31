@@ -226,6 +226,8 @@ export function registerSocketHandlers(io: Server, room: Room, limits: SocketLim
     /* ---- game flow ---- */
 
     on('game:start', 'manager', () => room.engine.start());
+    // Restart wipes the game for everyone, so it shares start's host-level access.
+    on('game:restart', 'manager', () => room.engine.restart());
     on('game:stop', 'moderator', () => room.engine.stop());
     on('game:pause', 'moderator', () => room.engine.pause());
     on('game:resume', 'moderator', () => room.engine.resume());
