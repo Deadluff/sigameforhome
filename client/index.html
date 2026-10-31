@@ -285,6 +285,15 @@
           </form>
           <p id="stake-auction-hint" class="hint"></p>
         </section>
+        <!-- The recipient of a secret picks its value; the host only chooses who gets it. -->
+        <section id="special-price" class="card hidden" aria-labelledby="special-price-title">
+          <h3 id="special-price-title">Choose the value</h3>
+          <div class="row">
+            <button id="special-price-min" type="button" class="primary"></button>
+            <button id="special-price-max" type="button" class="primary"></button>
+          </div>
+          <p class="hint">A right answer wins this value, a wrong one loses it.</p>
+        </section>
         <section id="for-all" class="card hidden" aria-labelledby="for-all-title">
           <h3 id="for-all-title">Everyone answers</h3>
           <p id="for-all-status" role="status" aria-live="polite"></p>
@@ -337,7 +346,6 @@
           <form id="special-setup" class="bar-group hidden">
             <strong id="special-setup-title">Special question</strong>
             <label class="field"><span>Answering player</span><select id="special-player" required></select></label>
-            <label class="field"><span>Value</span><input id="special-price" type="number" inputmode="numeric" required /></label>
             <button type="submit" class="primary">Show question</button>
           </form>
           <div id="final-host" class="bar-group hidden">

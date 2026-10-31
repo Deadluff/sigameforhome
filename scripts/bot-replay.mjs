@@ -213,9 +213,10 @@ async function playPack(file, name) {
           break;
         }
         case 'specialSetup': {
-          const target = players[n % players.length];
-          const price = c?.priceRange ? c.priceRange.minimum : c?.price ?? 0;
-          await act(host, 'game:configureSpecial', { playerId: target.id, price }, 'special');
+          // The host hands the secret over; the recipient then picks its value (min or max).
+          const recipient = byId(c?.assignedId);
+          if (recipient) await act(recipient, 'game:specialPrice', { price: c.priceOptions[n % c.priceOptions.length] }, 'price');
+          else await act(host, 'game:configureSpecial', { playerId: players[n % players.length].id }, 'special');
           break;
         }
         case 'stakeAuction': {

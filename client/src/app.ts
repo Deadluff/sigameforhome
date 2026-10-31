@@ -491,6 +491,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     renderAppeals();
     syncQuestionMedia();
     renderSpecialSetup();
+    renderSpecialPrice();
     renderFinal();
     renderHostControls();
     updateOrientiers();
@@ -884,7 +885,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
 
   function renderSpecialSetup() {
     const state = activeState();
-    const visible = state.you.canModerate && state.game.phase === 'specialSetup';
+    // Once a player has the question, they pick its value; the host form is done.
+    const visible = state.you.canModerate && state.game.phase === 'specialSetup' && !state.game.current?.assignedId;
     $('#special-setup').classList.toggle('hidden', !visible);
     const current = state.game.current;
     if (!visible || !current) return;
@@ -899,20 +901,28 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     const eligible = state.participants.filter((p) => p.role === 'player' && p.connected && p.id !== excluded);
     for (const player of eligible) playerSelect.add(new Option(player.name, player.id));
     if (eligible.some((p) => p.id === previous)) playerSelect.value = previous;
-    const range = current.priceRange;
-    const priceInput = input('#special-price');
-    priceInput.min = String(gift ? current.price : range?.minimum ?? current.price);
-    priceInput.max = String(gift ? current.price : range?.maximum ?? Math.max(current.price,
-      state.participants.find((p) => p.id === playerSelect.value)?.score ?? 0));
-    priceInput.step = String(range?.step || 1);
-    priceInput.readOnly = gift;
-    if (document.activeElement !== priceInput) priceInput.value = priceInput.min;
   }
 
   $('#special-setup').addEventListener('submit', (event) => {
     event.preventDefault();
-    send('game:configureSpecial', { playerId: select('#special-player').value, price: Number(input('#special-price').value) });
+    send('game:configureSpecial', { playerId: select('#special-player').value });
   });
+
+  /** The recipient of a min/max secret sees two buttons: answer for the minimum or the maximum. */
+  function renderSpecialPrice() {
+    const { game, you } = activeState();
+    const options = game.current?.priceOptions ?? [];
+    const visible = game.phase === 'specialSetup' && you.role === 'player' &&
+      game.current?.assignedId === you.id && options.length > 1;
+    $('#special-price').classList.toggle('hidden', !visible);
+    if (!visible) return;
+    const [minimum, maximum] = options;
+    button('#special-price-min').textContent = t('Minimum: {amount}', { amount: formatScore(minimum) });
+    button('#special-price-max').textContent = t('Maximum: {amount}', { amount: formatScore(maximum) });
+    button('#special-price-min').onclick = () => send('game:specialPrice', { price: minimum });
+    button('#special-price-max').onclick = () => send('game:specialPrice', { price: maximum });
+    revealTurnPanel($('#special-price'), `price:${game.current?.presentationId}`);
+  }
 
   function renderStakeAuction() {
     const { game, you, participants } = activeState();
@@ -1834,9 +1844,9 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       saveSetting(input(`#set-${key}`), { [key]: input(`#set-${key}`).checked });
     });
   }
-  // Settings and the special question's value step by fixed amounts; bids and wagers are typed
-  // (with All in), where +1 steps would only get in the way.
-  addSteppers(document.querySelectorAll<HTMLInputElement>('input[type="number"][id^="set-"], #special-price'));
+  // Settings step by fixed amounts; bids and wagers are typed (with All in), where +1 steps would
+  // only get in the way. A secret's value is no field any more: its recipient taps min or max.
+  addSteppers(document.querySelectorAll<HTMLInputElement>('input[type="number"][id^="set-"]'));
   // Bids and wagers get a slider instead (see amountSlider).
   addAmountSlider(input('#stake-bid-amount'));
   addAmountSlider(input('#final-amount'));
@@ -2489,8 +2499,12 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
         }));
       } else if (game.phase === 'specialSetup') {
         // The content stays hidden until a player is chosen; say what happens instead of a blank table.
+        const [minimum, maximum] = c.priceOptions ?? [];
         slots.prompt.append(Object.assign(document.createElement('p'), {
-          textContent: t('The host picks a player. If time runs out, a random player gets it.'),
+          textContent: c.assignedId && maximum != null
+            ? t('{name} plays for {minimum} or {maximum}. If time runs out, it is {minimum}.',
+              { name: recipient, minimum: formatScore(minimum), maximum: formatScore(maximum) })
+            : t('The host picks a player. If time runs out, a random player gets it.'),
         }));
       } else if (c.answerShown && c.right) renderAnswerStage(slots, c);
       else if (contentVisible) renderStaticContent(slots, c.content);
@@ -2669,9 +2683,14 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       } else if (game.phase === 'finalThemes') {
         setStage('idle', game.chooserId === you.id ? t('Final round: your turn') : t('Final round'),
           canPick ? t('Remove themes until one is left.') : t('{name} removes a theme.', { name: chooser }));
+      } else if (game.phase === 'specialSetup' && game.current?.assignedId) {
+        // The recipient of a min/max secret picks its value; everyone else waits for them.
+        const recipient = participants.find((p) => p.id === game.current?.assignedId)?.name ?? t('Player');
+        if (game.current.assignedId === you.id) setStage('money', t('Choose the value'), t('Play for the minimum or the maximum.'));
+        else setStage('money', t('Special question'), t('{name} chooses the value.', { name: recipient }));
       } else if (game.phase === 'specialSetup') {
         setStage('reading', game.current?.type === 'secretNoQuestion' ? t('A gift question') : t('Special question'),
-          you.canModerate ? t('Choose who answers and the value below.') : t('The host is setting up this question.'));
+          you.canModerate ? t('Choose who answers below.') : t('The host is setting up this question.'));
       } else if (game.phase === 'roundEnd') {
         setStage('idle', t('Round complete'), you.canModerate ? t('Press Next to continue.') : t('The next round starts soon.'));
       } else if (game.phase === 'finalWager' && you.role === 'player' && !finalist) {

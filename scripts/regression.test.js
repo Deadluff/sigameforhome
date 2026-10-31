@@ -194,18 +194,26 @@ test('display-only TV never inherits a freed player seat', (t) => {
   t.after(() => room.engine.reset());
 });
 
-test('guided secret questions assign one player and use the chosen value', (t) => {
+test('guided secret questions: the host picks the player, the player picks min or max', (t) => {
   const { room, host, player } = createRoom(t, 'classic');
   room.engine.selectQuestion(host.id, true, 0, 2);
   assert.equal(room.engine.phase, 'specialSetup');
   assert.deepEqual(room.snapshotFor(player.id).game.current.content, []);
-  room.engine.configureSpecial(player.id, 200);
+  room.engine.configureSpecial(player.id);
+  // Still hidden while the recipient chooses; only the two ends of the range are offered.
+  assert.equal(room.engine.phase, 'specialSetup');
+  assert.deepEqual(room.snapshotFor(player.id).game.current.content, []);
+  assert.deepEqual(room.snapshotFor(player.id).game.current.priceOptions, [100, 500]);
+  assert.throws(() => room.engine.configureSpecial(player.id), /already choosing/);
+  assert.throws(() => room.engine.chooseSpecialPrice(host.id, 500), /Only the chosen player/);
+  assert.throws(() => room.engine.chooseSpecialPrice(player.id, 200), /100 or 500/);
+  room.engine.chooseSpecialPrice(player.id, 500);
   assert.equal(room.engine.phase, 'reading');
   assert.equal(room.engine.buzz(player.id).result, 'ignored');
   room.engine.openBuzzer();
   assert.equal(room.engine.buzzer.winnerId, player.id);
   room.engine.judge(false);
-  assert.equal(player.score, -200);
+  assert.equal(player.score, -500);
 });
 
 test('secret assignment countdown uses its setting and stops when a recipient is chosen', (t) => {
@@ -217,7 +225,9 @@ test('secret assignment countdown uses its setting and stops when a recipient is
   room.engine.pause();
   room.engine.resume();
   assert.equal(room.engine.timer?.name, 'givingCat');
-  room.engine.configureSpecial(player.id, 200);
+  room.engine.configureSpecial(player.id);
+  assert.equal(room.engine.timer?.name, 'givingCat', 'the recipient gets the same clock to pick');
+  room.engine.chooseSpecialPrice(player.id, 100);
   assert.equal(room.engine.phase, 'reading');
   assert.equal(room.engine.timer?.name, 'reading');
 });
@@ -226,7 +236,7 @@ test('a chosen secret value cannot overflow the recipient score', (t) => {
   const { room, host, player } = createRoom(t, 'classic');
   player.score = Number.MAX_SAFE_INTEGER;
   room.engine.selectQuestion(host.id, true, 0, 2);
-  assert.throws(() => room.engine.configureSpecial(player.id, 200), /safe score/);
+  assert.throws(() => room.engine.configureSpecial(player.id), /safe score/);
   assert.equal(room.engine.phase, 'specialSetup');
   assert.equal(player.score, Number.MAX_SAFE_INTEGER);
 });
@@ -249,8 +259,7 @@ test('secret without a question awards fixed points without exposing content', (
   const hiddenMedia = { type: 'image', url: `/media/${loaded.packId}/Images/hidden-gift.png` };
   room.engine.current.question.content.push(hiddenMedia);
   assert.deepEqual(room.snapshotFor(player.id).game.current.content, []);
-  assert.throws(() => room.engine.configureSpecial(player.id, 401), /Value must be/);
-  room.engine.configureSpecial(player.id, 400);
+  room.engine.configureSpecial(player.id);
   assert.equal(room.engine.phase, 'reveal');
   assert.equal(player.score, 400);
   assert.equal(room.snapshotFor(player.id).game.current.assignedId, player.id);

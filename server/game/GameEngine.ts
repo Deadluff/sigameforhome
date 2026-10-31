@@ -181,7 +181,8 @@ export interface GameView {
     content: ContentItem[];
     answerShown: boolean;
     assignedId: string | null;
-    priceRange: unknown;
+    /** While a special question is set up: the values it may get (one fixed value, or min and max). */
+    priceOptions: number[] | null;
     right: string[] | null;
     wrong: string[] | null;
     answerContent: ContentItem[] | null;
@@ -1053,30 +1054,32 @@ export class GameEngine {
     if (this.forAllEligibleIds().every((id) => forAll.judged.has(id))) this.revealAnswer();
   }
 
-  configureSpecial(playerId: string, price: number): void {
+  /**
+   * The host hands the special question to a player. A secret with a min/max value then waits in
+   * this phase for that player to pick one of the two (classic rule: the recipient chooses, not the
+   * host); a fixed value or a gift settles at once.
+   */
+  configureSpecial(playerId: string): void {
     this.assert(this.phase === PHASES.SPECIAL_SETUP, 'No special question is awaiting setup');
     this.assert(this.current, 'No active question');
     const current = this.current;
+    this.assert(!current.assignedId, 'The player is already choosing the value');
     const player = this.room.participants.get(playerId);
     this.assert(player?.role === ROLES.PLAYER && player.connected, 'Choose a connected player');
     const { type, question } = current;
-    const range = question.typeParams?.price;
     // A secret without a question is a gift of the pack's fixed value.
     const gift = type === 'secretNoQuestion';
-    const minimum = this.specialMinimum();
-    const maximum = gift ? question.price : range?.maximum ?? Math.max(question.price, player.score);
-    const step = range?.step || 1;
-    this.assert(Number.isSafeInteger(price) && price >= minimum && price <= maximum &&
-      (price - minimum) % step === 0, `Value must be ${minimum}–${maximum} in steps of ${step}`);
-    // A chosen stake may use a player's score instead of the pack's bounded price range.
-    this.assert(Number.isSafeInteger(player.score + price) &&
-      (gift || Number.isSafeInteger(player.score - price)), 'Value would exceed a safe score');
+    const options = this.specialPriceOptions();
+    // Checked for every option now, so the recipient's later pick cannot fail on it.
+    this.assert(options.every((price) => Number.isSafeInteger(player.score + price) &&
+      (gift || Number.isSafeInteger(player.score - price))), 'Value would exceed a safe score');
     if (type.startsWith('secret') && question.typeParams?.selectionMode === 'exceptCurrent') {
       this.assert(playerId !== this.chooserId, 'Choose another player for this secret question');
     }
-    current.price = price;
     current.assignedId = playerId;
     if (gift) {
+      const price = options[0];
+      current.price = price;
       this.clearTimer();
       player.score += price;
       this.recordJudgment(playerId, true, price, price, 0, 'gift');
@@ -1086,30 +1089,52 @@ export class GameEngine {
       this.room.emitEvent({ type: 'giftAwarded', playerId, price });
       return;
     }
+    if (options.length === 1) return this.settleSpecialPrice(options[0]);
+    // The recipient gets a fresh clock of the same length to pick; running out takes the minimum.
+    this.startTimer('givingCat', this.settings.timeForGivingACat, () => this.expireSpecialSetup());
+  }
+
+  /** The recipient of a min/max secret picks its value. */
+  chooseSpecialPrice(playerId: string, price: number): void {
+    this.assert(this.phase === PHASES.SPECIAL_SETUP && this.current?.assignedId, 'No value is being chosen');
+    this.assert(this.current.assignedId === playerId, 'Only the chosen player picks the value');
+    const options = this.specialPriceOptions();
+    this.assert(options.includes(price), `Value must be ${options.join(' or ')}`);
+    this.settleSpecialPrice(price);
+  }
+
+  private settleSpecialPrice(price: number): void {
+    this.current!.price = price;
     this.presentQuestion();
   }
 
-  /** The lowest value a special question may get; the host's form starts at it too. */
-  specialMinimum(): number {
+  /**
+   * The values a special question may get: the gift's fixed value, a secret's fixed value, or a
+   * secret's minimum and maximum. Only the two ends are offered, never the steps between them.
+   */
+  specialPriceOptions(): number[] {
     const { type, question } = this.current!;
-    // A secret without a question is a gift of the pack's fixed value.
-    return type === 'secretNoQuestion' ? question.price : question.typeParams?.price?.minimum ?? question.price;
+    const range = question.typeParams?.price;
+    if (type === 'secretNoQuestion' || !range) return [question.price];
+    return range.minimum === range.maximum ? [range.minimum] : [range.minimum, range.maximum];
   }
 
   /**
    * Everyone sees the setup countdown, so running out must move the game on (playtest: it sat at
-   * zero with a blank table). An unassigned secret goes to a random eligible player, at the
-   * lowest value. With nobody eligible it waits for the host, who can still skip it.
+   * zero with a blank table). An unassigned secret goes to a random eligible player; a recipient
+   * who does not pick in time gets the lowest value. With nobody eligible it waits for the host,
+   * who can still skip it.
    */
   expireSpecialSetup(): void {
     if (this.phase !== PHASES.SPECIAL_SETUP || !this.current) return;
+    if (this.current.assignedId) return this.settleSpecialPrice(this.specialPriceOptions()[0]);
     const { type, question } = this.current;
     const excluded = type.startsWith('secret') && question.typeParams?.selectionMode === 'exceptCurrent'
       ? this.chooserId : null;
     const eligible = this.activePlayers().filter((p) => p.id !== excluded);
     if (!eligible.length) return;
     const player = eligible[Math.floor(Math.random() * eligible.length)];
-    this.configureSpecial(player.id, this.specialMinimum());
+    this.configureSpecial(player.id);
   }
 
   setFinalWager(playerId: string, amount: number): void {
@@ -1881,7 +1906,7 @@ export class GameEngine {
         type: c.type,
         content: this.contentHidden() ? [] : c.question.content,
         assignedId: c.assignedId,
-        priceRange: this.phase === PHASES.SPECIAL_SETUP ? c.question.typeParams?.price ?? null : null,
+        priceOptions: this.phase === PHASES.SPECIAL_SETUP ? this.specialPriceOptions() : null,
         answerShown: c.answerShown,
         right: showAnswer && c.type !== 'secretNoQuestion' ? c.question.right : null,
         wrong: viewer?.role === ROLES.HOST ? c.question.wrong : null,

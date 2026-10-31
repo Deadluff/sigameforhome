@@ -56,20 +56,45 @@ function createRoom(t, modifyPack = () => {}) {
   return { room, host, players };
 }
 
-test('an unassigned secret goes to a player at its lowest value when the countdown ends', (t) => {
+test('an unassigned secret goes to a player, who gets the lowest value if they do not pick', (t) => {
   const { room, host, players } = createRoom(t);
   room.engine.selectQuestion(host.id, true, 0, SECRET);
   assert.equal(room.engine.phase, 'specialSetup');
   t.mock.timers.tick(SETUP_SECONDS * 1000);
-  assert.equal(room.engine.phase, 'reading');
+  // The random recipient still gets a full clock to pick min or max.
+  assert.equal(room.engine.phase, 'specialSetup');
   const current = room.engine.current;
   assert.ok(players.some((p) => p.id === current.assignedId), 'a seated player gets the question');
+  t.mock.timers.tick(SETUP_SECONDS * 1000);
+  assert.equal(room.engine.phase, 'reading');
   assert.equal(current.price, 100);
   // The recipient answers and is judged as if the host had chosen them.
   room.engine.openBuzzer();
   assert.equal(room.engine.buzzer.winnerId, current.assignedId);
   room.engine.judge(true);
   assert.equal(room.participants.get(current.assignedId).score, 100);
+});
+
+test('the recipient picks the maximum; a late pick after time runs out is refused', (t) => {
+  const { room, host, players: [ann, ben] } = createRoom(t);
+  room.engine.selectQuestion(host.id, true, 0, SECRET);
+  room.engine.configureSpecial(ann.id);
+  assert.throws(() => room.engine.chooseSpecialPrice(ben.id, 500), /Only the chosen player/);
+  room.engine.chooseSpecialPrice(ann.id, 500);
+  assert.equal(room.engine.current.price, 500);
+  assert.throws(() => room.engine.chooseSpecialPrice(ann.id, 100), /No value is being chosen/);
+});
+
+test('a recipient who does not pick in time plays for the minimum, also after a pause', (t) => {
+  const { room, host, players: [ann] } = createRoom(t);
+  room.engine.selectQuestion(host.id, true, 0, SECRET);
+  room.engine.configureSpecial(ann.id);
+  t.mock.timers.tick(4000);
+  room.engine.pause();
+  room.engine.resume();
+  t.mock.timers.tick(SETUP_SECONDS * 1000);
+  assert.equal(room.engine.phase, 'reading');
+  assert.equal(room.engine.current.price, 100);
 });
 
 test('the countdown still ends the setup after a pause', (t) => {
@@ -79,7 +104,6 @@ test('the countdown still ends the setup after a pause', (t) => {
   room.engine.pause();
   room.engine.resume();
   t.mock.timers.tick(SETUP_SECONDS * 1000);
-  assert.equal(room.engine.phase, 'reading');
   assert.ok(room.engine.current.assignedId);
 });
 

@@ -243,8 +243,10 @@ export function registerSocketHandlers(io: Server, room: Room, limits: SocketLim
     );
     on<{ themeIndex: number }>('game:removeFinalTheme', 'member', ({ themeIndex }, pid) =>
       room.engine.removeFinalTheme(pid, room.canModerate(pid), Number(themeIndex)));
-    on<{ playerId: string; price: number }>('game:configureSpecial', 'moderator', ({ playerId, price }) =>
-      room.engine.configureSpecial(playerId, Number(price)));
+    on<{ playerId: string }>('game:configureSpecial', 'moderator', ({ playerId }) =>
+      room.engine.configureSpecial(playerId));
+    on<{ price: number }>('game:specialPrice', 'member', ({ price }, pid) =>
+      room.engine.chooseSpecialPrice(pid, Number(price)));
     on<{ amount: number; allIn: boolean }>('game:stakeBid', 'member', ({ amount, allIn }, pid) =>
       room.engine.bidStake(pid, amount, allIn));
     on('game:stakePass', 'member', (_, pid) => room.engine.passStake(pid));

@@ -93,9 +93,9 @@ test('the countdown leads into the step each question needs', (t) => {
   const secret = createRoom(t);
   pick(secret.engine, SECRET);
   assert.equal(secret.engine.phase, 'specialSetup');
-  const { question } = secret.engine.current;
   const target = [secret.alice, secret.bob].find((p) => p.id !== secret.engine.chooserId);
-  secret.engine.configureSpecial(target.id, question.typeParams?.price?.minimum ?? question.price);
+  secret.engine.configureSpecial(target.id);
+  secret.engine.chooseSpecialPrice(target.id, secret.engine.specialPriceOptions()[0]);
   assert.equal(secret.engine.phase, 'ready');
   finishReady(secret.engine);
   assert.equal(secret.engine.phase, 'reading');

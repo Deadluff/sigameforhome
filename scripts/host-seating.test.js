@@ -83,7 +83,8 @@ test('an assigned player unseated before their turn: the answer shows, nobody an
   const { room, host, engine, players: [alice] } = started(t);
   engine.selectQuestion(host.id, true, 0, SECRET);
   assert.equal(engine.phase, 'specialSetup');
-  engine.configureSpecial(alice.id, 100);
+  engine.configureSpecial(alice.id);
+  engine.chooseSpecialPrice(alice.id, 100);
   assert.throws(() => room.setRole(alice.id, alice.id, 'spectator'), /Wait until the question is over/);
   room.setRole(host.id, alice.id, 'spectator');
   engine.openBuzzer();

@@ -136,7 +136,7 @@ test('during the intro presses are ignored and host shortcuts are refused', (t) 
   assert.throws(() => stake.engine.bidStake(stake.alice.id, 500), /./);
   const secret = createRoom(t);
   pick(secret.engine, SECRET);
-  assert.throws(() => secret.engine.configureSpecial(secret.alice.id, 100), /No special question/);
+  assert.throws(() => secret.engine.configureSpecial(secret.alice.id), /No special question/);
   assert.equal(room.engine.phase, 'intro');
 });
 

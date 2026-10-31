@@ -90,7 +90,8 @@ export interface RoomState {
       type: string;
       assignedId: string | null;
       content: ContentItem[];
-      priceRange: { minimum: number; maximum: number; step: number } | null;
+      /** While a special question is set up: the values it may get (one fixed value, or min and max). */
+      priceOptions: number[] | null;
       answerShown: boolean;
       right: string[] | null;
       answerContent: ContentItem[] | null;
@@ -194,7 +195,8 @@ export interface CommandPayloads {
   'steam:download': { link: string };
   'game:select': { themeIndex: number; questionIndex: number };
   'game:removeFinalTheme': { themeIndex: number };
-  'game:configureSpecial': { playerId: string; price: number };
+  'game:configureSpecial': { playerId: string };
+  'game:specialPrice': { price: number };
   'game:finalWager': { amount: number };
   'game:finalAnswer': { answer: string };
   'game:draft': { text: string };
