@@ -423,6 +423,8 @@ export const uk: Record<string, string | [string, string, string]> = {
   'Place wager': 'Зробити ставку',
   'Change wager': 'Змінити ставку',
   'Wager placed': 'Ставку зроблено',
+  'Wager in': 'Ставка є',
+  'No wager': 'Без ставки',
   'Your final answer': 'Ваша фінальна відповідь',
   'Placed: {wager}. You can change it (0 to {max}).': 'Ставка: {wager}. Можна змінити (від 0 до {max}).',
   'Your final wager, 0 to {max}': 'Ваша фінальна ставка, від 0 до {max}',

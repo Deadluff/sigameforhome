@@ -200,3 +200,21 @@ test('a recovered moderator can see wagers for judging without seeing the answer
   assert.deepEqual(room.snapshotFor(player.id).game.final.wagers, { [player.id]: 200 });
   assert.equal(room.snapshotFor(player.id).game.current.right, null);
 });
+
+test('podiums can mark who saved a final wager, also while paused, without the amount', (t) => {
+  const { room, host, player } = finalGame(t, false);
+  const engine = room.engine;
+  engine.removeFinalTheme(host.id, true, 0);
+  engine.removeFinalTheme(host.id, true, 1);
+  assert.equal(engine.phase, 'finalWager');
+  const view = () => room.snapshotFor(host.id).game.final;
+  assert.deepEqual(view().eligibleIds, [player.id]);
+  assert.deepEqual(view().wagered, []);
+  // A finalist without a wager stays listed during a pause, so the "no wager yet" mark survives it.
+  engine.pause();
+  assert.deepEqual(view().eligibleIds, [player.id]);
+  engine.resume();
+  engine.setFinalWager(player.id, 200);
+  assert.deepEqual(view().wagered, [player.id]);
+  assert.equal(view().wagers, null, 'the amount stays private');
+});

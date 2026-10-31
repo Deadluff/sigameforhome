@@ -1972,9 +1972,10 @@ export class GameEngine {
         wagers: finalShown
           ? Object.fromEntries(this.finalEligibleIds().map((id) => [id, this.finalWagers.get(id)])) : null,
         judged: [...this.finalJudged],
-        // Before wagers close, finalists are everyone with a positive score.
-        eligibleIds: this.phase === PHASES.FINAL_WAGER || this.phase === PHASES.FINAL_THEMES ||
-          this.phase === PHASES.BOARD ? this.finalists().map((p) => p.id) : this.finalEligibleIds(),
+        // Before wagers close, finalists are everyone with a positive score (also while paused there,
+        // so the podiums keep marking who has not wagered yet).
+        eligibleIds: shownPhase === PHASES.FINAL_WAGER || shownPhase === PHASES.FINAL_THEMES ||
+          shownPhase === PHASES.BOARD ? this.finalists().map((p) => p.id) : this.finalEligibleIds(),
         answeredIds: [...this.finalAnswers.keys()],
         // Who holds the close by changing a sent answer; the host only, and never the text itself.
         editingIds: canModerate ? [...this.drafts.keys()].filter((id) => this.finalAnswers.has(id)) : [],

@@ -1211,6 +1211,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     const now = nowServer();
     const blockedMap = new Map((game.buzzer?.blockedPlayers ?? []).map((b) => [b.id, b.until]));
     const attemptedSet = new Set(game.buzzer?.attempted ?? []);
+    const finalWagering = game.phase === 'finalWager' || (game.phase === 'paused' && game.pausedPhase === 'finalWager');
     const seats = $('#players');
     const hostSeat = $('#host-seat');
     // The host sits in the host column, like the show's presenter, not on the scoreboard.
@@ -1272,6 +1273,11 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       else if (isBlocked) badge('blocked-badge', t('Blocked {seconds}s', { seconds: Math.max(1, Math.ceil((blockedUntil - now) / 1000)) }));
       else if (hasTried) badge('tried-badge', t('Answered'));
       else if (isChooser) badge('chooser-badge', game.phase === 'finalThemes' ? t('Removes') : t('Picks'));
+      // During final wagers everyone sees who has saved a wager, never the amount.
+      else if (finalWagering && game.final?.eligibleIds.includes(p.id)) {
+        const saved = game.final.wagered.includes(p.id);
+        badge(saved ? 'ready-badge' : 'unready-badge', saved ? t('Wager in') : t('No wager'));
+      }
       else if (game.phase === 'lobby' && p.role === 'player') badge(p.ready ? 'ready-badge' : 'unready-badge', p.ready ? t('Ready') : t('Not ready'));
       // The host can spot a slow link before it slows every buzzer; a player sees only their own.
       else if (p.pingMs != null && (you.canModerate || p.id === you.id)) {
