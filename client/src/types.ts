@@ -7,6 +7,10 @@ export interface Participant {
   displayOnly: boolean;
   ready: boolean;
   isOwner: boolean;
+  /** Live connection figures; null while offline or not yet measured. */
+  pingMs: number | null;
+  oneWayMs: number | null;
+  jitterMs: number | null;
 }
 
 export interface ContentItem {

@@ -57,6 +57,10 @@ export interface RoomSnapshot {
     isOwner: boolean;
     displayOnly: boolean;
     ready: boolean;
+    /** Live connection figures from clock probes; null while offline or not yet measured. */
+    pingMs: number | null;
+    oneWayMs: number | null;
+    jitterMs: number | null;
   }>;
   settings: GameSettings;
   pack: {
@@ -98,6 +102,11 @@ export class Room extends EventEmitter {
   /** The slowest round trip among seated, connected players; their screens set the buzzer pace. */
   worstPlayerRttMs(): number | null {
     return this.latency.worst(this.players().filter((p) => p.connected).map((p) => p.id));
+  }
+
+  /** Records a probe's round trip; the shown ping re-broadcasts only when it moves noticeably. */
+  recordPing(pid: string, rtt: unknown): void {
+    if (this.latency.report(pid, rtt)) this.changed();
   }
 
   host(): Participant | null {
@@ -544,16 +553,22 @@ export class Room extends EventEmitter {
         : null,
       participants: [...this.participants.values()]
         .sort((a, b) => a.joinedAt - b.joinedAt)
-        .map((p) => ({
-          id: p.id,
-          name: p.name,
-          role: p.role,
-          score: p.score,
-          connected: p.connected,
-          isOwner: p.id === this.ownerId,
-          displayOnly: !!p.displayOnly,
-          ready: !!p.ready,
-        })),
+        .map((p) => {
+          const ping = p.connected ? this.latency.stats(p.id) : null;
+          return {
+            id: p.id,
+            name: p.name,
+            role: p.role,
+            score: p.score,
+            connected: p.connected,
+            isOwner: p.id === this.ownerId,
+            displayOnly: !!p.displayOnly,
+            ready: !!p.ready,
+            pingMs: ping?.pingMs ?? null,
+            oneWayMs: ping?.oneWayMs ?? null,
+            jitterMs: ping?.jitterMs ?? null,
+          };
+        }),
       settings: this.settings,
       pack: pack && loadedPack ? {
         file: loadedPack.file,

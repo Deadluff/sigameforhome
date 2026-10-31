@@ -140,7 +140,7 @@ export function registerSocketHandlers(io: Server, room: Room, limits: SocketLim
     // Probes carry the client's smoothed round trip; a joined player's figure sizes the buzzer
     // open lead and comparison window (buzzTiming.ts). Unjoined or stale sockets only get the time.
     on<{ rtt?: unknown }>('clock:ping', 'none', ({ rtt }, pid) => {
-      if (pid && room.participants.get(pid)?.socketId === socket.id) room.latency.report(pid, rtt);
+      if (pid && room.participants.get(pid)?.socketId === socket.id) room.recordPing(pid, rtt);
       return { serverTime: Date.now() };
     });
 

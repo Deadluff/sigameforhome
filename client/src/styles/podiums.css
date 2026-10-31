@@ -42,6 +42,11 @@
 .badge.off-badge { background: var(--set-sunk); color: var(--mist); }
 .badge.ready-badge { background: var(--go); color: var(--on-go); }
 .badge.unready-badge { background: var(--set-sunk); color: var(--mist); }
+/* Ping reads as a figure, so digits keep their width; the colour grades the link. */
+.badge.ping-badge { background: var(--set-sunk); color: var(--mist); font-variant-numeric: tabular-nums; font-weight: 700; }
+.badge.ping-badge.ping-good { color: var(--go); }
+.badge.ping-badge.ping-fair { color: var(--lamp); }
+.badge.ping-badge.ping-poor { color: var(--stop); }
 
 /* The "picks" badge carries the amber; the outline only marks the seat. */
 .player.chooser { border-color: var(--paper); }

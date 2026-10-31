@@ -276,7 +276,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     if (!token) {
       if (tvMode) {
         socket.emit('session:join', { nickname: `TV ${Math.floor(Math.random() * 10000)}`, asSpectator: true }, (res: JoinAck) => {
-          if (res.ok) localStorage.setItem(TOKEN_KEY, res.token);
+          if (res.ok) { localStorage.setItem(TOKEN_KEY, res.token); syncClockSample(); }
           else { show('screen-join'); $('#join-error').textContent = serverText(res.error); }
         });
         return;
@@ -284,7 +284,9 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       return show('screen-join');
     }
     socket.emit('session:resume', { token }, (res: { resumed?: boolean }) => {
-      if (!res?.resumed) {
+      // Probes sent before the seat was bound carry no round trip for the buzzer; send one now.
+      if (res?.resumed) syncClockSample();
+      else {
         localStorage.removeItem(TOKEN_KEY);
         actionUncertain = false;
         $('#connection-status').textContent = '';
@@ -329,6 +331,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       if (err) return ($('#join-error').textContent = t('No reply from the game. Check the connection and try again.'));
       if (!res.ok) return ($('#join-error').textContent = serverText(res.error));
       localStorage.setItem(TOKEN_KEY, res.token);
+      syncClockSample();
     });
   });
 
@@ -1215,6 +1218,13 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       else if (hasTried) badge('tried-badge', t('Answered'));
       else if (isChooser) badge('chooser-badge', game.phase === 'finalThemes' ? t('Removes') : t('Picks'));
       else if (game.phase === 'lobby' && p.role === 'player') badge(p.ready ? 'ready-badge' : 'unready-badge', p.ready ? t('Ready') : t('Not ready'));
+      // The host can spot a slow link before it slows every buzzer; a player sees only their own.
+      else if (p.pingMs != null && (you.canModerate || p.id === you.id)) {
+        const quality = p.pingMs <= 25 ? 'ping-good' : p.pingMs <= 70 ? 'ping-fair' : 'ping-poor';
+        badge(`ping-badge ${quality}`, t('{ms} ms', { ms: p.pingMs }));
+        (slot.lastElementChild as HTMLElement).title = t('Round trip {rtt} ms · one way {oneWay} ms · jitter ±{jitter} ms',
+          { rtt: p.pingMs, oneWay: p.oneWayMs ?? Math.round(p.pingMs / 2), jitter: p.jitterMs ?? 0 });
+      }
       el.append(slot);
       // Final answers are judged on each podium, next to the answer and wager they belong to.
       // The server sends them to the host while judging and to everyone once the final is revealed.
@@ -1236,7 +1246,9 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
       // Menu items live in a popover panel so opening one never reshapes the podium row.
       const panel = Object.assign(document.createElement('div'), { className: 'player-menu-panel' });
       // Naming the person keeps the menu readable when it floats over the board.
-      panel.append(Object.assign(document.createElement('strong'), { className: 'menu-title', textContent: p.name }));
+      const title = p.connected && p.pingMs != null
+        ? t('{name} · {ms} ms (±{jitter})', { name: p.name, ms: p.pingMs, jitter: p.jitterMs ?? 0 }) : p.name;
+      panel.append(Object.assign(document.createElement('strong'), { className: 'menu-title', textContent: title }));
       actions.append(summary, panel);
       // A stand-in host does not change their own score.
       if (you.canModerate && p.role === 'player' && p.id !== you.id) {

@@ -16,20 +16,48 @@ export const MAX_SYNC_WINDOW_MS = 500;
 // smoothed round trip, plus the frame a slow phone needs before it can paint green.
 const LEAD_MARGIN_MS = 120;
 const WINDOW_MARGIN_MS = 80;
+/** Recent reports kept per player for the jitter shown next to their ping. */
+const JITTER_SAMPLES = 8;
+/** Smaller moves are Wi-Fi noise; re-broadcasting the room for each would only cost renders. */
+const PING_CHANGE_MS = 10;
+
+/** What the podium shows about a player's connection. */
+export interface PingStats {
+  pingMs: number;
+  oneWayMs: number;
+  jitterMs: number;
+}
 
 /** Each client's smoothed round trip, as it reports it with its clock probes. */
 export class LatencyBoard {
   private readonly rtts = new Map<string, number>();
+  private readonly samples = new Map<string, number[]>();
 
-  report(pid: string, raw: unknown): void {
-    const rtt = Number(raw);
-    if (!Number.isFinite(rtt) || rtt < 0) return;
-    this.rtts.set(pid, Math.min(MAX_REPORTED_RTT_MS, Math.round(rtt)));
+  /** Returns true when the shown ping moved enough to be worth a room update. */
+  report(pid: string, raw: unknown): boolean {
+    const value = Number(raw);
+    if (!Number.isFinite(value) || value < 0) return false;
+    const rtt = Math.min(MAX_REPORTED_RTT_MS, Math.round(value));
+    const previous = this.rtts.get(pid);
+    this.rtts.set(pid, rtt);
+    this.samples.set(pid, [...(this.samples.get(pid) ?? []), rtt].slice(-JITTER_SAMPLES));
+    return previous == null || Math.abs(previous - rtt) >= PING_CHANGE_MS;
   }
 
   /** A new connection may be on another network, so the old figure no longer applies. */
   forget(pid: string): void {
     this.rtts.delete(pid);
+    this.samples.delete(pid);
+  }
+
+  /** The latest round trip with its spread over recent reports; null before the first report. */
+  stats(pid: string): PingStats | null {
+    const rtt = this.rtts.get(pid);
+    if (rtt == null) return null;
+    const recent = this.samples.get(pid) ?? [rtt];
+    const mean = recent.reduce((sum, v) => sum + v, 0) / recent.length;
+    const jitterMs = Math.round(recent.reduce((sum, v) => sum + Math.abs(v - mean), 0) / recent.length);
+    return { pingMs: rtt, oneWayMs: Math.round(rtt / 2), jitterMs };
   }
 
   /** The slowest round trip among these participants; null when none has reported yet. */

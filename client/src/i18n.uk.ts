@@ -516,6 +516,8 @@ export const uk: Record<string, string | [string, string, string]> = {
   'Show the answer, or press Next to return to the board.': 'Покажіть відповідь або натисніть «Далі», щоб повернутися до табло.',
   'Game in progress': 'Гра триває',
   '{ms} ms': '{ms} мс',
+  'Round trip {rtt} ms · one way {oneWay} ms · jitter ±{jitter} ms': 'Затримка туди й назад {rtt} мс · в один бік {oneWay} мс · коливання ±{jitter} мс',
+  '{name} · {ms} ms (±{jitter})': '{name} · {ms} мс (±{jitter})',
   '{s} s': '{s} с',
 
   /* ---------- player buzzer ---------- */
