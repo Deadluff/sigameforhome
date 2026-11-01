@@ -1055,7 +1055,16 @@ export class GameEngine {
   }
 
   /**
-   * The host hands the special question to a player. A secret with a min/max value then waits in
+   * Classic rule: the player who picked the cell gives the secret away. The host may assign it
+   * instead, e.g. when the picker is away; the setup clock still covers a picker who never acts.
+   */
+  giveSpecial(actorId: string, moderator: boolean, playerId: string): void {
+    this.assert(moderator || actorId === this.chooserId, 'Only the player who picked it gives it away');
+    this.configureSpecial(playerId);
+  }
+
+  /**
+   * Hands the special question to a player. A secret with a min/max value then waits in
    * this phase for that player to pick one of the two (classic rule: the recipient chooses, not the
    * host); a fixed value or a gift settles at once.
    */

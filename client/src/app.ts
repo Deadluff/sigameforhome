@@ -491,6 +491,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     renderAppeals();
     syncQuestionMedia();
     renderSpecialSetup();
+    renderSpecialGive();
     renderSpecialPrice();
     renderFinal();
     renderHostControls();
@@ -892,13 +893,20 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     if (!visible || !current) return;
     const gift = current.type === 'secretNoQuestion';
     $('#special-setup-title').textContent = gift ? t('Gift') : t('Special question');
-    $('#special-setup button[type="submit"]').textContent = gift ? t('Award points') : t('Show question');
-    const playerSelect = select('#special-player');
+    $('#special-setup button[type="submit"]').textContent = gift ? t('Award points') : t('Assign');
+    fillSpecialRecipients(select('#special-player'));
+  }
+
+  /** Lists the players a secret may go to, keeping the current choice when it is still allowed. */
+  function fillSpecialRecipients(playerSelect: HTMLSelectElement) {
+    const { game, participants } = activeState();
+    const current = game.current;
+    if (!current) return;
     const previous = playerSelect.value;
     playerSelect.replaceChildren();
     // A secret marked "except current" may not go back to the player who opened it.
-    const excluded = current.type.startsWith('secret') && current.selectionMode === 'exceptCurrent' ? state.game.chooserId : null;
-    const eligible = state.participants.filter((p) => p.role === 'player' && p.connected && p.id !== excluded);
+    const excluded = current.type.startsWith('secret') && current.selectionMode === 'exceptCurrent' ? game.chooserId : null;
+    const eligible = participants.filter((p) => p.role === 'player' && p.connected && p.id !== excluded);
     for (const player of eligible) playerSelect.add(new Option(player.name, player.id));
     if (eligible.some((p) => p.id === previous)) playerSelect.value = previous;
   }
@@ -906,6 +914,30 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
   $('#special-setup').addEventListener('submit', (event) => {
     event.preventDefault();
     send('game:configureSpecial', { playerId: select('#special-player').value });
+  });
+
+  /**
+   * The player who picked a secret gives it away (classic rule). A picker who also moderates
+   * already has the host bar form, so this panel stays hidden for them.
+   */
+  function renderSpecialGive() {
+    const { game, you } = activeState();
+    const visible = game.phase === 'specialSetup' && !game.current?.assignedId &&
+      you.role === 'player' && game.chooserId === you.id && !you.canModerate;
+    $('#special-give').classList.toggle('hidden', !visible);
+    if (!visible || !game.current) return;
+    const gift = game.current.type === 'secretNoQuestion';
+    $('#special-give-title').textContent = gift ? t('Give the gift') : t('Give the secret');
+    $('#special-give-hint').textContent = game.current.selectionMode === 'exceptCurrent'
+      ? t('Choose another player. If time runs out, a random player gets it.')
+      : t('You may keep it. If time runs out, a random player gets it.');
+    fillSpecialRecipients(select('#special-give-player'));
+    revealTurnPanel($('#special-give'), `give:${game.current.presentationId}`);
+  }
+
+  $('#special-give-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    send('game:configureSpecial', { playerId: select('#special-give-player').value });
   });
 
   /** The recipient of a min/max secret sees two buttons: answer for the minimum or the maximum. */
@@ -2452,8 +2484,9 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
     box.dataset.answerType = c.answerType;
 
     const recipient = state.participants.find((p) => p.id === c.assignedId)?.name ?? t('Player');
+    const picker = state.participants.find((p) => p.id === game.chooserId)?.name ?? t('Player');
     const heading = Object.assign(document.createElement('h3'), { className: 'q-meta', textContent: c.type === 'secretNoQuestion'
-      ? game.phase === 'specialSetup' ? t('Gift: the host is choosing who gets it')
+      ? game.phase === 'specialSetup' ? t('Gift: {name} chooses who gets it', { name: picker })
         : t('Gift: {name} receives {amount}', { name: recipient, amount: formatScore(c.price) })
       : game.round?.type === 'final' ? `${t('Final')} · ${c.themeName}`
         : `${c.themeName} · ${formatScore(c.price)}` });
@@ -2510,7 +2543,7 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
           textContent: c.assignedId && maximum != null
             ? t('{name} plays for {minimum} or {maximum}. If time runs out, it is {minimum}.',
               { name: recipient, minimum: formatScore(minimum), maximum: formatScore(maximum) })
-            : t('The host picks a player. If time runs out, a random player gets it.'),
+            : t('{name} gives it to a player. If time runs out, a random player gets it.', { name: picker }),
         }));
       } else if (c.answerShown && c.right) renderAnswerStage(slots, c);
       else if (contentVisible) renderStaticContent(slots, c.content);
@@ -2659,8 +2692,8 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
         const theme = game.board[c.themeIndex]?.name ?? c.themeName;
         const withPrice = t('{theme} for {price}', { theme, price: formatScore(c.price) });
         const intro: Record<string, [string, string]> = {
-          secret: [theme, t('Secret question. The host picks who answers.')],
-          secretPublicPrice: [withPrice, t('Secret question. The host picks who answers.')],
+          secret: [theme, t('Secret question. {name} gives it to a player.', { name: chooser })],
+          secretPublicPrice: [withPrice, t('Secret question. {name} gives it to a player.', { name: chooser })],
           secretNoQuestion: [theme, t('Gift question.')],
           stake: [withPrice, t('Auction. Players bid for the question.')],
           noRisk: [withPrice, t('No risk. A wrong answer costs nothing.')],
@@ -2696,7 +2729,10 @@ import type { Ack, ClientToServerEvents, CommandEvent, CommandPayloads, ContentI
         else setStage('money', t('Special question'), t('{name} chooses the value.', { name: recipient }));
       } else if (game.phase === 'specialSetup') {
         setStage('reading', game.current?.type === 'secretNoQuestion' ? t('A gift question') : t('Special question'),
-          you.canModerate ? t('Choose who answers below.') : t('The host is setting up this question.'));
+          // The picker gives it away; the host sees who holds it and may assign it instead.
+          game.chooserId === you.id && !you.canModerate ? t('Choose who gets it below.')
+            : you.canModerate ? t('{name} is giving it away. You can assign it below.', { name: chooser })
+              : t('{name} is giving it to a player.', { name: chooser }));
       } else if (game.phase === 'roundEnd') {
         setStage('idle', t('Round complete'), you.canModerate ? t('Press Next to continue.') : t('The next round starts soon.'));
       } else if (game.phase === 'finalWager' && you.role === 'player' && !finalist) {

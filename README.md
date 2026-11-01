@@ -42,7 +42,8 @@ Workshop updates keep prior pack versions so a saved game can resume with the sa
 Guided classic mode supports standard, no-risk, secret, secret gifts without a question, stake auctions, for-all questions, and final questions.
 In a stake auction, players bid in turn, may go all-in or pass, and the high bidder answers for the winning amount.
 For-all questions collect each player's private text answer, then the host judges them separately for the fixed question value.
-The host selects secret recipients. In the final round, players submit private wagers and the host
+The player who picked a secret gives it to a player; the host can assign it instead.
+With a price range, the recipient plays for the minimum or the maximum. In the final round, players submit private wagers and the host
 judges each answer. Final themes are removed one by one before the question is chosen. The optional
 “Play all final themes” setting repeats this flow for the first question of every final theme.
 After a revealed verdict, players can request an appeal. Eligible players vote privately; an accepted appeal

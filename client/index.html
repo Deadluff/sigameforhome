@@ -285,7 +285,16 @@
           </form>
           <p id="stake-auction-hint" class="hint"></p>
         </section>
-        <!-- The recipient of a secret picks its value; the host only chooses who gets it. -->
+        <!-- The player who picked a secret gives it away (classic rule); the host bar can still assign it. -->
+        <section id="special-give" class="card hidden" aria-labelledby="special-give-title">
+          <h3 id="special-give-title">Give the secret</h3>
+          <form id="special-give-form" class="row">
+            <label class="field"><span>Give to</span><select id="special-give-player" required></select></label>
+            <button type="submit" class="primary">Give</button>
+          </form>
+          <p id="special-give-hint" class="hint"></p>
+        </section>
+        <!-- The recipient of a secret picks its value; the picker or host only chooses who gets it. -->
         <section id="special-price" class="card hidden" aria-labelledby="special-price-title">
           <h3 id="special-price-title">Choose the value</h3>
           <div class="row">
@@ -346,7 +355,7 @@
           <form id="special-setup" class="bar-group hidden">
             <strong id="special-setup-title">Special question</strong>
             <label class="field"><span>Answering player</span><select id="special-player" required></select></label>
-            <button type="submit" class="primary">Show question</button>
+            <button type="submit" class="primary">Assign</button>
           </form>
           <div id="final-host" class="bar-group hidden">
             <span id="final-host-status" role="status"></span>

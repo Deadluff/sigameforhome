@@ -133,3 +133,38 @@ test('a timed-out gift awards its fixed value', (t) => {
   const winner = players.find((p) => p.id === room.engine.current.assignedId);
   assert.equal(winner?.score, 400);
 });
+
+/** Classic rule: the player who picked the cell gives the secret away; the host may step in. */
+function pickerSecret(t, selectionMode) {
+  const setup = createRoom(t, (pack) => {
+    pack.rounds[0].themes[0].questions[SECRET].typeParams.selectionMode = selectionMode;
+  });
+  setup.room.engine.chooserId = setup.players[0].id;
+  setup.room.engine.selectQuestion(setup.players[0].id, false, 0, SECRET);
+  assert.equal(setup.room.engine.phase, 'specialSetup');
+  return setup;
+}
+
+test('the picker gives the secret to another player, who then picks the value', (t) => {
+  const { room, players: [ann, ben] } = pickerSecret(t, 'exceptCurrent');
+  assert.throws(() => room.engine.giveSpecial(ben.id, false, ben.id), /Only the player who picked it/);
+  assert.throws(() => room.engine.giveSpecial(ann.id, false, ann.id), /Choose another player/);
+  room.engine.giveSpecial(ann.id, false, ben.id);
+  assert.equal(room.engine.current.assignedId, ben.id);
+  assert.throws(() => room.engine.chooseSpecialPrice(ann.id, 500), /Only the chosen player/);
+  room.engine.chooseSpecialPrice(ben.id, 500);
+  assert.equal(room.engine.current.price, 500);
+});
+
+test('in "any" mode the picker may keep the secret', (t) => {
+  const { room, players: [ann] } = pickerSecret(t, 'any');
+  room.engine.giveSpecial(ann.id, false, ann.id);
+  assert.equal(room.engine.current.assignedId, ann.id);
+});
+
+test('the host can assign the secret instead of an absent picker', (t) => {
+  const { room, host, players: [ann, ben] } = pickerSecret(t, 'exceptCurrent');
+  room.engine.giveSpecial(host.id, true, ben.id);
+  assert.equal(room.engine.current.assignedId, ben.id);
+  assert.throws(() => room.engine.giveSpecial(ann.id, false, ben.id), /already choosing/);
+});
