@@ -3,7 +3,7 @@
 A self-hosted, LAN-only Jeopardy-style game for a room full of phones, inspired by
 [SIGame](https://github.com/VladimirKhil/SI) / [SIOnline](https://github.com/VladimirKhil/SIOnline).
 One Windows, macOS, or Linux computer runs the server. Everyone else opens the link in a browser.
-The app uses TypeScript throughout. The browser client uses pinned Rolldown Vite 7 for Rust-backed bundling.
+The app uses TypeScript throughout. The browser client uses Vite 8, which bundles with Rust-backed Rolldown.
 
 ## Quick start
 
